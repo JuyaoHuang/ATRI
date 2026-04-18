@@ -1,4 +1,9 @@
-"""Tests for src.llm.exceptions."""
+"""Tests for src.llm.exceptions.
+
+测试目的：验证 LLM 调用层的异常层次结构——``LLMError`` 继承自 ``Exception``，
+``LLMConnectionError``、``LLMRateLimitError`` 与 ``LLMAPIError`` 均继承自
+``LLMError``，并且所有四个异常类都可以正常导入和实例化。
+"""
 
 from __future__ import annotations
 

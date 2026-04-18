@@ -8,6 +8,15 @@ the OpenAI chat-completions protocol.
 Exceptions from the SDK are translated into the project-local hierarchy
 (:mod:`src.llm.exceptions`) so callers never need to import ``openai``.
 
+OpenAI 兼容的 LLM 提供商。
+
+使用 ``openai`` SDK 的 ``AsyncOpenAI`` 客户端，搭配可配置的 ``base_url``。
+这一个提供商即可覆盖 OpenAI、DeepSeek、Groq、Mistral、vLLM、LM Studio
+以及 Ollama 的 ``/v1`` 端点——任何使用 OpenAI chat-completions 协议的服务。
+
+SDK 抛出的异常会被转换为项目本地的异常层次结构
+（:mod:`src.llm.exceptions`），调用方无需导入 ``openai``。
+
 Reference: docs/LLM调用层设计讨论.md §2.4, §2.6
 """
 
@@ -34,7 +43,10 @@ from src.llm.interface import LLMInterface
 
 @LLMFactory.register("openai_compatible")
 class OpenAICompatibleLLM(LLMInterface):
-    """LLM provider speaking the OpenAI chat-completions protocol."""
+    """LLM provider speaking the OpenAI chat-completions protocol.
+
+    使用 OpenAI chat-completions 协议的 LLM 提供商。
+    """
 
     def __init__(
         self,

@@ -1,6 +1,12 @@
 """Tests for src.llm.providers.openai_compatible.
 
 All tests mock ``AsyncOpenAI`` -- no real network calls are made.
+
+测试目的：验证 OpenAI 兼容提供商的行为——所有测试都 mock ``AsyncOpenAI``，
+不会发起真实网络请求。覆盖点包括：工厂注册绑定、按序产出非空 delta、
+跳过空 delta、``system`` 提示的前置与省略、``temperature`` 参数的启用/省略、
+``tools`` 参数被接受但忽略，以及 SDK 异常（连接错误、速率限制、API 错误、
+未知错误）到项目本地异常的正确转换。
 """
 
 from __future__ import annotations

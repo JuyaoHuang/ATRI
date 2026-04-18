@@ -1,4 +1,11 @@
-"""Tests for src.llm.factory."""
+"""Tests for src.llm.factory.
+
+测试目的：验证 LLMFactory 注册机制与基于角色的工厂函数——装饰器注册不会
+修改被装饰的类、能够通过 ``name`` 实例化已注册提供商、未知名称会列出可用
+提供商、``available()`` 返回排序后的名称列表；同时验证 ``create_from_role``
+的 happy path、缺失角色/池条目/provider 字段时的错误处理，以及不会修改传入
+的配置字典。
+"""
 
 from __future__ import annotations
 

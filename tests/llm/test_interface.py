@@ -1,4 +1,9 @@
-"""Tests for src.llm.interface."""
+"""Tests for src.llm.interface.
+
+测试目的：验证抽象 LLM 接口的契约——不能直接实例化抽象类、
+``chat_completion`` 默认实现能正确收集多块流、能处理空流、可选参数
+（``system``、``tools``）能正确透传到流式方法，以及流式输出按到达顺序产出。
+"""
 
 from __future__ import annotations
 

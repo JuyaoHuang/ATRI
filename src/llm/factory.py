@@ -4,6 +4,11 @@ Providers register themselves at import time via
 ``@LLMFactory.register("<name>")``. The factory code itself never changes
 when a new provider is added; only the provider file + a yaml entry.
 
+LLMFactory——基于装饰器的可插拔提供商注册表。
+
+提供商在导入时通过 ``@LLMFactory.register("<name>")`` 自行注册。新增提供商
+时，工厂代码本身不会改变；只需要新增提供商文件 + 一条 yaml 条目。
+
 Reference: docs/LLM调用层设计讨论.md §2.1, §2.3
 """
 
@@ -16,13 +21,19 @@ from src.llm.interface import LLMInterface
 
 
 class LLMFactory:
-    """Class-scoped registry mapping provider name -> provider class."""
+    """Class-scoped registry mapping provider name -> provider class.
+
+    类作用域的注册表，将提供商名称映射到提供商类。
+    """
 
     _registry: dict[str, type[LLMInterface]] = {}
 
     @classmethod
     def register(cls, name: str) -> Callable[[type[LLMInterface]], type[LLMInterface]]:
-        """Return a decorator that binds ``name`` to the decorated class."""
+        """Return a decorator that binds ``name`` to the decorated class.
+
+        返回一个装饰器，将 ``name`` 绑定到被装饰的类上。
+        """
 
         def wrapper(llm_class: type[LLMInterface]) -> type[LLMInterface]:
             cls._registry[name] = llm_class
@@ -32,7 +43,10 @@ class LLMFactory:
 
     @classmethod
     def create(cls, name: str, **kwargs: Any) -> LLMInterface:
-        """Instantiate a registered provider by ``name``."""
+        """Instantiate a registered provider by ``name``.
+
+        根据 ``name`` 实例化一个已注册的提供商。
+        """
         if name not in cls._registry:
             available = sorted(cls._registry.keys())
             raise ValueError(f"Unknown LLM provider: {name!r}. Available: {available}")
@@ -40,7 +54,10 @@ class LLMFactory:
 
     @classmethod
     def available(cls) -> list[str]:
-        """Return the sorted list of currently registered provider names."""
+        """Return the sorted list of currently registered provider names.
+
+        返回当前已注册的提供商名称的排序列表。
+        """
         return sorted(cls._registry.keys())
 
 
@@ -65,24 +82,24 @@ def create_from_role(role: str, llm_config: dict[str, Any]) -> LLMInterface:
             ``llm_configs``.
         ValueError: Pool entry's ``provider`` field is not registered.
 
-        通过 config 解析角色名称来创建 LLM 实例。
+    通过配置解析角色名来创建一个 LLM 实例。
 
-    查找``llm_config['llm_roles'][role]``以获取池密钥，然后
-    获取 ``llm_config['llm_configs'][pool_key]`` 以获取提供程序
-    参数，最后调用 LLMFactory.create`。
+    查找 ``llm_config['llm_roles'][role]`` 得到一个池键，然后获取
+    ``llm_config['llm_configs'][pool_key]`` 得到提供商参数，最终调用
+    :meth:`LLMFactory.create`。
 
     参数：
-        角色：调用站点名称——``“聊天” | 之一“l3_压缩”| “l4_compact”``
-        （或“llm_roles”中定义的任何键）。
-        llm_config：合并配置中的 llm 部分（包含“llm_configs”和“llm_roles”）。
+        role：调用位点名称——``"chat" | "l3_compress" | "l4_compact"`` 之一
+            （或 ``llm_roles`` 中定义的任意键）。
+        llm_config：合并配置中的 ``llm`` 部分（包含 ``llm_configs`` 和
+            ``llm_roles``）。
 
     返回：
-        一个随时可用的 LLMInterface 实例。
+        一个即可用的 :class:`LLMInterface` 实例。
 
-    加薪：
-        KeyError：角色不在“llm_roles”中或引用的池密钥不在
-            ``llm_configs``。
-        ValueError：池条目的“provider”字段未注册。
+    抛出：
+        KeyError：角色不在 ``llm_roles`` 中，或引用的池键不在 ``llm_configs`` 中。
+        ValueError：池条目的 ``provider`` 字段未注册。
     """
     roles = llm_config.get("llm_roles", {})
     if role not in roles:
