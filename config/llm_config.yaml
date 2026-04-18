@@ -31,9 +31,9 @@ llm_configs:
   # 主聊天模型配置（供 chat 角色使用）
   chat_main:
     provider: openai_compatible        # 提供商名称，须与工厂注册名一致
-    model: gpt-4o                      # 模型名称
-    base_url: https://api.openai.com/v1  # API 基础 URL
-    api_key: ${OPENAI_API_KEY}         # API 密钥（从环境变量读取）
+    model: deepseek-ai/DeepSeek-V3.2                     # 模型名称
+    base_url: https://api.siliconflow.cn/v1 # API 基础 URL
+    api_key: ${OPENAI_API_KEY}         # API 密钥（从环境变量读取）${OPENAI_API_KEY} 
     temperature: 0.7                   # 采样温度：聊天场景使用较高值以保留多样性
 
   # 轻量压缩模型配置（供 l3_compress / l4_compact 角色使用）
@@ -47,6 +47,6 @@ llm_configs:
 # 角色映射：将每个调用位点映射到 llm_configs 中的某个池条目
 llm_roles:
   chat: chat_main              # 聊天调用位点 -> chat_main
-  l3_compress: compress_light  # L3 滚动压缩 -> compress_light
-  l4_compact: compress_light   # L4 整合压缩 -> compress_light
+  l3_compress: chat_main  # L3 滚动压缩 -> compress_light
+  l4_compact: chat_main   # L4 整合压缩 -> compress_light
 
