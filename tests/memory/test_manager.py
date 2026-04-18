@@ -323,3 +323,95 @@ async def test_search_long_term_returns_empty_when_no_backend(tmp_path: Path) ->
     mgr = _new_manager(tmp_path)  # no long_term injected
     results = await mgr.search_long_term("anything")
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Session lifecycle (US-MEM-007)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_session_generates_matching_id_format(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    sid = await mgr.start_session()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_[0-9a-f]{8}", sid)
+    assert mgr.active_session_id == sid
+
+
+@pytest.mark.asyncio
+async def test_start_session_writes_single_metadata_row(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    sid = await mgr.start_session()
+    session_file = tmp_path / "sessions" / f"{sid}.json"
+    assert session_file.exists()
+    with session_file.open(encoding="utf-8") as f:
+        data = json.load(f)
+    metadata_rows = [row for row in data if row.get("role") == "metadata"]
+    assert len(metadata_rows) == 1
+    assert metadata_rows[0]["session_id"] == sid
+    assert metadata_rows[0]["character"] == "atri"
+
+
+@pytest.mark.asyncio
+async def test_close_session_with_pending_messages_pushes_long_term(tmp_path: Path) -> None:
+    long_term = MagicMock()
+    long_term.add = AsyncMock(return_value=None)
+    mgr = MemoryManager(
+        _default_config(),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+    await mgr.start_session()
+    for _ in range(5):
+        await mgr.on_round_complete(_human(), _ai())
+    await mgr.close_session()
+
+    long_term.add.assert_awaited_once()
+    call = long_term.add.call_args
+    assert len(call.args[0]) == 10  # 5 rounds * 2 messages
+    assert call.kwargs["user_id"] == "alice"
+    assert call.kwargs["agent_id"] == "atri"
+    assert mgr.active_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_close_session_with_no_new_messages_skips_long_term(tmp_path: Path) -> None:
+    """start -> close with zero rounds must not touch mem0 (idempotency)."""
+    long_term = MagicMock()
+    long_term.add = AsyncMock(return_value=None)
+    mgr = MemoryManager(
+        _default_config(),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+    await mgr.start_session()
+    await mgr.close_session()
+
+    long_term.add.assert_not_awaited()
+    assert mgr.active_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_close_session_is_idempotent_across_double_calls(tmp_path: Path) -> None:
+    long_term = MagicMock()
+    long_term.add = AsyncMock(return_value=None)
+    mgr = MemoryManager(
+        _default_config(),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+    await mgr.start_session()
+    await mgr.on_round_complete(_human(), _ai())
+    await mgr.close_session()
+    # Calling close again with no active session is a silent no-op.
+    await mgr.close_session()
+    assert long_term.add.await_count == 1

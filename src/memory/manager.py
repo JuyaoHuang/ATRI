@@ -120,6 +120,11 @@ class MemoryManager:
         self._state: dict[str, Any] | None = None
         self.short_term_store: ShortTermStore | None = None
         self.chat_history: ChatHistoryWriter | None = None
+        # ``_dirty`` = "there are rounds in recent_messages added during this
+        # session's lifetime that haven't been pushed to long-term yet". L3
+        # pushes only the compressed window, so the retained tail still counts
+        # as dirty until close_session flushes it (or a follow-up L3 does).
+        self._dirty: bool = False
 
         self._bootstrap_default_session()
 
@@ -157,6 +162,67 @@ class MemoryManager:
     @property
     def active_session_id(self) -> str | None:
         return self._active_session_id
+
+    # ------------------------------------------------------------------
+    # Explicit session lifecycle (US-MEM-007)
+    # ------------------------------------------------------------------
+
+    async def start_session(self) -> str:
+        """Open a fresh session, overriding any bootstrap one.
+
+        Generates a new ``session_id`` (``{YYYY-MM-DD}_{8-hex}``), rebuilds
+        the :class:`ShortTermStore` / :class:`ChatHistoryWriter` bindings,
+        writes the chat_history metadata row, and resets the dirty flag so
+        the next ``close_session`` only flushes rounds added during this
+        lifetime.
+        """
+        session_id = _new_session_id()
+        self._init_session(session_id)
+        self._dirty = False
+        logger.info(
+            f"MemoryManager session started | session_id={session_id} | "
+            f"character={self.character} | user_id={self.user_id}"
+        )
+        return session_id
+
+    async def close_session(self) -> None:
+        """Flush remaining uncompressed messages and release session state.
+
+        Writes any ``recent_messages`` added since the last L3 / long-term
+        push to mem0 (best-effort) and persists the short-term state one
+        last time. When no new rounds arrived this lifetime the long-term
+        write is skipped entirely to avoid empty / duplicate writes
+        (§4.4 idempotency). After return the manager has no active session;
+        callers must invoke :meth:`start_session` or
+        :meth:`resume_session` before the next round.
+        """
+        if self._state is None:
+            return
+
+        session_id = self._active_session_id
+        recent: list[dict[str, Any]] = list(self._state.get("recent_messages", []))
+        pushed_tail = False
+        if self._dirty and recent and self.long_term is not None:
+            await self.long_term.add(
+                recent,
+                user_id=self.user_id,
+                agent_id=self.character,
+                run_id=session_id or "default",
+            )
+            pushed_tail = True
+
+        if self.short_term_store is not None:
+            self.short_term_store.save(self._state)
+
+        logger.info(
+            f"MemoryManager session closed | session_id={session_id} | pushed_tail={pushed_tail}"
+        )
+
+        self._dirty = False
+        self._active_session_id = None
+        self._state = None
+        self.short_term_store = None
+        self.chat_history = None
 
     # ------------------------------------------------------------------
     # Round processing
@@ -201,6 +267,7 @@ class MemoryManager:
                 {"role": "ai", "content": ai_msg.get("content", "")}
             )
             self._state["total_rounds"] = int(self._state.get("total_rounds", 0)) + 1
+            self._dirty = True
 
         total_rounds: int = int(self._state["total_rounds"])
         if total_rounds > 0 and total_rounds % self.trigger_rounds == 0:
