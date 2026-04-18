@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dotenv import load_dotenv
 from loguru import logger
 
 from src.llm import create_from_role
@@ -36,6 +37,7 @@ from src.utils.logger import init_logger
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "config.yaml"
+_DEFAULT_ENV = _REPO_ROOT / ".env"
 
 _LLM_ROLES = ("chat", "l3_compress", "l4_compact")
 
@@ -43,6 +45,9 @@ _LLM_ROLES = ("chat", "l3_compress", "l4_compact")
 def main() -> None:
     init_logger()
     logger.info("atri starting")
+
+    dotenv_loaded = load_dotenv(_DEFAULT_ENV)
+    logger.info("Dotenv loaded | path={} present={}", _DEFAULT_ENV, dotenv_loaded)
 
     config = load_config(_DEFAULT_CONFIG)
     logger.info("Config loaded | sections={}", sorted(config.keys()))
