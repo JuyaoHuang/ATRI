@@ -25,6 +25,7 @@ Reference: docs/记忆系统设计讨论.md §3.2, §3.3, §4.2, §6.1.
 
 from __future__ import annotations
 
+import json
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -140,7 +141,17 @@ class MemoryManager:
         self._active_session_id = session_id
         self.short_term_store = ShortTermStore(self.character_dir, session_id, self.character)
         self.chat_history = ChatHistoryWriter(self.character_dir, session_id, self.character)
-        state = self.short_term_store.load()
+        try:
+            state = self.short_term_store.load()
+        except (json.JSONDecodeError, ValueError) as exc:
+            # Bootstrap/start must never crash on a pre-existing corrupt file.
+            # Explicit recovery belongs to :meth:`resume_session`, which runs a
+            # full chat_history replay when it detects corruption itself.
+            logger.warning(
+                f"short_term unparseable at session init | session_id={session_id} | "
+                f"{exc!r}; using fresh skeleton"
+            )
+            state = ShortTermStore.get_skeleton(session_id, self.character)
         state["session_id"] = session_id
         state["character"] = self.character
         state.setdefault("total_rounds", 0)
@@ -225,8 +236,163 @@ class MemoryManager:
         self.chat_history = None
 
     # ------------------------------------------------------------------
-    # Round processing
+    # Session resume (US-MEM-008)
     # ------------------------------------------------------------------
+
+    async def resume_session(self, session_id: str) -> None:
+        """Reopen a prior session, reconciling stored state with chat_history.
+
+        Strategy (§8.5):
+
+        1. Rebind ``ShortTermStore`` / ``ChatHistoryWriter`` to ``session_id``.
+        2. Try to load ``short_term_memory.json``. On JSON corruption fall
+           through to a full rebuild.
+        3. Count valid rounds from ``chat_history``. Compare against the
+           stored ``total_rounds``.
+        4. Consistent -> restore as-is.
+        5. Behind by N -> append the missing tail to ``recent_messages`` and
+           bump ``total_rounds``. If the catch-up lands on a trigger
+           boundary, fire L3 (chaining L4 when 4+ blocks accumulate).
+        6. Stored ahead of chat_history -> log WARNING (unexpected) and
+           keep stored state.
+
+        The mem0 ADD-only semantics (v3) make the L3 re-push during rebuild
+        idempotent; duplicate facts cost LLM tokens but don't corrupt state.
+        """
+        # Tear down anything the constructor's bootstrap left active.
+        self._dirty = False
+        self._state = None
+        self.short_term_store = None
+        self.chat_history = None
+
+        self._active_session_id = session_id
+        self.short_term_store = ShortTermStore(self.character_dir, session_id, self.character)
+        self.chat_history = ChatHistoryWriter(self.character_dir, session_id, self.character)
+
+        try:
+            state = self.short_term_store.load()
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                f"short_term unparseable for session_id={session_id}: {exc!r}; "
+                "running full rebuild from chat_history"
+            )
+            await self._full_rebuild_from_chat_history()
+            return
+
+        state.setdefault("session_id", session_id)
+        state.setdefault("character", self.character)
+        state.setdefault("total_rounds", 0)
+        state.setdefault("meta_blocks", [])
+        state.setdefault("active_blocks", [])
+        state.setdefault("recent_messages", [])
+        self._state = state
+
+        pairs = self._collect_chat_history_pairs()
+        chat_rounds = len(pairs)
+        stored_rounds = int(state.get("total_rounds", 0))
+
+        if chat_rounds == stored_rounds:
+            logger.info(
+                f"Session resumed consistent | session_id={session_id} | rounds={stored_rounds}"
+            )
+            return
+
+        if chat_rounds < stored_rounds:
+            logger.warning(
+                f"Stored total_rounds ({stored_rounds}) exceeds chat_history "
+                f"({chat_rounds}) for session_id={session_id}; keeping stored state"
+            )
+            return
+
+        # Incremental tail replay.
+        missing = pairs[stored_rounds:]
+        for human_msg, ai_msg in missing:
+            cleaned_list, _ = snip(
+                [{"role": "human", "content": human_msg.get("content", "")}],
+                self.snip_config,
+            )
+            cleaned = cleaned_list[0] if cleaned_list else human_msg
+            state["recent_messages"].append(
+                {"role": "human", "content": cleaned.get("content", "")}
+            )
+            state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
+            state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
+
+            total = int(state["total_rounds"])
+            if total > 0 and total % self.trigger_rounds == 0:
+                await self._trigger_l3()
+            if len(state["active_blocks"]) >= self.trigger_blocks:
+                await self._trigger_l4()
+
+        self.short_term_store.save(state)
+        # Catch-up only replays already-persisted chat_history; no new data
+        # to flush at close_session, so clear the dirty flag.
+        self._dirty = False
+        logger.info(
+            f"Session resumed with catch-up | session_id={session_id} | "
+            f"stored={stored_rounds} chat={chat_rounds}"
+        )
+
+    async def _full_rebuild_from_chat_history(self) -> None:
+        """Rebuild short-term state from an empty skeleton.
+
+        Replays every (human, ai) pair through the same L1 + recent_messages
+        + trigger pipeline ``on_round_complete`` uses. L3 windows also hit
+        ``long_term.add`` (mem0 v3 is ADD-only so duplicates are idempotent).
+        """
+        assert self._active_session_id is not None
+        assert self.short_term_store is not None
+        assert self.chat_history is not None
+
+        state = ShortTermStore.get_skeleton(self._active_session_id, self.character)
+        self._state = state
+
+        for human_msg, ai_msg in self._collect_chat_history_pairs():
+            cleaned_list, _ = snip(
+                [{"role": "human", "content": human_msg.get("content", "")}],
+                self.snip_config,
+            )
+            cleaned = cleaned_list[0] if cleaned_list else human_msg
+            state["recent_messages"].append(
+                {"role": "human", "content": cleaned.get("content", "")}
+            )
+            state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
+            state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
+
+            total = int(state["total_rounds"])
+            if total > 0 and total % self.trigger_rounds == 0:
+                await self._trigger_l3()
+            if len(state["active_blocks"]) >= self.trigger_blocks:
+                await self._trigger_l4()
+
+        self.short_term_store.save(state)
+        self._dirty = False
+        logger.info(
+            f"Session fully rebuilt | session_id={self._active_session_id} | "
+            f"rounds={state['total_rounds']}"
+        )
+
+    def _collect_chat_history_pairs(
+        self,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Group chat_history into (human, ai) pairs where ai is a valid round.
+
+        Metadata / system entries are skipped. Unpaired human messages (e.g.
+        an incomplete trailing record) are dropped. Invalid AI replies
+        (``Error``-prefixed content) are also excluded, matching §3.2.
+        """
+        assert self.chat_history is not None
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        pending_human: dict[str, Any] | None = None
+        for entry in self.chat_history.iter_messages():
+            role = entry.get("role")
+            if role == "human":
+                pending_human = entry
+            elif role == "ai":
+                if pending_human is not None and _is_valid_round(entry):
+                    pairs.append((pending_human, entry))
+                pending_human = None
+        return pairs
 
     async def on_round_complete(
         self,

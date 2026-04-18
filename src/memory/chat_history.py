@@ -11,6 +11,11 @@ subsequent entry is one ``human`` / ``ai`` / ``system`` message.
 Writes are atomic: parse-modify-rewrite via a ``.tmp`` file + ``os.replace``.
 For expected session sizes (hundreds to low thousands of messages) this is
 fast enough and keeps the file human-readable / recoverable.
+
+Reading is *tolerant*: :meth:`ChatHistoryWriter.iter_messages` recovers the
+parseable prefix when the file has a trailing malformed record, logging a
+WARNING rather than propagating :class:`json.JSONDecodeError`. This keeps
+US-MEM-008 ``resume_session`` robust when a partial write was interrupted.
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 _SESSIONS_SUBDIR = "sessions"
 
@@ -110,8 +117,24 @@ class ChatHistoryWriter:
         )
 
     def iter_messages(self) -> Iterator[dict[str, Any]]:
-        """Yield every stored message in insertion order."""
-        yield from self._load_array()
+        """Yield every stored message in insertion order.
+
+        When the underlying JSON array has a trailing malformed record
+        (partial write interrupted, disk corruption, etc.), iteration logs
+        a WARNING and yields the parseable prefix instead of raising. This
+        is what makes §8.5 ``resume_session`` robust enough to rebuild from
+        imperfect input. Structural issues (not-a-list payload) still raise
+        :class:`ValueError` so callers can treat them as a hard error.
+        """
+        try:
+            data = self._load_array()
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                f"chat_history JSON malformed at {self.path}: {exc!r}; "
+                "falling back to tolerant parse"
+            )
+            data = self._tolerant_parse()
+        yield from data
 
     # ------------------------------------------------------------------
     # Internal: atomic parse-modify-rewrite
@@ -144,6 +167,40 @@ class ChatHistoryWriter:
         data = self._load_array()
         data.append(entry)
         self._save_array(data)
+
+    def _tolerant_parse(self) -> list[dict[str, Any]]:
+        """Best-effort object-by-object recovery of a JSON array.
+
+        Walks the file text with :class:`json.JSONDecoder.raw_decode`,
+        stopping at the first unparseable token. Returns whatever prefix
+        was decoded successfully.
+        """
+        if not self.path.exists():
+            return []
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        stripped = text.strip()
+        if not stripped.startswith("["):
+            return []
+        decoder = json.JSONDecoder()
+        results: list[dict[str, Any]] = []
+        idx = 1  # skip leading '['
+        n = len(stripped)
+        while idx < n:
+            while idx < n and stripped[idx] in " \t\r\n,":
+                idx += 1
+            if idx >= n or stripped[idx] == "]":
+                break
+            try:
+                obj, consumed = decoder.raw_decode(stripped, idx)
+            except json.JSONDecodeError:
+                break
+            if isinstance(obj, dict):
+                results.append(obj)
+            idx = consumed
+        return results
 
 
 __all__ = ["ChatHistoryWriter"]

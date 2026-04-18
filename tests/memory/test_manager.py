@@ -18,7 +18,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.memory.chat_history import ChatHistoryWriter
 from src.memory.manager import MemoryManager, _is_valid_round
+from src.memory.short_term import ShortTermStore
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -415,3 +417,153 @@ async def test_close_session_is_idempotent_across_double_calls(tmp_path: Path) -
     # Calling close again with no active session is a silent no-op.
     await mgr.close_session()
     assert long_term.add.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Session resume (US-MEM-008)
+# ---------------------------------------------------------------------------
+
+
+def _seed_session_files(
+    tmp_path: Path,
+    session_id: str,
+    character: str,
+    *,
+    stored_rounds: int,
+    chat_rounds: int,
+    short_term_body: str | None = None,
+) -> None:
+    """Create synthetic short_term_memory.json + sessions/{id}.json for resume tests.
+
+    Writes ``stored_rounds`` rounds into short_term (with matching
+    recent_messages) and ``chat_rounds`` valid (human, ai) pairs into
+    chat_history. Passing ``short_term_body`` overrides the short-term
+    payload verbatim (used to inject invalid JSON for corruption tests).
+    """
+    hist = ChatHistoryWriter(tmp_path, session_id, character)
+    hist.ensure_metadata()
+    for i in range(chat_rounds):
+        hist.append_human(f"h{i}", name="alice")
+        hist.append_ai(f"a{i}", name=character)
+
+    short = ShortTermStore(tmp_path, session_id, character)
+    if short_term_body is not None:
+        short.path.write_text(short_term_body, encoding="utf-8")
+        return
+    state = ShortTermStore.get_skeleton(session_id, character)
+    state["total_rounds"] = stored_rounds
+    for i in range(stored_rounds):
+        state["recent_messages"].append({"role": "human", "content": f"h{i}"})
+        state["recent_messages"].append({"role": "ai", "content": f"a{i}"})
+    short.save(state)
+
+
+def _make_manager_with_mock_long_term(
+    tmp_path: Path,
+) -> tuple[MemoryManager, MagicMock]:
+    long_term = MagicMock()
+    long_term.add = AsyncMock(return_value=None)
+    long_term.search = AsyncMock(return_value=[])
+    mgr = MemoryManager(
+        _default_config(),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+    return mgr, long_term
+
+
+@pytest.mark.asyncio
+async def test_resume_consistent_preserves_state(tmp_path: Path) -> None:
+    session_id = "2026-04-19_aabbccdd"
+    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=10, chat_rounds=10)
+    mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
+
+    await mgr.resume_session(session_id)
+
+    assert mgr.active_session_id == session_id
+    assert mgr.state["total_rounds"] == 10
+    assert len(mgr.state["recent_messages"]) == 20
+    long_term.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_behind_catches_up_tail(tmp_path: Path) -> None:
+    """Stored total_rounds=10, chat_history=12 valid rounds -> replay 2 missing."""
+    session_id = "2026-04-19_1122aabb"
+    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=10, chat_rounds=12)
+    mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
+
+    await mgr.resume_session(session_id)
+
+    assert mgr.state["total_rounds"] == 12
+    # 12 rounds * 2 messages = 24 total in recent_messages.
+    assert len(mgr.state["recent_messages"]) == 24
+    # Trailing content comes from the appended chat_history pairs.
+    assert mgr.state["recent_messages"][-2]["content"] == "h11"
+    assert mgr.state["recent_messages"][-1]["content"] == "a11"
+    # No L3 boundary crossed (12 < 26), no long_term.add invoked.
+    long_term.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_on_boundary_triggers_l3(tmp_path: Path) -> None:
+    """Stored total_rounds=20, chat_history=26 -> replay lands on 26 => L3 fires."""
+    session_id = "2026-04-19_c0ffee01"
+    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=20, chat_rounds=26)
+    mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
+
+    await mgr.resume_session(session_id)
+
+    assert mgr.state["total_rounds"] == 26
+    assert len(mgr.state["active_blocks"]) == 1
+    assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
+    # L3 trigger -> long_term.add invoked once with the 40-msg compress window.
+    long_term.add.assert_awaited_once()
+    assert len(long_term.add.call_args.args[0]) == 40
+    # 6 rounds remain raw = 12 msgs.
+    assert len(mgr.state["recent_messages"]) == 12
+
+
+@pytest.mark.asyncio
+async def test_resume_corrupt_json_rebuilds_from_chat_history(tmp_path: Path) -> None:
+    """Broken short_term.json -> full rebuild replays every chat_history round."""
+    session_id = "2026-04-19_baddada1"
+    _seed_session_files(
+        tmp_path,
+        session_id,
+        "atri",
+        stored_rounds=0,
+        chat_rounds=26,
+        short_term_body='{"this is not": valid json',
+    )
+    mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
+
+    await mgr.resume_session(session_id)
+
+    assert mgr.state["total_rounds"] == 26
+    assert len(mgr.state["active_blocks"]) == 1
+    assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
+    # Rebuild replays L3 windows through long_term.add for idempotency.
+    long_term.add.assert_awaited_once()
+    assert len(mgr.state["recent_messages"]) == 12
+
+
+@pytest.mark.asyncio
+async def test_resume_chat_history_with_trailing_garbage(tmp_path: Path) -> None:
+    """chat_history has a trailing malformed record -> tolerant parse recovers prefix."""
+    session_id = "2026-04-19_deadbeef"
+    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=5, chat_rounds=5)
+    # Append trailing garbage to chat_history (simulating a partial write crash).
+    hist_path = tmp_path / "sessions" / f"{session_id}.json"
+    original = hist_path.read_text(encoding="utf-8")
+    # Transform ``[..., {last}]`` -> ``[..., {last}, {corrupt...``
+    corrupted = original.rstrip()[:-1] + ', {"role": "ai", "content": "partial'
+    hist_path.write_text(corrupted, encoding="utf-8")
+
+    mgr, _long_term = _make_manager_with_mock_long_term(tmp_path)
+    # Must NOT raise; tolerant parse yields the 5 well-formed rounds.
+    await mgr.resume_session(session_id)
+    assert mgr.state["total_rounds"] == 5
