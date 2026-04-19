@@ -1,4 +1,12 @@
-"""Tests for src/memory/chat_history.py (ChatHistoryWriter)."""
+"""Tests for src/memory/chat_history.py (ChatHistoryWriter).
+
+针对 src/memory/chat_history.py（ChatHistoryWriter）的测试。
+
+覆盖点：``ensure_metadata`` 的幂等性（仅追加一次）、human/ai 消息中
+可选字段（``raw_input`` / ``avatar``）按存在性写入、插入顺序的保真迭代、
+metadata + 对话内容的往返一致性、``sessions/`` 目录自动创建、
+非数组 payload 的错误检测，以及 system 消息不携带 name/avatar 字段。
+"""
 
 from __future__ import annotations
 
@@ -73,6 +81,7 @@ def test_metadata_plus_two_messages_roundtrip(tmp_path: Path) -> None:
     w.append_ai("hello", name="Katou")
 
     # Fresh writer should see the same data.
+    # 新建的 writer 应能看到相同的数据。
     w2 = ChatHistoryWriter(tmp_path, "s1", "katou")
     msgs = list(w2.iter_messages())
     assert len(msgs) == 3

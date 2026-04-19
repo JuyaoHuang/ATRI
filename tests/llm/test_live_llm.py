@@ -15,6 +15,23 @@ Required environment variables (loaded from the project-root ``.env`` via
 Each test makes a real network call and therefore costs API tokens. The
 fixture skips with a clear message when any variable is missing so the
 default-run behavior is never broken.
+
+针对真实 LLM API 的在线端到端测试。
+
+这些测试由 ``@pytest.mark.live`` 标记门控，默认 ``pytest`` 运行时会被排除。
+执行方式::
+
+    uv run pytest tests/llm/test_live_llm.py -m live -v
+
+所需环境变量（通过 ``python-dotenv`` 从项目根目录的 ``.env`` 加载；
+同时支持进程环境变量和 .env 文件）::
+
+    OPENAI_API_KEY=...
+    OPENAI_BASE_URL=...
+    OPENAI_MODEL=...
+
+每个测试都会发起真实的网络调用，因此会消耗 API token。当任一变量缺失时，
+fixture 会给出清晰的跳过提示，确保默认运行行为永远不会被破坏。
 """
 
 from __future__ import annotations

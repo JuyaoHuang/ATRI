@@ -21,6 +21,30 @@ Config translation (local_deploy mode):
     llm.{backend, ollama/api}        llm.{provider, config}
     graph_store.{enabled=True, ...}  graph_store.{provider, config}
     graph_store.{enabled=False}      (omitted)
+
+mem0 长期记忆集成——双模式后端（sdk + local_deploy）。
+
+将 :class:`mem0.MemoryClient` (SaaS) 和 :class:`mem0.Memory` (自托管) 包装
+在一个异步友好的统一 API 背后，使调用方（``MemoryManager``）对模式保持
+无感。阻塞型的 mem0 调用通过 :func:`asyncio.to_thread` 派发，这样 LLM 驱动
+的事实抽取过程中事件循环仍然可响应。
+
+参考：docs/记忆系统设计讨论.md §4.1–§4.5 与 §8.1–§8.4。
+
+配置转换（local_deploy 模式）：
+
+    我们的 yaml 形态                 mem0 形态
+    ----------------------------------------------------------
+    vector_store.{provider, config}  vector_store.{provider, config}
+    embedder.{backend='ollama',      embedder.{provider='ollama',
+              ollama.{model,                   config.{model, ollama_base_url}}
+              base_url}}
+    embedder.{backend='api',         embedder.{provider,
+              api.{provider, model,            config.{model, api_key,
+              api_key, base_url}}                      openai_base_url}}
+    llm.{backend, ollama/api}        llm.{provider, config}
+    graph_store.{enabled=True, ...}  graph_store.{provider, config}
+    graph_store.{enabled=False}      （省略）
 """
 
 from __future__ import annotations
@@ -32,7 +56,10 @@ from loguru import logger
 
 
 def _is_unresolved_placeholder(value: Any) -> bool:
-    """Return True when ``value`` still looks like ``${VAR}`` post-dotenv load."""
+    """Return True when ``value`` still looks like ``${VAR}`` post-dotenv load.
+
+    当 ``value`` 在 dotenv 加载后仍形如 ``${VAR}`` 时返回 True。
+    """
     return isinstance(value, str) and value.startswith("${") and value.endswith("}")
 
 
@@ -41,6 +68,10 @@ def _is_unresolved_placeholder(value: Any) -> bool:
 # ``user`` / ``assistant``. Feeding our raw roles to ``mem0.add`` trips the
 # payload validator. Translate at the boundary so the rest of the codebase
 # stays on the human/ai vocabulary.
+# 我们的短期层用内部角色名（``human`` / ``ai``）标记消息，但 mem0 —— 和所有
+# OpenAI 兼容的 LLM SDK 一样 —— 期望的是 ``user`` / ``assistant``。直接把原始
+# 角色喂给 ``mem0.add`` 会触发载荷校验错误。因此在边界上做一次翻译，让代码库
+# 其它位置继续使用 human/ai 词汇体系。
 _MEM0_ROLE_MAP: dict[str, str] = {
     "human": "user",
     "ai": "assistant",
@@ -49,7 +80,10 @@ _MEM0_ROLE_MAP: dict[str, str] = {
 
 
 def _translate_messages_for_mem0(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map internal role labels to mem0/OpenAI roles; keep content verbatim."""
+    """Map internal role labels to mem0/OpenAI roles; keep content verbatim.
+
+    将内部角色标签映射为 mem0/OpenAI 的角色；内容保持原样不变。
+    """
     translated: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.get("role", "")
@@ -71,12 +105,22 @@ def _translate_local_deploy(cfg: dict[str, Any]) -> dict[str, Any]:
     embedder/llm under a ``backend`` switch (``ollama`` vs ``api``) with
     sub-dicts per backend -- this helper picks the active branch and maps
     field names (``base_url`` → ``ollama_base_url`` / ``openai_base_url``).
+
+    将我们的 ``mem0.local_deploy`` yaml 配置块翻译为 mem0 期望的配置形态。
+
+    mem0 的 :func:`Memory.from_config` 期望一个扁平字典，其顶层键为
+    ``vector_store`` / ``embedder`` / ``llm``（以及可选的 ``graph_store``），
+    每个键对应一个 ``{provider, config}`` 对。我们的 yaml 则在 embedder/llm
+    下按 ``backend`` 开关（``ollama`` 对比 ``api``）再分子字典——本辅助函数
+    挑出激活的分支，并映射字段名（``base_url`` → ``ollama_base_url`` /
+    ``openai_base_url``）。
     """
     out: dict[str, Any] = {}
 
     vs = cfg.get("vector_store")
     if vs:
         # Already matches mem0's {provider, config} shape.
+        # 已匹配 mem0 的 {provider, config} 形态。
         out["vector_store"] = vs
 
     embedder_cfg = cfg.get("embedder") or {}
@@ -98,7 +142,10 @@ def _translate_local_deploy(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _translate_backend_block(block: dict[str, Any], *, is_llm: bool) -> dict[str, Any]:
-    """Translate an embedder/llm block with a ``backend`` selector."""
+    """Translate an embedder/llm block with a ``backend`` selector.
+
+    翻译带 ``backend`` 选择器的 embedder/llm 配置块。
+    """
     backend = block.get("backend", "ollama")
     if backend == "ollama":
         ol = block.get("ollama") or {}
@@ -116,6 +163,7 @@ def _translate_backend_block(block: dict[str, Any], *, is_llm: bool) -> dict[str
         "api_key": api.get("api_key"),
     }
     # mem0's openai provider accepts ``openai_base_url`` at the config level.
+    # mem0 的 openai 提供商在 config 级别接受 ``openai_base_url``。
     if api.get("base_url"):
         config["openai_base_url"] = api.get("base_url")
     return {"provider": provider, "config": config}
@@ -127,6 +175,11 @@ class LongTermMemory:
     Callers pass the ``mem0`` subtree of ``memory_config.yaml``; the class
     picks the right backend and exposes ``add`` / ``search`` / ``close``
     with a single shape.
+
+    mem0 SDK/本地部署后端的统一异步包装。
+
+    调用方传入 ``memory_config.yaml`` 中的 ``mem0`` 子树；类会挑选合适的
+    后端，并以统一的形态对外暴露 ``add`` / ``search`` / ``close``。
     """
 
     def __init__(self, mem0_config: dict[str, Any]) -> None:
@@ -157,6 +210,7 @@ class LongTermMemory:
 
     # ------------------------------------------------------------------
     # Public API
+    # 公共 API
     # ------------------------------------------------------------------
 
     async def add(
@@ -173,6 +227,13 @@ class LongTermMemory:
         are logged as WARNING and swallowed -- the short-term path continues
         uninterrupted. mem0 v3's ADD-only algorithm makes a dropped
         ``add()`` cheap to recover on the next window.
+
+        将一批消息持久化到 mem0（在工作线程中运行）。
+
+        角色在边界上被翻译（``human`` -> ``user``、``ai`` -> ``assistant``），
+        以匹配 mem0 的载荷校验器。错误以 WARNING 级别记录并被吞掉——短期路径
+        不受影响继续推进。mem0 v3 的纯 ADD 算法让一次失败的 ``add()`` 可以
+        在下一个窗口低成本地恢复。
         """
         try:
             payload = _translate_messages_for_mem0(messages)
@@ -202,6 +263,14 @@ class LongTermMemory:
         §8.3). On any backend error returns ``[]`` and logs WARNING so the
         LLM call proceeds without long-term context rather than failing the
         whole turn.
+
+        为当前 user/agent 对检索相关记忆。
+
+        新版 mem0 客户端不再接受顶层的实体 kwargs，而要求通过
+        ``filters={...}`` 与 ``top_k=...`` 来传参。返回 ``score`` ``>=
+        threshold`` 的最多 ``limit`` 条命中（默认值对齐 §8.3）。发生任何
+        后端错误时返回 ``[]`` 并记录 WARNING，从而让 LLM 调用在不带长期
+        上下文的情况下继续推进，而不是让整轮失败。
         """
         filters = {"user_id": user_id, "agent_id": agent_id}
         try:
@@ -217,6 +286,8 @@ class LongTermMemory:
 
         # mem0 v1.1+ wraps results in {"results": [...]}; older paths and
         # the SaaS client sometimes return a bare list. Handle both.
+        # mem0 v1.1+ 将结果包裹在 {"results": [...]} 中；早期路径和 SaaS
+        # 客户端有时返回裸列表。两种形态都需要处理。
         if isinstance(raw, dict):
             items: list[dict[str, Any]] = list(raw.get("results", []))
         elif isinstance(raw, list):
@@ -229,7 +300,11 @@ class LongTermMemory:
 
     def close(self) -> None:
         """Best-effort cleanup. No-op for SaaS; closes the Qdrant client
-        handle for local_deploy so embedded rocksdb locks release promptly."""
+        handle for local_deploy so embedded rocksdb locks release promptly.
+
+        尽力而为的清理。SaaS 模式下为空操作；local_deploy 模式下关闭 Qdrant
+        客户端句柄，让内嵌 rocksdb 的锁尽快释放。
+        """
         backend = getattr(self, "_backend", None)
         if backend is None:
             return

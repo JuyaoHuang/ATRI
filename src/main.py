@@ -56,7 +56,10 @@ _DEMO_USER_ID = "default"
 
 
 def _make_llm_factory_fn(llm_config: dict[str, Any]):
-    """Return a ``role -> LLMInterface`` closure for :class:`MemoryManager`."""
+    """Return a ``role -> LLMInterface`` closure for :class:`MemoryManager`.
+
+    返回一个供 :class:`MemoryManager` 使用的 ``role -> LLMInterface`` 闭包。
+    """
 
     def factory(role: str) -> LLMInterface:
         return create_from_role(role, llm_config)
@@ -71,6 +74,12 @@ def _safe_build_long_term(mem0_config: dict[str, Any]) -> LongTermMemory | None:
     as part of initialization -- if those backends are not running during a
     cold start, we log a WARNING and return ``None`` so the rest of the
     startup can proceed. Short-term compression still works fully.
+
+    尽力而为地构造 :class:`LongTermMemory`。
+
+    在 ``local_deploy`` 模式下，``Memory.from_config`` 初始化时可能会访问
+    Qdrant/Ollama——如果在冷启动阶段这些后端尚未运行，我们记录 WARNING 并
+    返回 ``None``，以便后续启动流程继续推进。短期压缩仍可完整工作。
     """
     if not mem0_config:
         logger.warning("mem0 config missing; skipping LongTermMemory construction")

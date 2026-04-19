@@ -1,6 +1,15 @@
 """Tests for src/memory/compressor.py -- L3 Collapse + L4 Super-Compact.
 
 Covers acceptance criteria for PRD US-MEM-002 (L3) and US-MEM-004 (L4).
+
+针对 src/memory/compressor.py 的测试——L3 Collapse + L4 Super-Compact。
+
+覆盖 PRD US-MEM-002（L3）与 US-MEM-004（L4）的验收标准：
+LLM 恰好被调用一次、``<analysis>`` 草稿块（含多块、跨行、特殊字符）全部
+被剥离、block_id 形态（``block_<8hex>`` / ``meta_<8hex>``）、``covers_rounds``
+与入参对齐、``created_at`` 为带 Z 的 ISO 8601、提示模板占位符替换、
+token_count 采用 4:1 字符近似；L4 额外校验 ``source_blocks`` 保持顺序、
+空/单块输入抛 ValueError、默认 loader 路径可用。
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ from src.memory.compressor import l3_collapse, l4_super_compact
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
+# 固件 / 辅助函数
 # ---------------------------------------------------------------------------
 
 _MINIMAL_TEMPLATE = (
@@ -44,6 +54,7 @@ _SAMPLE_MESSAGES = [
 
 # ---------------------------------------------------------------------------
 # Tests
+# 测试用例
 # ---------------------------------------------------------------------------
 
 
@@ -105,6 +116,7 @@ async def test_created_at_is_iso_with_z() -> None:
     ts = block["created_at"]
     assert ts.endswith("Z")
     # Strip Z and parse to confirm it is a valid ISO 8601 timestamp.
+    # 去掉 Z 后解析，确认是合法的 ISO 8601 时间戳。
     parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None
 
@@ -116,6 +128,7 @@ async def test_summary_contains_non_analysis_portion_verbatim() -> None:
     llm = _mock_llm(raw)
     block = await l3_collapse(_SAMPLE_MESSAGES, llm, 1, 20, prompt_loader_fn=_fake_loader())
     # The tail survives intact (whitespace trimming on the outer ends is OK).
+    # 尾部内容被完整保留（允许首尾空白被修剪）。
     assert block["summary"] == tail.strip()
 
 
@@ -124,6 +137,7 @@ async def test_placeholders_substituted_in_prompt() -> None:
     llm = _mock_llm("ok")
     await l3_collapse(_SAMPLE_MESSAGES, llm, 41, 60, prompt_loader_fn=_fake_loader())
     # Inspect the system prompt actually passed to the LLM.
+    # 检查实际传递给 LLM 的系统提示。
     system = llm.chat_completion.call_args.kwargs["system"]
     assert "compress 20 rounds (41-60)" in system
     assert "{N}" not in system
@@ -133,6 +147,7 @@ async def test_placeholders_substituted_in_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_token_count_is_char_approximation() -> None:
+    # 400 字符 -> 约 100 tokens
     llm = _mock_llm("x" * 400)  # 400 chars -> ~100 tokens
     block = await l3_collapse(_SAMPLE_MESSAGES, llm, 1, 20, prompt_loader_fn=_fake_loader())
     assert block["token_count"] == 100
@@ -140,16 +155,21 @@ async def test_token_count_is_char_approximation() -> None:
 
 @pytest.mark.asyncio
 async def test_default_loader_used_when_none_supplied() -> None:
-    """Without an injected loader, the real prompts/compress/l3_collapse.txt is read."""
+    """Without an injected loader, the real prompts/compress/l3_collapse.txt is read.
+
+    未注入 loader 时，会读取真实的 prompts/compress/l3_collapse.txt。
+    """
     llm = _mock_llm("summary")
     block = await l3_collapse(_SAMPLE_MESSAGES, llm, 1, 20)
     # Just check the call happened and resulting block is well formed -- the
     # placeholder substitution already guards the template path.
+    # 仅校验调用发生且结果块结构正确——占位符替换的守护由其他测试完成。
     assert block["summary"] == "summary"
 
 
 # ---------------------------------------------------------------------------
 # L4 Super-Compact tests (US-MEM-004)
+# L4 Super-Compact 测试（US-MEM-004）
 # ---------------------------------------------------------------------------
 
 _L4_MINIMAL_TEMPLATE = (
@@ -215,7 +235,10 @@ async def test_l4_empty_blocks_raises_value_error() -> None:
 
 @pytest.mark.asyncio
 async def test_l4_single_block_raises_value_error() -> None:
-    """A single block is not a pattern -- at least two blocks required."""
+    """A single block is not a pattern -- at least two blocks required.
+
+    单个块不构成"模式"——至少需要两个块。
+    """
     llm = _mock_llm("ok")
     with pytest.raises(ValueError):
         await l4_super_compact(
@@ -253,6 +276,7 @@ async def test_l4_placeholders_substituted_in_prompt() -> None:
     assert "{end}" not in system
     assert "{block_summaries_joined}" not in system
     # Each block's summary is included in the joined payload.
+    # 每个块的摘要都被包含在拼接后的载荷中。
     for b in _FOUR_BLOCKS:
         assert b["summary"] in system
         assert b["block_id"] in system
@@ -260,7 +284,10 @@ async def test_l4_placeholders_substituted_in_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_l4_two_blocks_is_valid() -> None:
-    """Two is the minimum; different start/end but still produces a meta-block."""
+    """Two is the minimum; different start/end but still produces a meta-block.
+
+    两个块是最低门槛；起止不同仍可生成元块。
+    """
     llm = _mock_llm("pattern")
     two_blocks = _FOUR_BLOCKS[:2]
     meta = await l4_super_compact(
@@ -272,7 +299,10 @@ async def test_l4_two_blocks_is_valid() -> None:
 
 @pytest.mark.asyncio
 async def test_l4_default_loader_used_when_none_supplied() -> None:
-    """Without an injected loader, prompts/compress/l4_super_compact.txt is read."""
+    """Without an injected loader, prompts/compress/l4_super_compact.txt is read.
+
+    未注入 loader 时，会读取 prompts/compress/l4_super_compact.txt。
+    """
     llm = _mock_llm("pattern summary")
     meta = await l4_super_compact(_FOUR_BLOCKS, llm)
     assert meta["summary"] == "pattern summary"
