@@ -239,7 +239,7 @@ class ChatHistoryWriter:
         decoder = json.JSONDecoder()
         results: list[dict[str, Any]] = []
         idx = 1  # skip leading '['
-                 # 跳过开头的 '['
+        # 跳过开头的 '['
         n = len(stripped)
         while idx < n:
             while idx < n and stripped[idx] in " \t\r\n,":
