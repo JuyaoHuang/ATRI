@@ -63,11 +63,13 @@ mem0:
       ollama:
         model: qwen2.5:7b
         base_url: http://localhost:11434
+        temperature: 0.3             # fact extraction prefers low temperature for stable JSON
       api:
         provider: openai
         model: gpt-4o-mini
         api_key: ${OPENAI_API_KEY}
         base_url: https://api.openai.com/v1
+        temperature: 0.3             # fact extraction prefers low temperature for stable JSON
 
     # Graph Memory -- MVP disabled, structure reserved
     graph_store:

@@ -144,28 +144,46 @@ def _translate_local_deploy(cfg: dict[str, Any]) -> dict[str, Any]:
 def _translate_backend_block(block: dict[str, Any], *, is_llm: bool) -> dict[str, Any]:
     """Translate an embedder/llm block with a ``backend`` selector.
 
+    When ``is_llm`` is ``True`` the active backend's LLM-only sampling fields
+    (``temperature`` / ``max_tokens`` / ``top_p``) are forwarded into the
+    mem0 ``config`` dict. Embedder calls ignore those keys even if present
+    in the yaml.
+
     翻译带 ``backend`` 选择器的 embedder/llm 配置块。
+
+    当 ``is_llm`` 为 ``True`` 时，把当前后端专属的 LLM 采样字段
+    （``temperature`` / ``max_tokens`` / ``top_p``）透传到 mem0 的 ``config``
+    字典中。embedder 调用会忽略这些键（即便 yaml 里写了也一样）。
     """
     backend = block.get("backend", "ollama")
     if backend == "ollama":
-        ol = block.get("ollama") or {}
-        return {
-            "provider": "ollama",
-            "config": {
-                "model": ol.get("model"),
-                "ollama_base_url": ol.get("base_url"),
-            },
+        sub = block.get("ollama") or {}
+        provider = "ollama"
+        config: dict[str, Any] = {
+            "model": sub.get("model"),
+            "ollama_base_url": sub.get("base_url"),
         }
-    api = block.get("api") or {}
-    provider = api.get("provider", "openai")
-    config: dict[str, Any] = {
-        "model": api.get("model"),
-        "api_key": api.get("api_key"),
-    }
-    # mem0's openai provider accepts ``openai_base_url`` at the config level.
-    # mem0 的 openai 提供商在 config 级别接受 ``openai_base_url``。
-    if api.get("base_url"):
-        config["openai_base_url"] = api.get("base_url")
+    else:
+        sub = block.get("api") or {}
+        provider = sub.get("provider", "openai")
+        config = {
+            "model": sub.get("model"),
+            "api_key": sub.get("api_key"),
+        }
+        # mem0's openai provider accepts ``openai_base_url`` at the config level.
+        # mem0 的 openai 提供商在 config 级别接受 ``openai_base_url``。
+        if sub.get("base_url"):
+            config["openai_base_url"] = sub.get("base_url")
+
+    # LLM-only sampling knobs -- embedder path drops these silently so yaml
+    # authors can keep a uniform backend block without surprising side effects.
+    # LLM 专属采样参数——embedder 路径会静默丢弃，便于作者保持统一的后端
+    # 块而不会产生意外副作用。
+    if is_llm:
+        for key in ("temperature", "max_tokens", "top_p"):
+            if key in sub:
+                config[key] = sub[key]
+
     return {"provider": provider, "config": config}
 
 

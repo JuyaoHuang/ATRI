@@ -335,6 +335,67 @@ def test_translate_local_deploy_enables_graph_when_flag_set() -> None:
     assert translated["graph_store"]["config"]["url"] == "bolt://localhost:7687"
 
 
+def test_translate_llm_forwards_sampling_fields() -> None:
+    """LLM blocks forward temperature / max_tokens / top_p to mem0 config."""
+    cfg = {
+        "llm": {
+            "backend": "api",
+            "api": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "api_key": "sk-x",
+                "base_url": "https://api.openai.com/v1",
+                "temperature": 0.25,
+                "max_tokens": 512,
+                "top_p": 0.9,
+            },
+        },
+    }
+    translated = _translate_local_deploy(cfg)
+    llm_config = translated["llm"]["config"]
+    assert llm_config["temperature"] == 0.25
+    assert llm_config["max_tokens"] == 512
+    assert llm_config["top_p"] == 0.9
+
+
+def test_translate_llm_forwards_ollama_sampling_fields() -> None:
+    """Ollama backend also forwards temperature when is_llm is True."""
+    cfg = {
+        "llm": {
+            "backend": "ollama",
+            "ollama": {
+                "model": "qwen2.5:7b",
+                "base_url": "http://localhost:11434",
+                "temperature": 0.3,
+            },
+        },
+    }
+    translated = _translate_local_deploy(cfg)
+    assert translated["llm"]["provider"] == "ollama"
+    assert translated["llm"]["config"]["temperature"] == 0.3
+
+
+def test_translate_embedder_drops_sampling_fields() -> None:
+    """Embedder path ignores temperature/max_tokens/top_p even if yaml has them."""
+    cfg = {
+        "embedder": {
+            "backend": "api",
+            "api": {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "sk-e",
+                "temperature": 0.5,  # should be dropped
+                "max_tokens": 99,  # should be dropped
+            },
+        },
+    }
+    translated = _translate_local_deploy(cfg)
+    emb_config = translated["embedder"]["config"]
+    assert "temperature" not in emb_config
+    assert "max_tokens" not in emb_config
+    assert "top_p" not in emb_config
+
+
 # ---------------------------------------------------------------------------
 # close()
 # close() 方法
