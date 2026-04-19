@@ -103,24 +103,40 @@ def test_missing_api_key_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_add_delegates_to_underlying_backend() -> None:
-    """PRD (d): add() forwards messages + ids to the backend."""
+    """PRD (d): add() forwards messages + ids to the backend.
+
+    Roles are translated human->user / ai->assistant at the boundary so mem0's
+    payload validator (which expects OpenAI-style roles) doesn't reject the call.
+    """
     with patch("mem0.MemoryClient") as mock_client_cls:
         mock_backend = MagicMock()
         mock_backend.add = MagicMock(return_value={"results": []})
         mock_client_cls.return_value = mock_backend
 
         ltm = LongTermMemory(_sdk_config())
-        messages = [{"role": "human", "content": "hello"}]
+        messages = [
+            {"role": "human", "content": "hello"},
+            {"role": "ai", "content": "hi back"},
+        ]
         await ltm.add(messages, user_id="alice", agent_id="atri", run_id="sess-1")
 
-        mock_backend.add.assert_called_once_with(
-            messages, user_id="alice", agent_id="atri", run_id="sess-1"
-        )
+        mock_backend.add.assert_called_once()
+        args, kwargs = mock_backend.add.call_args
+        # The positional payload is the translated list (human -> user, ai -> assistant).
+        assert args[0] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi back"},
+        ]
+        assert kwargs == {"user_id": "alice", "agent_id": "atri", "run_id": "sess-1"}
 
 
 @pytest.mark.asyncio
 async def test_search_delegates_and_returns_results() -> None:
-    """PRD (e): search() delegates and returns the results list."""
+    """PRD (e): search() delegates and returns the results list.
+
+    Modern mem0 clients reject top-level ``user_id`` / ``agent_id`` on search;
+    the wrapper funnels them into ``filters={...}`` + ``top_k=limit``.
+    """
     with patch("mem0.MemoryClient") as mock_client_cls:
         mock_backend = MagicMock()
         mock_backend.search = MagicMock(
@@ -132,11 +148,10 @@ async def test_search_delegates_and_returns_results() -> None:
         results = await ltm.search("drink preferences", user_id="alice", agent_id="atri")
 
         mock_backend.search.assert_called_once()
-        # Call signature: (query, user_id=..., agent_id=...)
         args, kwargs = mock_backend.search.call_args
         assert args[0] == "drink preferences"
-        assert kwargs["user_id"] == "alice"
-        assert kwargs["agent_id"] == "atri"
+        assert kwargs["filters"] == {"user_id": "alice", "agent_id": "atri"}
+        assert kwargs["top_k"] == 5  # default limit
         assert results == [{"memory": "fact1", "score": 0.9}]
 
 

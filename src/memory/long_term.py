@@ -36,6 +36,32 @@ def _is_unresolved_placeholder(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("${") and value.endswith("}")
 
 
+# Our short-term layer tags messages with internal role names (``human`` /
+# ``ai``) but mem0 -- like every other OpenAI-compatible LLM SDK -- expects
+# ``user`` / ``assistant``. Feeding our raw roles to ``mem0.add`` trips the
+# payload validator. Translate at the boundary so the rest of the codebase
+# stays on the human/ai vocabulary.
+_MEM0_ROLE_MAP: dict[str, str] = {
+    "human": "user",
+    "ai": "assistant",
+    "system": "system",
+}
+
+
+def _translate_messages_for_mem0(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Map internal role labels to mem0/OpenAI roles; keep content verbatim."""
+    translated: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role", "")
+        translated.append(
+            {
+                "role": _MEM0_ROLE_MAP.get(role, role),
+                "content": msg.get("content", ""),
+            }
+        )
+    return translated
+
+
 def _translate_local_deploy(cfg: dict[str, Any]) -> dict[str, Any]:
     """Translate our ``mem0.local_deploy`` yaml block into mem0's config shape.
 
@@ -142,15 +168,17 @@ class LongTermMemory:
     ) -> None:
         """Persist a batch of messages to mem0 (runs in a worker thread).
 
-        Errors are logged as WARNING and swallowed -- the short-term path
-        continues uninterrupted. mem0 v3's ADD-only algorithm makes a
-        dropped ``add()`` cheap to recover on the next window (and retries
-        are idempotent if we ever add them).
+        Roles are translated at the boundary (``human`` -> ``user``,
+        ``ai`` -> ``assistant``) to match mem0's payload validator. Errors
+        are logged as WARNING and swallowed -- the short-term path continues
+        uninterrupted. mem0 v3's ADD-only algorithm makes a dropped
+        ``add()`` cheap to recover on the next window.
         """
         try:
+            payload = _translate_messages_for_mem0(messages)
             await asyncio.to_thread(
                 self._backend.add,
-                messages,
+                payload,
                 user_id=user_id,
                 agent_id=agent_id,
                 run_id=run_id,
@@ -168,17 +196,20 @@ class LongTermMemory:
     ) -> list[dict[str, Any]]:
         """Retrieve related memories for the current user/agent pair.
 
-        Returns up to ``limit`` hits whose ``score`` is ``>= threshold``
-        (defaults mirror §8.3). On any backend error returns ``[]`` and
-        logs WARNING -- the LLM call still proceeds without long-term
-        context rather than failing the whole turn.
+        Modern mem0 clients reject top-level entity kwargs on ``search`` and
+        require ``filters={...}`` plus ``top_k=...`` instead. Returns up to
+        ``limit`` hits whose ``score`` is ``>= threshold`` (defaults mirror
+        §8.3). On any backend error returns ``[]`` and logs WARNING so the
+        LLM call proceeds without long-term context rather than failing the
+        whole turn.
         """
+        filters = {"user_id": user_id, "agent_id": agent_id}
         try:
             raw = await asyncio.to_thread(
                 self._backend.search,
                 query,
-                user_id=user_id,
-                agent_id=agent_id,
+                filters=filters,
+                top_k=limit,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"mem0.search failed | {exc!r}")
