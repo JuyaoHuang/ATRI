@@ -2,7 +2,7 @@
 聊天会话 CRUD REST API 测试。
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -22,8 +22,10 @@ async def client():
     config = load_config("config.yaml")
     app = create_app(config)
 
-    # Manually initialize storage and service_context (since lifespan is not triggered by ASGITransport)
-    # 手动初始化 storage 和 service_context（因为 ASGITransport 不会触发 lifespan）
+    # Manually initialize storage and service_context
+    # (since lifespan is not triggered by ASGITransport)
+    # 手动初始化 storage 和 service_context
+    # （因为 ASGITransport 不会触发 lifespan）
     storage_config = config.get("storage", {})
     app.state.storage = create_chat_storage(storage_config)
     app.state.service_context = ServiceContext(config)
@@ -56,7 +58,9 @@ async def test_create_chat_with_llm_title(client: AsyncClient):
         mock_llm = MagicMock()
         # Use side_effect with a callable that returns the async generator
         # 使用 side_effect 配合返回 async generator 的可调用对象
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         response = await client.post(
@@ -146,7 +150,9 @@ async def test_list_chats_with_character_filter(client: AsyncClient):
             yield "测试标题"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         await client.post(
@@ -177,7 +183,9 @@ async def test_list_chats_sorted_by_updated_at(client: AsyncClient):
             yield "标题"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         # Create two chats
@@ -215,7 +223,9 @@ async def test_get_chat_details(client: AsyncClient):
             yield "测试聊天"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         create_response = await client.post(
@@ -260,7 +270,9 @@ async def test_get_chat_with_pagination(client: AsyncClient):
             yield "分页测试"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         create_response = await client.post(
@@ -290,7 +302,9 @@ async def test_update_chat_title(client: AsyncClient):
             yield "原标题"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         create_response = await client.post(
@@ -336,7 +350,9 @@ async def test_delete_chat(client: AsyncClient):
             yield "待删除"
 
         mock_llm = MagicMock()
-        mock_llm.chat_completion_stream = MagicMock(side_effect=lambda *a, **kw: mock_stream(*a, **kw))
+        mock_llm.chat_completion_stream = MagicMock(
+            side_effect=lambda *a, **kw: mock_stream(*a, **kw)
+        )
         mock_create.return_value = mock_llm
 
         create_response = await client.post(

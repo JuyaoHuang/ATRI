@@ -116,12 +116,17 @@ def create_app(config: dict) -> FastAPI:
     # Register routes
     # 注册路由
     from src.routes.characters import router as characters_router
+    from src.routes.chat_ws import websocket_endpoint
     from src.routes.chats import router as chats_router
     from src.routes.health import router as health_router
 
     app.include_router(health_router, prefix="/api")
     app.include_router(characters_router)
     app.include_router(chats_router)
+
+    # Register WebSocket endpoint
+    # 注册 WebSocket 端点
+    app.websocket("/ws")(websocket_endpoint)
 
     logger.info("FastAPI app created successfully")
     return app
