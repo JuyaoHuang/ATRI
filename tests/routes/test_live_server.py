@@ -10,12 +10,18 @@ Run with: uv run pytest tests/routes/test_live_server.py -m live -v -s
 Reference: docs/Phase5_执行规格.md §US-SRV-008
 """
 
+from pathlib import Path
+
 import pytest
+from dotenv import load_dotenv
 from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
 
 from src.app import create_app
 from src.utils.config_loader import load_config
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_ENV = _REPO_ROOT / ".env"
 
 
 @pytest.fixture
@@ -23,6 +29,10 @@ def live_app():
     """Create FastAPI app with real config for live testing.
     使用真实配置创建 FastAPI 应用用于 live 测试。
     """
+    # Load .env file before loading config
+    # 在加载配置前先加载 .env 文件
+    load_dotenv(_DEFAULT_ENV)
+
     config = load_config("config.yaml")
     app = create_app(config)
     return app

@@ -184,6 +184,26 @@ async def _handle_text_input(
         # Stream complete
         # 流式传输完成
         full_reply = "".join(chunks)
+
+        # Persist messages to storage BEFORE sending complete event
+        # 在发送完成事件之前持久化消息到存储
+        # This ensures messages are saved before client closes connection
+        # 这确保在客户端关闭连接前消息已保存
+        user_id = "default"  # Phase 5: hardcoded user_id (D7)
+        try:
+            logger.debug(f"Starting message persistence | chat_id={chat_id}")
+            await storage.append_message(chat_id, "human", text, name=user_id)
+            await storage.append_message(chat_id, "ai", full_reply, name=character_id)
+            logger.debug(f"Messages persisted | chat_id={chat_id}")
+        except ValueError as e:
+            # Chat not found (client may have deleted it)
+            # 聊天不存在（客户端可能已删除）
+            logger.warning(f"Failed to persist messages: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error persisting messages: {e}")
+
+        # Now send complete event
+        # 现在发送完成事件
         await websocket.send_json(
             {
                 "type": "output:chat:complete",
@@ -196,19 +216,6 @@ async def _handle_text_input(
         )
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
-
-        # Persist messages to storage
-        # 持久化消息到存储
-        try:
-            await storage.append_message(chat_id, "human", text, name=user_id)
-            await storage.append_message(chat_id, "ai", full_reply, name=character_id)
-            logger.debug(f"Messages persisted | chat_id={chat_id}")
-        except ValueError as e:
-            # Chat not found (client may have deleted it)
-            # 聊天不存在（客户端可能已删除）
-            logger.warning(f"Failed to persist messages: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error persisting messages: {e}")
 
     except LLMError as e:
         # LLM error path (already handled by ChatAgent, but catch here for safety)
