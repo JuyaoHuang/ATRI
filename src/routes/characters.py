@@ -81,9 +81,7 @@ async def get_character(character_id: str) -> CharacterDetail:
     try:
         persona = load_persona(character_id)
     except FileNotFoundError as e:
-        raise HTTPException(
-            status_code=404, detail=f"Character '{character_id}' not found"
-        ) from e
+        raise HTTPException(status_code=404, detail=f"Character '{character_id}' not found") from e
 
     return CharacterDetail(
         character_id=character_id,

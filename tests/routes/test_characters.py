@@ -16,9 +16,7 @@ async def client():
     """Create test client. / 创建测试客户端。"""
     config = load_config("config.yaml")
     app = create_app(config)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 

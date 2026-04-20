@@ -116,10 +116,12 @@ def create_app(config: dict) -> FastAPI:
     # Register routes
     # 注册路由
     from src.routes.characters import router as characters_router
+    from src.routes.chats import router as chats_router
     from src.routes.health import router as health_router
 
     app.include_router(health_router, prefix="/api")
     app.include_router(characters_router)
+    app.include_router(chats_router)
 
     logger.info("FastAPI app created successfully")
     return app

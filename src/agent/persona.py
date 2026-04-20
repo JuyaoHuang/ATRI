@@ -190,9 +190,7 @@ def list_personas() -> list[str]:
     if not _PERSONA_DIR.is_dir():
         return []
 
-    return sorted(
-        p.stem for p in _PERSONA_DIR.glob("*.md") if p.is_file()
-    )
+    return sorted(p.stem for p in _PERSONA_DIR.glob("*.md") if p.is_file())
 
 
 __all__ = ["Persona", "load_persona", "list_personas"]
