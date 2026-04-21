@@ -1,7 +1,7 @@
 # Phase 5 服务层测试验收文档
 
 > **用途**: 本文档提供 Phase 5 FastAPI 服务层的测试验收指令。
-> **参考**: docs/Phase5_执行规格.md §US-SRV-008
+> **参考**: docs/execute-docs/Phase5_执行规格.md §US-SRV-008
 
 ---
 

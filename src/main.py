@@ -32,6 +32,7 @@ docs/Phase5_执行规格.md §US-SRV-007
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import uvicorn
@@ -53,7 +54,11 @@ _DEMO_CHARACTER = "atri"
 _DEMO_USER_ID = "main_demo"
 
 
-async def main() -> None:
+def main() -> None:
+    """Main entry point - synchronous wrapper for uvicorn.run().
+
+    主入口点 - uvicorn.run() 的同步包装器。
+    """
     init_logger()
     logger.info("atri starting")
 
@@ -81,30 +86,48 @@ async def main() -> None:
 
     # Construct ServiceContext and ChatAgent for smoke test
     # 构造 ServiceContext 和 ChatAgent 用于冒烟测试
-    ctx = None
-    try:
-        ctx = ServiceContext(config)
-        agent = ctx.get_or_create_agent(_DEMO_CHARACTER, user_id=_DEMO_USER_ID)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("ServiceContext / ChatAgent construction failed | error={!r}", exc)
-        if ctx:
-            await ctx.close_all()
-        return
+    # Note: smoke test runs synchronously; actual cleanup happens in app lifespan
+    # 注意：冒烟测试同步运行；实际清理在 app lifespan 中进行
+    async def _smoke_test() -> None:
+        """Async smoke test for ServiceContext and ChatAgent.
 
-    mgr = agent.memory_manager
-    mem0_mode = config.get("memory", {}).get("mem0", {}).get("mode", "local_deploy")
-    logger.info(
-        "MemoryManager ready | mode={} | character={} | long_term={}",
-        mem0_mode,
-        _DEMO_CHARACTER,
-        "on" if mgr.long_term is not None else "off",
-    )
-    logger.info(
-        "ChatAgent ready | character={} | persona={} | long_term={}",
-        _DEMO_CHARACTER,
-        agent.persona.name,
-        "on" if mgr.long_term is not None else "off",
-    )
+        ServiceContext 和 ChatAgent 的异步冒烟测试。
+        """
+        ctx = None
+        try:
+            ctx = ServiceContext(config)
+            agent = ctx.get_or_create_agent(_DEMO_CHARACTER, user_id=_DEMO_USER_ID)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("ServiceContext / ChatAgent construction failed | error={!r}", exc)
+            if ctx:
+                await ctx.close_all()
+            raise
+
+        mgr = agent.memory_manager
+        mem0_mode = config.get("memory", {}).get("mem0", {}).get("mode", "local_deploy")
+        logger.info(
+            "MemoryManager ready | mode={} | character={} | long_term={}",
+            mem0_mode,
+            _DEMO_CHARACTER,
+            "on" if mgr.long_term is not None else "off",
+        )
+        logger.info(
+            "ChatAgent ready | character={} | persona={} | long_term={}",
+            _DEMO_CHARACTER,
+            agent.persona.name,
+            "on" if mgr.long_term is not None else "off",
+        )
+
+        # Cleanup smoke test context
+        # 清理冒烟测试上下文
+        logger.info("Cleaning up smoke test ServiceContext")
+        await ctx.close_all()
+
+    try:
+        asyncio.run(_smoke_test())
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Smoke test failed | error={!r}", exc)
+        return
 
     # Create FastAPI app
     # 创建 FastAPI 应用
@@ -114,22 +137,14 @@ async def main() -> None:
     # 获取服务器配置
     server_config = config.get("server", {})
     host = server_config.get("host", "0.0.0.0")
-    port = server_config.get("port", 8000)
+    port = server_config.get("port", 8430)
 
     logger.info("Server starting | host={} | port={}", host, port)
 
-    try:
-        # Start uvicorn server
-        # 启动 uvicorn 服务器
-        uvicorn.run(app, host=host, port=port)
-    finally:
-        # Cleanup smoke test context
-        # 清理冒烟测试上下文
-        logger.info("Cleaning up smoke test ServiceContext")
-        await ctx.close_all()
+    # Start uvicorn server (blocks until shutdown)
+    # 启动 uvicorn 服务器（阻塞直到关闭）
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())
+    main()
