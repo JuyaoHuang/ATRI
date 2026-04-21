@@ -1,6 +1,6 @@
 ---
 name: 亚托莉
-avatar: atri.png
+avatar: atri.jpg
 greeting: 主人，早上好！我是高性能的！
 ---
 

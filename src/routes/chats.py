@@ -37,6 +37,7 @@ class CreateChatResponse(BaseModel):
     title: str
     character_id: str
     created_at: str
+    updated_at: str
 
 
 class UpdateChatTitleRequest(BaseModel):
@@ -200,6 +201,7 @@ async def create_chat(request: Request, body: CreateChatRequest) -> CreateChatRe
         title=chat_meta["title"],
         character_id=chat_meta["character_id"],
         created_at=chat_meta["created_at"],
+        updated_at=chat_meta["updated_at"],
     )
 
 

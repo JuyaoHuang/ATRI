@@ -74,6 +74,7 @@ async def test_create_chat_with_llm_title(client: AsyncClient):
     assert data["title"] == "与亚托莉的问候"
     assert "id" in data
     assert "created_at" in data
+    assert "updated_at" in data
 
 
 @pytest.mark.asyncio
