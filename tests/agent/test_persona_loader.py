@@ -39,13 +39,13 @@ from src.agent.persona import Persona, _split_frontmatter, load_persona
 def test_split_frontmatter_parses_full_header() -> None:
     text = """---
 name: 亚托莉
-avatar: atri.png
+avatar: atri.jpg
 ---
 
 # 角色
 你是 ATRI。"""
     meta, body = _split_frontmatter(text)
-    assert meta == {"name": "亚托莉", "avatar": "atri.png"}
+    assert meta == {"name": "亚托莉", "avatar": "atri.jpg"}
     assert body.startswith("# 角色")
     assert "你是 ATRI。" in body
 
@@ -93,7 +93,7 @@ def test_load_persona_returns_populated_persona_for_atri() -> None:
     assert isinstance(p, Persona)
     assert p.character_id == "atri"
     assert p.name == "亚托莉"
-    assert p.avatar == "atri.png"
+    assert p.avatar == "atri.jpg"
     assert p.greeting is not None and len(p.greeting) > 0
     assert "角色设定" in p.system_prompt
     assert "高性能" in p.system_prompt

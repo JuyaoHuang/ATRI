@@ -5,7 +5,7 @@ with an optional YAML frontmatter header::
 
     ---
     name: 亚托莉
-    avatar: atri.png
+    avatar: atri.jpg
     greeting: 主人，早上好！
     ---
 
