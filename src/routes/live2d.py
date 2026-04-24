@@ -16,7 +16,11 @@ from fastapi import (
     status,
 )
 
-from ..models.live2d import Live2DExpressionList, Live2DModelSummary
+from ..models.live2d import (
+    Live2DExpressionList,
+    Live2DModelSummary,
+    Live2DModelUpdateRequest,
+)
 from ..storage.live2d_storage import (
     Live2DArchiveValidationError,
     Live2DModelNotFoundError,
@@ -110,6 +114,23 @@ async def get_live2d_expressions(
         raise _handle_live2d_error(error) from error
 
     return Live2DExpressionList(model_id=model_id, expressions=expressions)
+
+
+@router.put("/{model_id}", response_model=Live2DModelSummary)
+async def update_live2d_model(
+    model_id: str,
+    payload: Live2DModelUpdateRequest,
+    request: Request,
+    storage: Live2DStorageDep,
+) -> Live2DModelSummary:
+    """Update mutable Live2D model metadata."""
+
+    try:
+        record = storage.update_model(model_id, name=payload.name)
+    except Exception as error:
+        raise _handle_live2d_error(error) from error
+
+    return _serialize_model(record, request, storage)
 
 
 @router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)

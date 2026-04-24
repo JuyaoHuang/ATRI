@@ -12,7 +12,8 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from src.app import create_app
-from src.storage.live2d_storage import Live2DStorage
+from src.storage import live2d_storage as live2d_storage_module
+from src.storage.live2d_storage import DEFAULT_HIYORI_NAME, Live2DStorage
 from src.utils.config_loader import load_config
 
 
@@ -120,6 +121,26 @@ async def test_get_live2d_expressions_returns_expression_names(client_and_storag
 
 
 @pytest.mark.asyncio
+async def test_update_live2d_model_changes_name(client_and_storage):
+    client, _storage = client_and_storage
+
+    create_response = await client.post(
+        "/api/live2d/models",
+        files={"model": ("hiyori.zip", _build_live2d_archive(), "application/zip")},
+        data={"name": "Original Name"},
+    )
+    model_id = create_response.json()["id"]
+
+    response = await client.put(
+        f"/api/live2d/models/{model_id}",
+        json={"name": "Renamed Model"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Renamed Model"
+
+
+@pytest.mark.asyncio
 async def test_delete_live2d_model_removes_directory(client_and_storage):
     client, storage = client_and_storage
 
@@ -148,3 +169,20 @@ async def test_upload_live2d_rejects_invalid_archive(client_and_storage):
 
     assert response.status_code == 400
     assert "valid ZIP archive" in response.json()["detail"]
+
+
+def test_live2d_storage_seeds_default_hiyori_from_airi_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    archive_path = tmp_path / "hiyori_free_zh.zip"
+    archive_path.write_bytes(_build_live2d_archive())
+
+    monkeypatch.setattr(live2d_storage_module, "_DEFAULT_AIRI_HIYORI_ARCHIVE", archive_path)
+
+    storage = Live2DStorage(models_dir=tmp_path / "models", seed_default=True)
+    records = storage.list_models()
+
+    assert len(records) == 1
+    assert records[0].name == DEFAULT_HIYORI_NAME
+    assert records[0].is_default is True

@@ -23,3 +23,9 @@ class Live2DExpressionList(BaseModel):
 
     model_id: str
     expressions: list[str] = Field(default_factory=list)
+
+
+class Live2DModelUpdateRequest(BaseModel):
+    """Payload for updating one Live2D model."""
+
+    name: str = Field(..., min_length=1, max_length=120)

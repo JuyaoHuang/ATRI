@@ -22,11 +22,12 @@ ALLOWED_ZIP_CONTENT_TYPES = {
     "application/octet-stream",
 }
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_LIVE2D_ROOT_DIR = _PROJECT_ROOT / "data" / "live2d"
+_ATRI_ROOT = Path(__file__).resolve().parents[2]
+_WORKSPACE_ROOT = _ATRI_ROOT.parent
+_DEFAULT_LIVE2D_ROOT_DIR = _ATRI_ROOT / "data" / "live2d"
 _DEFAULT_LIVE2D_MODELS_DIR = _DEFAULT_LIVE2D_ROOT_DIR / "models"
 _DEFAULT_AIRI_HIYORI_ARCHIVE = (
-    _PROJECT_ROOT / "airi" / ".cache" / "live2d" / "models" / "hiyori_free_zh.zip"
+    _WORKSPACE_ROOT / "airi" / ".cache" / "live2d" / "models" / "hiyori_free_zh.zip"
 )
 
 
@@ -174,6 +175,26 @@ class Live2DStorage:
                         is_default=True,
                     )
                 )
+
+    def update_model(self, model_id: str, *, name: str) -> Live2DModelRecord:
+        """Update mutable model metadata."""
+
+        record = self.get_model(model_id)
+        next_name = name.strip()
+        if not next_name:
+            raise Live2DStorageError("Live2D model name cannot be empty")
+
+        next_record = Live2DModelRecord(
+            id=record.id,
+            name=next_name,
+            model_path=record.model_path,
+            thumbnail_path=record.thumbnail_path,
+            expressions=record.expressions,
+            created_at=record.created_at,
+            is_default=record.is_default,
+        )
+        self._write_metadata(next_record)
+        return next_record
 
     def list_expressions(self, model_id: str) -> list[str]:
         """Return the model's available expression names."""
