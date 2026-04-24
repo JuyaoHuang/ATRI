@@ -43,6 +43,7 @@ from loguru import logger
 from src.service_context import ServiceContext
 from src.storage.character_storage import CharacterStorage, get_default_character_avatar_dir
 from src.storage.factory import create_chat_storage
+from src.storage.live2d_storage import Live2DStorage, get_default_live2d_models_dir
 
 
 @asynccontextmanager
@@ -100,6 +101,7 @@ def create_app(config: dict) -> FastAPI:
     # 将配置存储在 app state 中供 lifespan 访问
     app.state.config = config
     app.state.character_storage = CharacterStorage()
+    app.state.live2d_storage = Live2DStorage()
 
     avatar_dir = get_default_character_avatar_dir()
     avatar_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +109,13 @@ def create_app(config: dict) -> FastAPI:
         "/api/assets/avatars",
         StaticFiles(directory=str(avatar_dir), check_dir=False),
         name="character-avatar-assets",
+    )
+    live2d_models_dir = get_default_live2d_models_dir()
+    live2d_models_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/api/assets/live2d",
+        StaticFiles(directory=str(live2d_models_dir), check_dir=False),
+        name="live2d-assets",
     )
 
     # Configure CORS
@@ -130,10 +139,12 @@ def create_app(config: dict) -> FastAPI:
     from src.routes.chat_ws import websocket_endpoint
     from src.routes.chats import router as chats_router
     from src.routes.health import router as health_router
+    from src.routes.live2d import router as live2d_router
 
     app.include_router(health_router)
     app.include_router(characters_router)
     app.include_router(chats_router)
+    app.include_router(live2d_router)
 
     # Register WebSocket endpoint
     # 注册 WebSocket 端点
