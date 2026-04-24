@@ -270,7 +270,12 @@ async def create_chat(
 async def get_chat(
     request: Request,
     chat_id: str,
-    limit: int = Query(50, ge=1, le=200, description="Max messages to return"),
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=5000,
+        description="Max messages to return; omitted means load the full conversation",
+    ),
     offset: int = Query(0, ge=0, description="Message offset for pagination"),
 ) -> ChatDetailResponse:
     """Get chat details with message history.
@@ -302,7 +307,8 @@ async def get_chat(
 
     # Get messages
     # 获取消息
-    messages = await storage.get_messages(chat_id, limit=limit, offset=offset)
+    resolved_limit = chat_meta["message_count"] if limit is None else limit
+    messages = await storage.get_messages(chat_id, limit=resolved_limit, offset=offset)
 
     return ChatDetailResponse(
         metadata=ChatListItem(**chat_meta),

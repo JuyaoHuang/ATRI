@@ -244,7 +244,12 @@ class JSONChatStorage(ChatStorageInterface):
 
         return message
 
-    async def get_messages(self, chat_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    async def get_messages(
+        self,
+        chat_id: str,
+        limit: int | None = 50,
+        offset: int = 0,
+    ) -> list[dict]:
         """Get chat message history with pagination."""
         chat_meta = await self.get_chat(chat_id)
         if not chat_meta:
@@ -274,4 +279,6 @@ class JSONChatStorage(ChatStorageInterface):
             return []
 
         messages = session_data.get("messages", [])
+        if limit is None:
+            return messages[offset:]
         return messages[offset : offset + limit]

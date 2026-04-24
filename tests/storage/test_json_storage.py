@@ -223,6 +223,24 @@ async def test_get_messages_returns_all_messages(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_messages_with_none_limit_returns_full_tail(tmp_path):
+    """Test get_messages(limit=None) returns all remaining messages."""
+
+    from src.storage.json_storage import JSONChatStorage
+
+    storage = JSONChatStorage(str(tmp_path))
+    chat = await storage.create_chat("u1", "atri", "test")
+    await storage.append_message(chat["id"], "human", "Hello")
+    await storage.append_message(chat["id"], "ai", "Hi")
+    await storage.append_message(chat["id"], "human", "Again")
+
+    messages = await storage.get_messages(chat["id"], limit=None)
+
+    assert len(messages) == 3
+    assert [message["content"] for message in messages] == ["Hello", "Hi", "Again"]
+
+
+@pytest.mark.asyncio
 async def test_get_messages_pagination_limit(tmp_path):
     """Test get_messages respects limit parameter."""
     storage = JSONChatStorage(base_path=str(tmp_path))
