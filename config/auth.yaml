@@ -17,8 +17,8 @@ github:
   scope: read:user
 
 frontend:
-  callback_url: http://localhost:5173/auth/callback
-  login_url: http://localhost:5173/login
+  callback_url: http://localhost:5200/auth/callback
+  login_url: http://localhost:5200/login
 
 whitelist:
   users: 
