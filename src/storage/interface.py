@@ -54,6 +54,20 @@ class ChatStorageInterface(ABC):
         ...
 
     @abstractmethod
+    async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
+        """
+        Get chat metadata by ID, scoped to a user.
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+
+        Returns:
+            Chat metadata dict or None if not found for this user
+        """
+        ...
+
+    @abstractmethod
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
         """
         Update chat metadata (e.g., title).
@@ -71,6 +85,24 @@ class ChatStorageInterface(ABC):
         ...
 
     @abstractmethod
+    async def update_chat_for_user(self, user_id: str, chat_id: str, **kwargs: str) -> dict:
+        """
+        Update chat metadata for a specific user.
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+            **kwargs: Fields to update
+
+        Returns:
+            Updated chat metadata dict
+
+        Raises:
+            ValueError: If chat_id not found for this user
+        """
+        ...
+
+    @abstractmethod
     async def delete_chat(self, chat_id: str) -> None:
         """
         Delete a chat session and its messages.
@@ -80,6 +112,20 @@ class ChatStorageInterface(ABC):
 
         Raises:
             ValueError: If chat_id not found
+        """
+        ...
+
+    @abstractmethod
+    async def delete_chat_for_user(self, user_id: str, chat_id: str) -> None:
+        """
+        Delete a chat session for a specific user.
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+
+        Raises:
+            ValueError: If chat_id not found for this user
         """
         ...
 
@@ -105,6 +151,28 @@ class ChatStorageInterface(ABC):
         ...
 
     @abstractmethod
+    async def append_message_for_user(
+        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+    ) -> dict:
+        """
+        Append a message to a user-scoped chat history.
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+            role: Message role
+            content: Message content
+            name: Optional speaker name
+
+        Returns:
+            Message dict
+
+        Raises:
+            ValueError: If chat_id not found for this user
+        """
+        ...
+
+    @abstractmethod
     async def get_messages(self, chat_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
         """
         Get chat message history with pagination.
@@ -119,5 +187,26 @@ class ChatStorageInterface(ABC):
 
         Raises:
             ValueError: If chat_id not found
+        """
+        ...
+
+    @abstractmethod
+    async def get_messages_for_user(
+        self, user_id: str, chat_id: str, limit: int | None = 50, offset: int = 0
+    ) -> list[dict]:
+        """
+        Get user-scoped chat message history with pagination.
+
+        Args:
+            user_id: User identifier
+            chat_id: Chat identifier
+            limit: Maximum messages to return
+            offset: Number of messages to skip
+
+        Returns:
+            List of message dicts
+
+        Raises:
+            ValueError: If chat_id not found for this user
         """
         ...

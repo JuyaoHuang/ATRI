@@ -5,9 +5,16 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from src.memory._io_utils import atomic_replace
 from src.storage.interface import ChatStorageInterface
+
+
+class _ChatLocation(NamedTuple):
+    user_id: str
+    character_id: str
+    chat: dict
 
 
 class JSONChatStorage(ChatStorageInterface):
@@ -70,6 +77,26 @@ class JSONChatStorage(ChatStorageInterface):
         uuid_str = str(uuid.uuid4())[:8]
         return f"{date_str}_{uuid_str}"
 
+    async def _find_chat_location(
+        self, chat_id: str, user_id: str | None = None
+    ) -> _ChatLocation | None:
+        """Find a chat location, optionally scoped to one user."""
+        if not self.base_path.is_dir():
+            return None
+
+        user_dirs = [self.base_path / user_id] if user_id else list(self.base_path.iterdir())
+        for user_dir in user_dirs:
+            if not user_dir.is_dir():
+                continue
+            for char_dir in user_dir.iterdir():
+                if not char_dir.is_dir():
+                    continue
+                index = await self._load_index(user_dir.name, char_dir.name)
+                for chat in index["chats"]:
+                    if chat["id"] == chat_id:
+                        return _ChatLocation(user_dir.name, char_dir.name, chat)
+        return None
+
     async def create_chat(self, user_id: str, character_id: str, title: str) -> dict:
         """Create a new chat session."""
         chat_id = self._generate_chat_id()
@@ -116,107 +143,89 @@ class JSONChatStorage(ChatStorageInterface):
 
     async def get_chat(self, chat_id: str) -> dict | None:
         """Get chat metadata by ID (requires scanning all user directories)."""
-        # Note: This is inefficient for production use. Phase 7 database will fix this.
-        if not self.base_path.is_dir():
-            return None
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            for char_dir in user_dir.iterdir():
-                if not char_dir.is_dir():
-                    continue
-                index = await self._load_index(user_dir.name, char_dir.name)
-                for chat in index["chats"]:
-                    if chat["id"] == chat_id:
-                        return chat
-        return None
+        location = await self._find_chat_location(chat_id)
+        return location.chat if location else None
+
+    async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
+        """Get chat metadata by ID, scoped to a user."""
+        location = await self._find_chat_location(chat_id, user_id=user_id)
+        return location.chat if location else None
 
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
         """Update chat metadata (title, etc.)."""
-        # Find the chat in index
-        if not self.base_path.is_dir():
+        location = await self._find_chat_location(chat_id)
+        if not location:
             raise ValueError(f"Chat {chat_id} not found")
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            for char_dir in user_dir.iterdir():
-                if not char_dir.is_dir():
-                    continue
-                user_id = user_dir.name
-                character_id = char_dir.name
-                index = await self._load_index(user_id, character_id)
+        return await self.update_chat_for_user(location.user_id, chat_id, **kwargs)
 
-                for chat in index["chats"]:
-                    if chat["id"] == chat_id:
-                        # Update fields
-                        chat.update(kwargs)
-                        chat["updated_at"] = datetime.now(UTC).isoformat()
-                        await self._save_index(user_id, character_id, index)
-                        return chat
+    async def update_chat_for_user(self, user_id: str, chat_id: str, **kwargs: str) -> dict:
+        """Update chat metadata for a specific user."""
+        location = await self._find_chat_location(chat_id, user_id=user_id)
+        if not location:
+            raise ValueError(f"Chat {chat_id} not found")
 
+        index = await self._load_index(user_id, location.character_id)
+        for chat in index["chats"]:
+            if chat["id"] == chat_id:
+                chat.update(kwargs)
+                chat["updated_at"] = datetime.now(UTC).isoformat()
+                await self._save_index(user_id, location.character_id, index)
+                return chat
         raise ValueError(f"Chat {chat_id} not found")
 
     async def delete_chat(self, chat_id: str) -> None:
         """Delete chat session."""
-        # Find and remove from index
-        if not self.base_path.is_dir():
+        location = await self._find_chat_location(chat_id)
+        if not location:
             raise ValueError(f"Chat {chat_id} not found")
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            for char_dir in user_dir.iterdir():
-                if not char_dir.is_dir():
-                    continue
-                user_id = user_dir.name
-                character_id = char_dir.name
-                index = await self._load_index(user_id, character_id)
+        await self.delete_chat_for_user(location.user_id, chat_id)
 
-                for i, chat in enumerate(index["chats"]):
-                    if chat["id"] == chat_id:
-                        # Remove from index
-                        index["chats"].pop(i)
-                        await self._save_index(user_id, character_id, index)
+    async def delete_chat_for_user(self, user_id: str, chat_id: str) -> None:
+        """Delete chat session for a specific user."""
+        location = await self._find_chat_location(chat_id, user_id=user_id)
+        if not location:
+            raise ValueError(f"Chat {chat_id} not found")
 
-                        # Delete session file
-                        session_path = self._get_session_path(user_id, character_id, chat_id)
+        index = await self._load_index(user_id, location.character_id)
+        for i, chat in enumerate(index["chats"]):
+            if chat["id"] == chat_id:
+                index["chats"].pop(i)
+                await self._save_index(user_id, location.character_id, index)
 
-                        def _delete(path=session_path):
-                            if path.exists():
-                                path.unlink()
+                session_path = self._get_session_path(user_id, location.character_id, chat_id)
 
-                        await asyncio.to_thread(_delete)
-                        return
+                def _delete(path=session_path):
+                    if path.exists():
+                        path.unlink()
 
+                await asyncio.to_thread(_delete)
+                return
         raise ValueError(f"Chat {chat_id} not found")
 
     async def append_message(
         self, chat_id: str, role: str, content: str, name: str | None = None
     ) -> dict:
         """Append message to chat session."""
-        # Find chat metadata
-        chat_meta = await self.get_chat(chat_id)
-        if not chat_meta:
+        location = await self._find_chat_location(chat_id)
+        if not location:
+            raise ValueError(f"Chat {chat_id} not found")
+        return await self.append_message_for_user(
+            location.user_id,
+            chat_id,
+            role,
+            content,
+            name=name,
+        )
+
+    async def append_message_for_user(
+        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+    ) -> dict:
+        """Append message to a user-scoped chat session."""
+        location = await self._find_chat_location(chat_id, user_id=user_id)
+        if not location:
             raise ValueError(f"Chat {chat_id} not found")
 
-        user_id = None
-        character_id = chat_meta["character_id"]
-
-        # Find user_id by scanning
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            char_dir = user_dir / character_id
-            if char_dir.exists():
-                index = await self._load_index(user_dir.name, character_id)
-                if any(c["id"] == chat_id for c in index["chats"]):
-                    user_id = user_dir.name
-                    break
-
-        if not user_id:
-            raise ValueError(f"Chat {chat_id} not found")
-
-        # Load session
-        session_path = self._get_session_path(user_id, character_id, chat_id)
+        session_path = self._get_session_path(user_id, location.character_id, chat_id)
         session_data = await self._read_json(session_path)
         if not isinstance(session_data, dict):
             session_data = {"messages": []}
@@ -234,13 +243,13 @@ class JSONChatStorage(ChatStorageInterface):
         await self._write_json(session_path, session_data)
 
         # Update index metadata
-        index = await self._load_index(user_id, character_id)
+        index = await self._load_index(user_id, location.character_id)
         for chat in index["chats"]:
             if chat["id"] == chat_id:
                 chat["message_count"] = len(session_data["messages"])
                 chat["updated_at"] = message["timestamp"]
                 break
-        await self._save_index(user_id, character_id, index)
+        await self._save_index(user_id, location.character_id, index)
 
         return message
 
@@ -251,29 +260,29 @@ class JSONChatStorage(ChatStorageInterface):
         offset: int = 0,
     ) -> list[dict]:
         """Get chat message history with pagination."""
-        chat_meta = await self.get_chat(chat_id)
-        if not chat_meta:
+        location = await self._find_chat_location(chat_id)
+        if not location:
+            raise ValueError(f"Chat {chat_id} not found")
+        return await self.get_messages_for_user(
+            location.user_id,
+            chat_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_messages_for_user(
+        self,
+        user_id: str,
+        chat_id: str,
+        limit: int | None = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Get user-scoped chat message history with pagination."""
+        location = await self._find_chat_location(chat_id, user_id=user_id)
+        if not location:
             raise ValueError(f"Chat {chat_id} not found")
 
-        user_id = None
-        character_id = chat_meta["character_id"]
-
-        # Find user_id
-        for user_dir in self.base_path.iterdir():
-            if not user_dir.is_dir():
-                continue
-            char_dir = user_dir / character_id
-            if char_dir.exists():
-                index = await self._load_index(user_dir.name, character_id)
-                if any(c["id"] == chat_id for c in index["chats"]):
-                    user_id = user_dir.name
-                    break
-
-        if not user_id:
-            raise ValueError(f"Chat {chat_id} not found")
-
-        # Load session
-        session_path = self._get_session_path(user_id, character_id, chat_id)
+        session_path = self._get_session_path(user_id, location.character_id, chat_id)
         session_data = await self._read_json(session_path)
         if not isinstance(session_data, dict):
             return []

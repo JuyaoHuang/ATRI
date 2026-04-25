@@ -99,6 +99,16 @@ async def test_get_chat_returns_none_for_nonexistent(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_chat_for_user_does_not_cross_user_boundary(tmp_path):
+    """User-scoped lookup should not return another user's chat."""
+    storage = JSONChatStorage(base_path=str(tmp_path))
+    created = await storage.create_chat("user1", "atri", "Test")
+
+    assert await storage.get_chat_for_user("user1", created["id"]) is not None
+    assert await storage.get_chat_for_user("user2", created["id"]) is None
+
+
+@pytest.mark.asyncio
 async def test_update_chat_modifies_title(tmp_path):
     """Test update_chat changes title and updates updated_at."""
     storage = JSONChatStorage(base_path=str(tmp_path))
@@ -147,6 +157,26 @@ async def test_delete_chat_raises_on_nonexistent(tmp_path):
     storage = JSONChatStorage(base_path=str(tmp_path))
     with pytest.raises(ValueError, match="not found"):
         await storage.delete_chat("nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_user_scoped_update_delete_and_messages_do_not_cross_user_boundary(tmp_path):
+    """User-scoped mutating operations should reject another user's chat."""
+    storage = JSONChatStorage(base_path=str(tmp_path))
+    chat = await storage.create_chat("user1", "atri", "Private")
+
+    with pytest.raises(ValueError, match="not found"):
+        await storage.update_chat_for_user("user2", chat["id"], title="Stolen")
+    with pytest.raises(ValueError, match="not found"):
+        await storage.append_message_for_user("user2", chat["id"], "human", "Hello")
+    with pytest.raises(ValueError, match="not found"):
+        await storage.get_messages_for_user("user2", chat["id"])
+    with pytest.raises(ValueError, match="not found"):
+        await storage.delete_chat_for_user("user2", chat["id"])
+
+    await storage.append_message_for_user("user1", chat["id"], "human", "Hello")
+    messages = await storage.get_messages_for_user("user1", chat["id"])
+    assert [message["content"] for message in messages] == ["Hello"]
 
 
 @pytest.mark.asyncio
