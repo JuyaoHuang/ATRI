@@ -113,7 +113,7 @@ def test_asr_config_store_preserves_raw_secret_placeholder_on_save(tmp_path: Pat
     assert persisted["auto_send"] == {"enabled": True, "delay_ms": 1500}
 
 
-def test_asr_config_store_scrubs_runtime_secret_on_save(tmp_path: Path):
+def test_asr_config_store_does_not_rewrite_unpatched_secret_on_save(tmp_path: Path):
     config_path = tmp_path / "asr_config.yaml"
     config_path.write_text(
         "\n".join(
@@ -133,7 +133,47 @@ def test_asr_config_store_scrubs_runtime_secret_on_save(tmp_path: Path):
     store.update({"auto_send": {"enabled": False, "delay_ms": 1000}})
 
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert persisted["openai_whisper"]["api_key"] == "${OPENAI_API_KEY}"
+    assert persisted["openai_whisper"]["api_key"] == "resolved-runtime-key"
+
+
+def test_asr_config_store_patches_values_without_reformatting_yaml(tmp_path: Path):
+    config_path = tmp_path / "asr_config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "# keep header comment",
+                "asr_model: web_speech_api # active provider",
+                "auto_send:",
+                "  enabled: false # writable",
+                "  delay_ms: 2000",
+                "web_speech_api:",
+                "  language: 'zh-CN' # keep quote",
+                "  continuous: true",
+                "openai_whisper:",
+                "  api_key: ${OPENAI_API_KEY}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = ASRConfigStore(path=config_path)
+
+    store.update(
+        {
+            "asr_model": "web_speech_api",
+            "auto_send": {"enabled": True, "delay_ms": 1200},
+            "web_speech_api": {"language": "en-US"},
+        }
+    )
+
+    updated = config_path.read_text(encoding="utf-8")
+    assert "# keep header comment" in updated
+    assert "asr_model: web_speech_api # active provider" in updated
+    assert "  enabled: true # writable" in updated
+    assert "  delay_ms: 1200" in updated
+    assert "  language: 'en-US' # keep quote" in updated
+    assert "  continuous: true" in updated
+    assert "  api_key: ${OPENAI_API_KEY}" in updated
 
 
 def test_asr_service_masks_secret_values_in_public_config(tmp_path: Path):

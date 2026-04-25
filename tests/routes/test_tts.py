@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from src.app import create_app
 from src.tts import TTSConfigStore, TTSService
+from src.tts.providers import cosyvoice3_tts as cosyvoice3_module
 from src.tts.providers import edge_tts as edge_tts_module
 from src.tts.providers import gpt_sovits_tts as gpt_sovits_module
 from src.utils.config_loader import load_config
@@ -50,7 +51,7 @@ async def test_list_tts_providers_returns_registered_statuses(client_and_config_
     assert response.status_code == 200
     providers = response.json()
     names = {provider["name"] for provider in providers}
-    assert {"edge_tts", "gpt_sovits_tts", "siliconflow_tts"} <= names
+    assert {"edge_tts", "gpt_sovits_tts", "siliconflow_tts", "cosyvoice3_tts"} <= names
 
     edge = next(provider for provider in providers if provider["name"] == "edge_tts")
     assert edge["active"] is True
@@ -245,7 +246,7 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
             },
             "cosyvoice3_tts": {
                 "client_url": "http://127.0.0.1:50000/",
-                "sft_dropdown": "中文女",
+                "sft_dropdown": "zh-female",
                 "prompt_wav_upload_url": "bad.wav",
                 "prompt_wav_record_url": "bad.wav",
                 "stream": True,
@@ -270,7 +271,7 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
         "stream": True,
     }
     assert persisted["cosyvoice3_tts"] == {
-        "sft_dropdown": "中文女",
+        "sft_dropdown": "zh-female",
         "stream": True,
         "speed": 1.2,
     }
@@ -315,6 +316,51 @@ def test_tts_config_store_preserves_manual_disk_edits_before_save(tmp_path: Path
     assert persisted["auto_play"] is True
     assert persisted["gpt_sovits_tts"]["ref_audio_path"] == "manual.wav"
     assert persisted["gpt_sovits_tts"]["prompt_text"] == "manual prompt"
+
+
+def test_tts_config_store_patches_values_without_reformatting_yaml(tmp_path: Path):
+    config_path = tmp_path / "tts_config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "# keep header comment",
+                "tts_model: edge_tts # active provider",
+                "edge_tts:",
+                "  voice: zh-CN-XiaoxiaoNeural # untouched",
+                "  rate: +0% # writable",
+                "gpt_sovits_tts:",
+                "  prompt_lang: 'zh'",
+                "  prompt_text: \"hello\"",
+                "siliconflow_tts:",
+                "  default_voice: 'old-voice' # keep quote and comment",
+                "  stream: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = TTSConfigStore(path=config_path)
+
+    store.update(
+        {
+            "tts_model": "siliconflow_tts",
+            "edge_tts": {"rate": "+10%"},
+            "siliconflow_tts": {
+                "default_voice": "new voice",
+                "stream": True,
+            },
+        }
+    )
+
+    updated = config_path.read_text(encoding="utf-8")
+    assert "# keep header comment" in updated
+    assert "tts_model: siliconflow_tts # active provider" in updated
+    assert "  voice: zh-CN-XiaoxiaoNeural # untouched" in updated
+    assert "  rate: +10% # writable" in updated
+    assert "  prompt_lang: 'zh'" in updated
+    assert '  prompt_text: "hello"' in updated
+    assert "  default_voice: 'new voice' # keep quote and comment" in updated
+    assert "  stream: true" in updated
 
 
 @pytest.mark.asyncio
@@ -387,6 +433,57 @@ async def test_gpt_sovits_synthesize_returns_audio_response(
     assert response.content == b"wav-data"
     assert response.headers["x-tts-provider"] == "gpt_sovits_tts"
     assert response.headers["content-type"].startswith("audio/wav")
+
+
+@pytest.mark.asyncio
+async def test_cosyvoice3_synthesize_reads_gradio_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    audio_path = tmp_path / "result.wav"
+    audio_path.write_bytes(b"wav-data")
+    calls: dict[str, Any] = {}
+
+    class DummyClient:
+        def __init__(self, client_url: str) -> None:
+            calls["client_url"] = client_url
+
+        def predict(self, **kwargs: Any) -> str:
+            calls.update(kwargs)
+            return str(audio_path)
+
+    def fake_find_spec(name: str, *args: Any, **kwargs: Any) -> object | None:
+        if name == "gradio_client":
+            return object()
+        return None
+
+    def fake_handle_file(value: str) -> str:
+        return f"file:{value}"
+
+    monkeypatch.setattr(cosyvoice3_module.importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setattr(
+        cosyvoice3_module,
+        "_load_gradio_client",
+        lambda: (DummyClient, fake_handle_file),
+    )
+
+    provider = cosyvoice3_module.CosyVoice3TTSProvider(
+        client_url="http://127.0.0.1:50000/",
+        sft_dropdown="voice-a",
+        prompt_wav_upload_url="upload.wav",
+        prompt_wav_record_url="record.wav",
+    )
+
+    audio = await provider.synthesize("hello", voice_id="voice-b", stream=True, speed=1.25)
+
+    assert audio == b"wav-data"
+    assert calls["client_url"] == "http://127.0.0.1:50000/"
+    assert calls["tts_text"] == "hello"
+    assert calls["sft_dropdown"] == "voice-b"
+    assert calls["prompt_wav_upload"] == "file:upload.wav"
+    assert calls["prompt_wav_record"] == "file:record.wav"
+    assert calls["stream"] is True
+    assert calls["speed"] == 1.25
 
 
 @pytest.mark.asyncio

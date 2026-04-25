@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from src.utils.yaml_text import patch_yaml_values
 
 _ATRI_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TTS_CONFIG_PATH = _ATRI_ROOT / "config" / "tts_config.yaml"
@@ -69,12 +72,13 @@ class TTSConfigStore:
     def update(self, patch: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
         """Merge a partial config update and persist it by default."""
 
+        had_file = self.path.is_file()
         if persist:
             self._refresh_from_disk()
         self._config = deep_merge(self._config, patch)
         self._persist_config = deep_merge(self._persist_config, patch)
         if persist:
-            self.save()
+            self._save_patch(patch if had_file else self._persist_config)
         return self.read()
 
     def replace(self, config: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
@@ -83,21 +87,21 @@ class TTSConfigStore:
         self._config = deep_merge(DEFAULT_TTS_CONFIG, config)
         self._persist_config = deepcopy(config)
         if persist:
-            self.save()
+            self._save_patch(config)
         return self.read()
 
     def save(self) -> None:
-        """Persist only explicit config values to YAML."""
+        """Persist explicit config values without reformatting the YAML document."""
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            yaml.safe_dump(
-                self._config_for_save(self._persist_config),
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            encoding="utf-8",
-        )
+        self._save_patch(self._persist_config)
+
+    def _save_patch(self, patch: Mapping[str, Any]) -> None:
+        """Patch only the provided YAML keys, preserving comments and layout."""
+
+        if not patch:
+            return
+
+        patch_yaml_values(self.path, self._config_for_save(dict(patch)))
 
     def _read_raw_config(self) -> dict[str, Any] | None:
         """Read the persisted TTS YAML without environment substitution."""

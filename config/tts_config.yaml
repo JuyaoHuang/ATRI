@@ -1,44 +1,55 @@
-tts_model: siliconflow_tts
-enabled: false
-auto_play: true
-show_player_on_home: false
-volume: 1
+# 文本转语音（TTS）配置
+# tts_model 可选：edge_tts、gpt_sovits_tts、siliconflow_tts、cosyvoice3_tts。
+tts_model: gpt_sovits_tts # 当前使用的文本转语音模型
+enabled: false # 是否启用 TTS 模块
+auto_play: true # 是否自动朗读 AI 回复
+show_player_on_home: false # 是否在 / 页面显示播放控制组件
+volume: 1 # 浏览器播放音量，范围通常为 0.0-1.0
+
 edge_tts:
-  voice: zh-CN-XiaoxiaoNeural
-  rate: +0%
-  pitch: +0Hz
-  volume: +0%
-  format: mp3
+  # 查看文档：https://github.com/rany2/edge-tts
+  # 可用 `edge-tts --list-voices` 列出所有可用语音。
+  voice: zh-CN-XiaoxiaoNeural # Edge TTS 语音名称
+  rate: +0% # 语速调整，例如 +10%、-10%
+  pitch: +0Hz # 音调调整，例如 +10Hz、-10Hz
+  volume: +0% # Edge TTS 合成音量调整
+  format: mp3 # 输出格式，当前 provider 默认返回 audio/mpeg
+
 gpt_sovits_tts:
-  api_url: http://127.0.0.1:9880/tts
-  text_lang: zh
-  ref_audio_path: D:/Coding/GPT-SoVITS/gptSovits/GPT-SoVITS-v2pro-20250604/GPT_SoVITS/pretrained_models/MODELS/v2ProPlus/IMISS/它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物。.wav
-  prompt_lang: zh
-  prompt_text: 它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物
-  text_split_method: cut5
-  batch_size: '1'
-  media_type: wav
-  streaming_mode: 'false'
+  # 将参考音频放到 GPT-SoVITS 可访问的位置，或在此处设置绝对路径。
+  api_url: 'http://127.0.0.1:9880/tts' # GPT-SoVITS HTTP API URL
+  text_lang: 'zh' # 待合成文本的语言
+  ref_audio_path: "D:/Coding/GPT-SoVITS/gptSovits/GPT-SoVITS-v2pro-20250604/GPT_SoVITS/pretrained_models/MODELS/v2ProPlus/IMISS/它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物。.wav" # str.(必需) 参考音频的路径
+  prompt_lang: 'zh' # str.(必需) 参考音频提示文本的语言
+  prompt_text: '它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物' # str.(可选) 参考音频对应的提示文本
+  text_split_method: 'cut5' # 文本分割方法
+  batch_size: '1' # 批处理大小
+  media_type: 'wav' # 返回媒体类型
+  streaming_mode: 'false' # GPT-SoVITS 流式模式开关
+
 siliconflow_tts:
-  api_key: ${SILICONFLOW_API_KEY}
-  api_url: https://api.siliconflow.cn/v1/audio/speech
-  default_model: FunAudioLLM/CosyVoice2-0.5B
-  default_voice: FunAudioLLM/CosyVoice2-0.5B:claire
-  sample_rate: 32000
-  response_format: mp3
-  stream: false
-  speed: 1
-  gain: 0
-  timeout_seconds: 120
+  api_key: ${SILICONFLOW_API_KEY} # SiliconFlow API 密钥；建议使用环境变量占位符
+  api_url: https://api.siliconflow.cn/v1/audio/speech # SiliconFlow 语音合成 API URL
+  default_model: FunAudioLLM/CosyVoice2-0.5B # 默认语音模型
+  default_voice: FunAudioLLM/CosyVoice2-0.5B:claire # 默认音色；前端允许切换该字段
+  sample_rate: 32000 # 输出采样率
+  response_format: mp3 # 返回音频格式
+  stream: false # 是否请求流式生成；当前后端仍返回完整音频
+  speed: 1 # 语速倍率
+  gain: 0 # 增益
+  timeout_seconds: 120 # 请求超时时间（秒）
+
 cosyvoice3_tts:
-  client_url: http://127.0.0.1:50000/
-  mode_checkbox_group: 预训练音色
-  sft_dropdown: 中文女
-  prompt_text: ''
-  prompt_wav_upload_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav
-  prompt_wav_record_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav
-  instruct_text: ''
-  stream: false
-  seed: 0
-  speed: 1.0
-  api_name: /generate_audio
+  # CosyVoice3 通过 Gradio WebUI 暴露的 /generate_audio 接口调用。
+  # 参数含义参考 Open-LLM-VTuber 的 cosyvoice2_tts 配置。
+  client_url: http://127.0.0.1:50000/ # CosyVoice Gradio WebUI URL
+  mode_checkbox_group: 预训练音色 # 模式复选框组；常见选项：预训练音色、3s极速复刻、跨语种复刻、自然语言控制
+  sft_dropdown: 中文女 # SFT/预训练音色下拉选项；前端允许切换该字段
+  prompt_text: '' # 提示文本；复刻/克隆模式用于描述参考音频内容
+  prompt_wav_upload_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav # 上传参考音频的路径或 URL
+  prompt_wav_record_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav # 录制参考音频的路径或 URL
+  instruct_text: '' # 指令文本；自然语言控制模式使用
+  stream: false # 是否流式生成；前端允许切换该字段
+  seed: 0 # 随机种子
+  speed: 1.0 # 语速倍率；前端允许切换该字段
+  api_name: /generate_audio # Gradio API 名称

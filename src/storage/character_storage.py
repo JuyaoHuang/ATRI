@@ -8,10 +8,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import yaml
 from fastapi import UploadFile
 
 from src.agent.persona import Persona, load_persona_from_path
+from src.utils.yaml_text import render_yaml_mapping
 
 MANAGED_BY_ATRI = "atri"
 MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024
@@ -341,7 +341,7 @@ class CharacterStorage:
             "managed_by": record.managed_by,
         }
         clean_metadata = {key: value for key, value in metadata.items() if value is not None}
-        frontmatter = yaml.safe_dump(clean_metadata, allow_unicode=True, sort_keys=False).strip()
+        frontmatter = render_yaml_mapping(clean_metadata)
         body = record.system_prompt.strip()
         content = f"---\n{frontmatter}\n---\n\n{body}\n"
         self._character_path(record.character_id).write_text(content, encoding="utf-8")

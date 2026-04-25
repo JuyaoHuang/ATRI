@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from src.utils.yaml_text import patch_yaml_values
+
 _ATRI_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASR_CONFIG_PATH = _ATRI_ROOT / "config" / "asr_config.yaml"
 SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
@@ -38,6 +40,7 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "openai_whisper": {
         "model": "whisper-1",
         "language": "",
+        "api_key": "${OPENAI_API_KEY}",
     },
 }
 
@@ -65,14 +68,11 @@ class ASRConfigStore:
     ) -> None:
         self.path = path or DEFAULT_ASR_CONFIG_PATH
         raw_config = self._read_raw_config()
-        self._persist_config = deep_merge(
-            DEFAULT_ASR_CONFIG,
-            raw_config if raw_config is not None else initial_config or {},
-        )
-        self._config = deep_merge(
-            DEFAULT_ASR_CONFIG,
-            initial_config or raw_config or {},
-        )
+        source_config = raw_config if raw_config is not None else initial_config or {}
+        self._persist_config = deepcopy(source_config)
+        self._config = deep_merge(DEFAULT_ASR_CONFIG, source_config)
+        if initial_config:
+            self._config = deep_merge(self._config, initial_config)
 
     def read(self) -> dict[str, Any]:
         """Return a defensive copy of the current ASR config."""
@@ -82,33 +82,33 @@ class ASRConfigStore:
     def update(self, patch: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
         """Merge a partial config update and persist it by default."""
 
+        had_file = self.path.is_file()
+        if persist:
+            self._refresh_from_disk()
         self._config = deep_merge(self._config, patch)
         self._persist_config = deep_merge(self._persist_config, patch)
         if persist:
-            self.save()
+            self._save_patch(patch if had_file else self._persist_config)
         return self.read()
 
     def replace(self, config: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
         """Replace the current config after applying defaults."""
 
         self._config = deep_merge(DEFAULT_ASR_CONFIG, config)
-        self._persist_config = deep_merge(DEFAULT_ASR_CONFIG, config)
+        self._persist_config = deepcopy(config)
         if persist:
-            self.save()
+            self._save_patch(config)
         return self.read()
 
     def save(self) -> None:
-        """Persist the current config to YAML."""
+        """Persist current values without reformatting the YAML document."""
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            yaml.safe_dump(
-                self._config_for_save(self._persist_config, DEFAULT_ASR_CONFIG),
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            encoding="utf-8",
-        )
+        self._save_patch(self._persist_config)
+
+    def _save_patch(self, patch: dict[str, Any]) -> None:
+        """Patch only provided YAML values, preserving comments and layout."""
+
+        patch_yaml_values(self.path, self._config_for_save(patch, DEFAULT_ASR_CONFIG))
 
     def _read_raw_config(self) -> dict[str, Any] | None:
         """Read the persisted ASR YAML without environment substitution."""
@@ -117,6 +117,23 @@ class ASRConfigStore:
             return None
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         return raw if isinstance(raw, dict) else {}
+
+    def _refresh_from_disk(self) -> None:
+        """Merge the latest on-disk YAML before saving a runtime patch."""
+
+        raw_config = self._read_raw_config()
+        if raw_config is None:
+            return
+
+        latest_persist_config = deepcopy(raw_config)
+        latest_runtime_config = deep_merge(DEFAULT_ASR_CONFIG, raw_config)
+        self._preserve_runtime_secrets(
+            latest_runtime_config,
+            latest_persist_config,
+            self._config,
+        )
+        self._persist_config = latest_persist_config
+        self._config = latest_runtime_config
 
     def _config_for_save(
         self,
@@ -136,3 +153,28 @@ class ASRConfigStore:
 
     def _is_env_placeholder(self, value: Any) -> bool:
         return isinstance(value, str) and value.startswith("${") and value.endswith("}")
+
+    def _preserve_runtime_secrets(
+        self,
+        runtime_config: dict[str, Any],
+        persist_config: dict[str, Any],
+        previous_runtime_config: dict[str, Any],
+    ) -> None:
+        """Keep resolved env secrets in memory while preserving placeholders on disk."""
+
+        for key, value in list(persist_config.items()):
+            previous_value = previous_runtime_config.get(key)
+            if isinstance(value, dict) and isinstance(runtime_config.get(key), dict):
+                previous_mapping = previous_value if isinstance(previous_value, dict) else {}
+                self._preserve_runtime_secrets(
+                    runtime_config[key],
+                    value,
+                    previous_mapping,
+                )
+            elif (
+                key.lower() in SENSITIVE_CONFIG_KEYS
+                and self._is_env_placeholder(value)
+                and previous_value
+                and not self._is_env_placeholder(previous_value)
+            ):
+                runtime_config[key] = previous_value
