@@ -47,28 +47,28 @@ mem0:
         # port: 6333
 
     embedder:
-      backend: ollama                # "ollama" | "api"
+      backend: api                # "ollama" | "api"
       ollama:
         model: bge-m3
         base_url: http://localhost:11434
       api:
         provider: openai
-        model: text-embedding-3-small
+        model: BAAI/bge-m3
         api_key: ${OPENAI_API_KEY}
-        base_url: https://api.openai.com/v1
+        base_url: https://api.siliconflow.cn/v1
 
     llm:
       reuse_main_llm: false          # use independent fact-extraction LLM
-      backend: ollama                # "ollama" | "api"
+      backend: api                # "ollama" | "api"
       ollama:
         model: qwen2.5:7b
         base_url: http://localhost:11434
         temperature: 0.3             # fact extraction prefers low temperature for stable JSON
       api:
         provider: openai
-        model: gpt-4o-mini
+        model: deepseek-ai/DeepSeek-V3.2
         api_key: ${OPENAI_API_KEY}
-        base_url: https://api.openai.com/v1
+        base_url: https://api.siliconflow.cn/v1
         temperature: 0.3             # fact extraction prefers low temperature for stable JSON
 
     # Graph Memory -- MVP disabled, structure reserved

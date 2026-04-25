@@ -85,15 +85,13 @@ async def test_update_tts_config_persists_olv_shaped_config(client_and_config_pa
     assert data["auto_play"] is True
     assert data["show_player_on_home"] is True
     assert data["volume"] == 0.8
-    assert data["gpt_sovits_tts"]["timeout_seconds"] == 90
-    assert "media_type" not in data["gpt_sovits_tts"]
+    assert "media_type" not in data.get("gpt_sovits_tts", {})
 
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert persisted["tts_model"] == "gpt_sovits_tts"
     assert persisted["auto_play"] is True
     assert persisted["show_player_on_home"] is True
-    assert persisted["gpt_sovits_tts"]["timeout_seconds"] == 90
-    assert "media_type" not in persisted["gpt_sovits_tts"]
+    assert "gpt_sovits_tts" not in persisted
 
 
 def test_tts_config_store_does_not_backfill_defaults_on_save(tmp_path: Path):
@@ -223,7 +221,11 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
 
     service.update_config(
         {
-            "edge_tts": {"voice": "en-US-AriaNeural", "rate": "+10%"},
+            "edge_tts": {
+                "voice": "en-US-AriaNeural",
+                "rate": "+10%",
+                "pitch": "+10Hz",
+            },
             "gpt_sovits_tts": {
                 "api_url": "http://127.0.0.1:9880/tts",
                 "timeout_seconds": 60,
@@ -239,6 +241,15 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
                 "default_voice": "FunAudioLLM/CosyVoice2-0.5B:claire",
                 "response_format": "wav",
                 "speed": 1.1,
+                "stream": True,
+            },
+            "cosyvoice3_tts": {
+                "client_url": "http://127.0.0.1:50000/",
+                "sft_dropdown": "中文女",
+                "prompt_wav_upload_url": "bad.wav",
+                "prompt_wav_record_url": "bad.wav",
+                "stream": True,
+                "speed": 1.2,
             },
         }
     )
@@ -247,22 +258,21 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert "voice" not in config["edge_tts"]
+    assert "pitch" not in config["edge_tts"]
     assert persisted["edge_tts"] == {"rate": "+10%"}
-    assert config["gpt_sovits_tts"] == {
-        "api_url": "http://127.0.0.1:9880/tts",
-        "timeout_seconds": 60,
-    }
-    assert persisted["gpt_sovits_tts"] == {
-        "api_url": "http://127.0.0.1:9880/tts",
-        "timeout_seconds": 60,
-    }
+    assert "gpt_sovits_tts" not in persisted
     assert "api_key" not in config["siliconflow_tts"]
     assert "api_url" not in config["siliconflow_tts"]
     assert "default_model" not in config["siliconflow_tts"]
     assert "response_format" not in config["siliconflow_tts"]
     assert persisted["siliconflow_tts"] == {
         "default_voice": "FunAudioLLM/CosyVoice2-0.5B:claire",
-        "speed": 1.1,
+        "stream": True,
+    }
+    assert persisted["cosyvoice3_tts"] == {
+        "sft_dropdown": "中文女",
+        "stream": True,
+        "speed": 1.2,
     }
 
 

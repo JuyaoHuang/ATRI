@@ -1,6 +1,44 @@
-# ============================================================
-# TTS config -- RESERVED
-#
-# Filled in during the TTS implementation phase.
-# Reference: docs/项目架构设计.md §2.1 (Output Layer)
-# ============================================================
+tts_model: siliconflow_tts
+enabled: false
+auto_play: true
+show_player_on_home: false
+volume: 1
+edge_tts:
+  voice: zh-CN-XiaoxiaoNeural
+  rate: +0%
+  pitch: +0Hz
+  volume: +0%
+  format: mp3
+gpt_sovits_tts:
+  api_url: http://127.0.0.1:9880/tts
+  text_lang: zh
+  ref_audio_path: D:/Coding/GPT-SoVITS/gptSovits/GPT-SoVITS-v2pro-20250604/GPT_SoVITS/pretrained_models/MODELS/v2ProPlus/IMISS/它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物。.wav
+  prompt_lang: zh
+  prompt_text: 它和你曾经遭遇的虚诞虫相似，是大部分都由隧者零件组成的机械造物
+  text_split_method: cut5
+  batch_size: '1'
+  media_type: wav
+  streaming_mode: 'false'
+siliconflow_tts:
+  api_key: ${SILICONFLOW_API_KEY}
+  api_url: https://api.siliconflow.cn/v1/audio/speech
+  default_model: FunAudioLLM/CosyVoice2-0.5B
+  default_voice: FunAudioLLM/CosyVoice2-0.5B:claire
+  sample_rate: 32000
+  response_format: mp3
+  stream: false
+  speed: 1
+  gain: 0
+  timeout_seconds: 120
+cosyvoice3_tts:
+  client_url: http://127.0.0.1:50000/
+  mode_checkbox_group: 预训练音色
+  sft_dropdown: 中文女
+  prompt_text: ''
+  prompt_wav_upload_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav
+  prompt_wav_record_url: https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav
+  instruct_text: ''
+  stream: false
+  seed: 0
+  speed: 1.0
+  api_name: /generate_audio

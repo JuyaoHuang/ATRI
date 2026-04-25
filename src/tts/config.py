@@ -22,17 +22,11 @@ DEFAULT_TTS_CONFIG: dict[str, Any] = {
     "volume": 1.0,
     "edge_tts": {
         "rate": "+0%",
-        "pitch": "+0Hz",
-        "volume": "+0%",
-        "format": "mp3",
     },
     "gpt_sovits_tts": {},
     "siliconflow_tts": {
         "default_voice": DEFAULT_SILICONFLOW_VOICE,
-        "sample_rate": 32000,
         "stream": False,
-        "speed": 1.0,
-        "gain": 0.0,
         "timeout_seconds": 120,
     },
 }

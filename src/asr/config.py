@@ -16,7 +16,6 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "asr_model": "web_speech_api",
     "auto_send": {
         "enabled": False,
-        "delay_ms": 2000,
     },
     "web_speech_api": {
         "language": "zh-CN",
@@ -25,33 +24,20 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
         "max_alternatives": 1,
     },
     "faster_whisper": {
-        "model_path": "distil-medium.en",
-        "download_root": "models/whisper",
-        "language": "en",
-        "device": "auto",
-        "compute_type": "int8",
-        "prompt": "",
+        "language": "auto",
     },
     "whisper_cpp": {
         "model_name": "small",
-        "model_dir": "models/whisper",
-        "print_realtime": False,
-        "print_progress": False,
-        "language": "auto",
-        "prompt": "",
+        "print_realtime": False, # 是否实时打印
+        "print_progress": False,  # 是否打印进度
+        "language": "auto", # 语言，en、zh、auto
     },
     "whisper": {
         "name": "medium",
-        "download_root": "models/whisper",
-        "device": "cpu",
-        "prompt": "",
     },
     "openai_whisper": {
         "model": "whisper-1",
-        "api_key": "${OPENAI_API_KEY}",
-        "base_url": "",
         "language": "",
-        "prompt": "",
     },
 }
 

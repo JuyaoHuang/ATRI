@@ -1,4 +1,4 @@
-asr_model: web_speech_api
+asr_model: faster_whisper
 auto_send:
   enabled: false
   delay_ms: 2000
@@ -8,18 +8,17 @@ web_speech_api:
   interim_results: true
   max_alternatives: 1
 faster_whisper:
-  model_path: distil-medium.en
+  language: zh
+  model_path: distil-large-v3
   download_root: models/whisper
-  language: en
   device: auto
   compute_type: int8
-  prompt: ''
 whisper_cpp:
   model_name: small
-  model_dir: models/whisper
   print_realtime: false
   print_progress: false
   language: auto
+  model_dir: models/whisper
   prompt: ''
 whisper:
   name: medium
@@ -28,7 +27,7 @@ whisper:
   prompt: ''
 openai_whisper:
   model: whisper-1
+  language: ''
   api_key: ${OPENAI_API_KEY}
   base_url: ''
-  language: ''
   prompt: ''

@@ -12,12 +12,11 @@ from .interface import TTSVoice
 
 SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
 SENSITIVE_CONFIG_MASK = "********"
-PROVIDER_WRITE_ALLOWLISTS = {
-    "gpt_sovits_tts": {"api_url", "timeout_seconds"},
-}
-PROVIDER_WRITE_BLOCKLISTS = {
-    "edge_tts": {"voice"},
-    "siliconflow_tts": {"api_url", "default_model", "api_key", "response_format"},
+PROVIDER_WRITE_ALLOWLISTS: dict[str, set[str]] = {
+    "edge_tts": {"rate"},
+    "gpt_sovits_tts": set(),
+    "siliconflow_tts": {"default_voice", "stream"},
+    "cosyvoice3_tts": {"sft_dropdown", "stream", "speed"},
 }
 
 
@@ -202,19 +201,14 @@ class TTSService:
                 cleaned[key] = value
                 continue
 
-            if key in PROVIDER_WRITE_ALLOWLISTS:
-                allowed = PROVIDER_WRITE_ALLOWLISTS[key]
+            allowed = PROVIDER_WRITE_ALLOWLISTS.get(key)
+            if allowed is None:
+                provider_config = dict(value)
+            else:
                 provider_config = {
                     field: field_value
                     for field, field_value in value.items()
                     if field in allowed
-                }
-            else:
-                blocked = PROVIDER_WRITE_BLOCKLISTS.get(key, set())
-                provider_config = {
-                    field: field_value
-                    for field, field_value in value.items()
-                    if field not in blocked
                 }
 
             if provider_config:
