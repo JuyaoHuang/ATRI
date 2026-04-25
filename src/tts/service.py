@@ -16,7 +16,7 @@ PROVIDER_WRITE_ALLOWLISTS: dict[str, set[str]] = {
     "edge_tts": {"voice", "rate"},
     "gpt_sovits_tts": set(),
     "siliconflow_tts": {"default_voice", "stream"},
-    "cosyvoice3_tts": {"sft_dropdown", "stream", "speed"},
+    "cosyvoice3_tts": {"stream", "speed"},
 }
 
 

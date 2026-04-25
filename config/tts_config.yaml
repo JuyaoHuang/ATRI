@@ -1,6 +1,6 @@
 # 文本转语音（TTS）配置
 # tts_model 可选：edge_tts、gpt_sovits_tts、siliconflow_tts、cosyvoice3_tts。
-tts_model: edge_tts # 当前使用的文本转语音模型
+tts_model: gpt_sovits_tts # 当前使用的文本转语音模型
 enabled: true # 是否启用 TTS 模块
 auto_play: true # 是否自动朗读 AI 回复
 show_player_on_home: false # 是否在 / 页面显示播放控制组件

@@ -270,11 +270,8 @@ def test_tts_service_blocks_provider_write_protected_fields(tmp_path: Path):
         "default_voice": "FunAudioLLM/CosyVoice2-0.5B:claire",
         "stream": True,
     }
-    assert persisted["cosyvoice3_tts"] == {
-        "sft_dropdown": "zh-female",
-        "stream": True,
-        "speed": 1.2,
-    }
+    assert "sft_dropdown" not in config["cosyvoice3_tts"]
+    assert persisted["cosyvoice3_tts"] == {"stream": True, "speed": 1.2}
 
 
 def test_tts_config_store_preserves_manual_disk_edits_before_save(tmp_path: Path):
