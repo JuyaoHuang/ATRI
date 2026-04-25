@@ -1,34 +1,44 @@
-asr_model: web_speech_api
+# 自动语音识别（ASR）配置
+# asr_model 可选：web_speech_api、faster_whisper、whisper_cpp、whisper、openai_whisper。
+# web_speech_api 在浏览器侧识别；其他 provider 用后端处理上传音频。
+asr_model: web_speech_api # 当前使用的语音识别模型
+
 auto_send:
-  enabled: false
-  delay_ms: 2000
+  enabled: false # 浏览器端识别到语音后是否自动发送到聊天
+  delay_ms: 2000 # 自动发送前等待的毫秒数
+
 web_speech_api:
-  language: zh-CN
-  continuous: true
-  interim_results: true
-  max_alternatives: 1
+  language: zh-CN # 浏览器 Web Speech API 识别语言
+  continuous: true # 是否持续识别
+  interim_results: true # 是否返回临时识别结果
+  max_alternatives: 1 # 每次识别返回的候选结果数量
+
+# Faster Whisper 配置
 faster_whisper:
-  model_path: distil-medium.en
-  download_root: models/whisper
-  language: en
-  device: auto
-  compute_type: int8
-  prompt: ''
+  language: zh # 语言，en、zh 或其他；auto/空值表示自动检测
+  model_path: distil-large-v3 # 模型名称或本地模型路径；显存较好可用 distil-large-v3
+  download_root: models/whisper # 模型下载根目录
+  device: auto # 设备，cpu、cuda 或 auto；faster-whisper 不支持 mps
+  compute_type: int8 # 计算精度/量化类型，如 int8、float16、float32
+
 whisper_cpp:
-  model_name: small
-  model_dir: models/whisper
-  print_realtime: false
-  print_progress: false
-  language: auto
-  prompt: ''
+  # 可用模型参考：https://abdeladim-s.github.io/pywhispercpp/#pywhispercpp.constants.AVAILABLE_MODELS
+  model_name: small # 模型名称
+  print_realtime: false # 是否实时打印识别结果
+  print_progress: false # 是否打印处理进度
+  language: auto # 语言，en、zh、auto
+  model_dir: models/whisper # 模型目录
+  prompt: '' # 初始提示词，可用于给识别提供上下文
+
 whisper:
-  name: medium
-  download_root: models/whisper
-  device: cpu
-  prompt: ''
+  name: medium # OpenAI Whisper 模型名称
+  download_root: models/whisper # 模型下载根目录
+  device: cpu # 设备，cpu/cuda 等
+  prompt: '' # 初始提示词，可用于给识别提供上下文
+
 openai_whisper:
-  model: whisper-1
-  api_key: ${OPENAI_API_KEY}
-  base_url: ''
-  language: ''
-  prompt: ''
+  model: whisper-1 # OpenAI/兼容接口的 Whisper 模型名称
+  language: '' # 语言；留空表示自动检测
+  api_key: ${OPENAI_API_KEY} # API 密钥；建议使用环境变量占位符
+  base_url: '' # 兼容 OpenAI Whisper API 的基础 URL；留空使用默认
+  prompt: '' # 初始提示词，可用于给识别提供上下文

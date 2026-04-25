@@ -1,7 +1,8 @@
-"""ASR configuration loading and persistence."""
+"""TTS configuration loading and persistence."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -11,42 +12,31 @@ import yaml
 from src.utils.yaml_text import patch_yaml_values
 
 _ATRI_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_ASR_CONFIG_PATH = _ATRI_ROOT / "config" / "asr_config.yaml"
+DEFAULT_TTS_CONFIG_PATH = _ATRI_ROOT / "config" / "tts_config.yaml"
 SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
+DEFAULT_SILICONFLOW_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
+DEFAULT_SILICONFLOW_VOICE = f"{DEFAULT_SILICONFLOW_MODEL}:claire"
 
-DEFAULT_ASR_CONFIG: dict[str, Any] = {
-    "asr_model": "web_speech_api",
-    "auto_send": {
-        "enabled": False,
+DEFAULT_TTS_CONFIG: dict[str, Any] = {
+    "tts_model": "edge_tts",
+    "enabled": False,
+    "auto_play": False,
+    "show_player_on_home": False,
+    "volume": 1.0,
+    "edge_tts": {
+        "rate": "+0%",
     },
-    "web_speech_api": {
-        "language": "zh-CN",
-        "continuous": True,
-        "interim_results": True,
-        "max_alternatives": 1,
-    },
-    "faster_whisper": {
-        "language": "auto",
-    },
-    "whisper_cpp": {
-        "model_name": "small",
-        "print_realtime": False, # 是否实时打印
-        "print_progress": False,  # 是否打印进度
-        "language": "auto", # 语言，en、zh、auto
-    },
-    "whisper": {
-        "name": "medium",
-    },
-    "openai_whisper": {
-        "model": "whisper-1",
-        "language": "",
-        "api_key": "${OPENAI_API_KEY}",
+    "gpt_sovits_tts": {},
+    "siliconflow_tts": {
+        "default_voice": DEFAULT_SILICONFLOW_VOICE,
+        "stream": False,
+        "timeout_seconds": 120,
     },
 }
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge mapping values without mutating inputs."""
+    """Recursively merge mappings without mutating inputs."""
 
     result = deepcopy(base)
     for key, value in override.items():
@@ -57,8 +47,8 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return result
 
 
-class ASRConfigStore:
-    """Small YAML-backed configuration store for ASR settings."""
+class TTSConfigStore:
+    """Small YAML-backed configuration store for TTS settings."""
 
     def __init__(
         self,
@@ -66,16 +56,16 @@ class ASRConfigStore:
         *,
         path: Path | None = None,
     ) -> None:
-        self.path = path or DEFAULT_ASR_CONFIG_PATH
+        self.path = path or DEFAULT_TTS_CONFIG_PATH
         raw_config = self._read_raw_config()
         source_config = raw_config if raw_config is not None else initial_config or {}
         self._persist_config = deepcopy(source_config)
-        self._config = deep_merge(DEFAULT_ASR_CONFIG, source_config)
+        self._config = deep_merge(DEFAULT_TTS_CONFIG, source_config)
         if initial_config:
             self._config = deep_merge(self._config, initial_config)
 
     def read(self) -> dict[str, Any]:
-        """Return a defensive copy of the current ASR config."""
+        """Return a defensive copy of the current TTS config."""
 
         return deepcopy(self._config)
 
@@ -92,26 +82,29 @@ class ASRConfigStore:
         return self.read()
 
     def replace(self, config: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        """Replace the current config after applying defaults."""
+        """Replace the current config after applying runtime defaults."""
 
-        self._config = deep_merge(DEFAULT_ASR_CONFIG, config)
+        self._config = deep_merge(DEFAULT_TTS_CONFIG, config)
         self._persist_config = deepcopy(config)
         if persist:
             self._save_patch(config)
         return self.read()
 
     def save(self) -> None:
-        """Persist current values without reformatting the YAML document."""
+        """Persist explicit config values without reformatting the YAML document."""
 
         self._save_patch(self._persist_config)
 
-    def _save_patch(self, patch: dict[str, Any]) -> None:
-        """Patch only provided YAML values, preserving comments and layout."""
+    def _save_patch(self, patch: Mapping[str, Any]) -> None:
+        """Patch only the provided YAML keys, preserving comments and layout."""
 
-        patch_yaml_values(self.path, self._config_for_save(patch, DEFAULT_ASR_CONFIG))
+        if not patch:
+            return
+
+        patch_yaml_values(self.path, self._config_for_save(dict(patch)))
 
     def _read_raw_config(self) -> dict[str, Any] | None:
-        """Read the persisted ASR YAML without environment substitution."""
+        """Read the persisted TTS YAML without environment substitution."""
 
         if not self.path.is_file():
             return None
@@ -126,7 +119,7 @@ class ASRConfigStore:
             return
 
         latest_persist_config = deepcopy(raw_config)
-        latest_runtime_config = deep_merge(DEFAULT_ASR_CONFIG, raw_config)
+        latest_runtime_config = deep_merge(DEFAULT_TTS_CONFIG, raw_config)
         self._preserve_runtime_secrets(
             latest_runtime_config,
             latest_persist_config,
@@ -135,21 +128,10 @@ class ASRConfigStore:
         self._persist_config = latest_persist_config
         self._config = latest_runtime_config
 
-    def _config_for_save(
-        self,
-        config: dict[str, Any],
-        defaults: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _config_for_save(self, config: dict[str, Any]) -> dict[str, Any]:
         """Return config safe to persist to disk."""
 
-        safe = deepcopy(config)
-        for key, value in safe.items():
-            default_value = defaults.get(key)
-            if isinstance(value, dict) and isinstance(default_value, dict):
-                safe[key] = self._config_for_save(value, default_value)
-            elif key.lower() in SENSITIVE_CONFIG_KEYS and self._is_env_placeholder(default_value):
-                safe[key] = default_value
-        return safe
+        return deepcopy(config)
 
     def _is_env_placeholder(self, value: Any) -> bool:
         return isinstance(value, str) and value.startswith("${") and value.endswith("}")

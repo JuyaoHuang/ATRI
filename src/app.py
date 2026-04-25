@@ -45,6 +45,7 @@ from src.service_context import ServiceContext
 from src.storage.character_storage import CharacterStorage, get_default_character_avatar_dir
 from src.storage.factory import create_chat_storage
 from src.storage.live2d_storage import Live2DStorage, get_default_live2d_models_dir
+from src.tts import TTSConfigStore, TTSService
 
 
 @asynccontextmanager
@@ -102,6 +103,7 @@ def create_app(config: dict) -> FastAPI:
     # 将配置存储在 app state 中供 lifespan 访问
     app.state.config = config
     app.state.asr_service = ASRService(ASRConfigStore(config.get("asr", {})))
+    app.state.tts_service = TTSService(TTSConfigStore(config.get("tts", {})))
     app.state.character_storage = CharacterStorage()
     app.state.live2d_storage = Live2DStorage()
 
@@ -143,9 +145,11 @@ def create_app(config: dict) -> FastAPI:
     from src.routes.chats import router as chats_router
     from src.routes.health import router as health_router
     from src.routes.live2d import router as live2d_router
+    from src.routes.tts import router as tts_router
 
     app.include_router(health_router)
     app.include_router(asr_router)
+    app.include_router(tts_router)
     app.include_router(characters_router)
     app.include_router(chats_router)
     app.include_router(live2d_router)
