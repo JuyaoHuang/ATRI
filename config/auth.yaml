@@ -3,7 +3,7 @@
 # Local development defaults to disabled auth so the app keeps the existing
 # single-user "default" behavior. Enable this before deploying publicly.
 
-enabled: false
+enabled: true
 
 jwt:
   secret_key: ${JWT_SECRET_KEY}
@@ -21,4 +21,5 @@ frontend:
   login_url: http://localhost:5173/login
 
 whitelist:
-  users: []
+  users: 
+    - JuyaoHuang
