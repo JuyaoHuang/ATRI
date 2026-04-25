@@ -40,8 +40,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from src.auth import AuthService
 from src.asr import ASRConfigStore, ASRService
+from src.auth import AuthService
 from src.middleware.auth import auth_middleware
 from src.service_context import ServiceContext
 from src.storage.character_storage import CharacterStorage, get_default_character_avatar_dir
