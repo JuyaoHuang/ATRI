@@ -3,15 +3,16 @@
 ![](data/atri-logo.jpg)
 
 <p align="center">
-  <b>记得住你的 AI —— 基于三层记忆压缩的情感伴侣系统</b>
+  <b> 高性能萝卜子！基于claude code记忆压缩方式的情感伴侣</b>
 </p>
 <p align="center">
-  <a href="https://github.com/JuyaoHuang/atri/blob/main/LICENSE"><img src="https://img.shields.io/github/license/JuyaoHuang/atri" alt="license"></a>
+  <a href="https://github.com/JuyaoHuang/atri/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange" alt="license"></a>
   <img src="https://img.shields.io/badge/python-%3E%3D3.11-blue?logo=python&logoColor=white" alt="python">
   <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" alt="vue3">
   <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="fastapi">
-  <img src="https://img.shields.io/badge/Live2D-FF6699?base64,&logoColor=white" alt="live2d">
+  <img src="https://img.shields.io/badge/Live2D-supported-FF6699?labelColor=222" alt="Live2D">
 </p>
+
 
 
 <p align="center">
