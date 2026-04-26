@@ -9,7 +9,7 @@
 
 ## 1. 一键安装
 
-> 如需 docker部署，提供 [Docker 部署指南](./configs/'Docker部署指南.md)
+> 如需 docker部署，提供 [Docker 部署指南](./configs/Docker部署指南.md)
 
 如果你已经克隆了 `atri` 主仓库，在主仓库根目录运行：
 
