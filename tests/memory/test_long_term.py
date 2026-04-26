@@ -322,6 +322,83 @@ def test_translate_local_deploy_with_api_backend() -> None:
     assert translated["llm"]["config"]["model"] == "gpt-4o-mini"
 
 
+def test_translate_local_deploy_selects_qdrant_from_provider_map() -> None:
+    """Inactive provider branches are ignored so their env placeholders may remain."""
+    cfg = {
+        "vector_store": {
+            "provider": "qdrant",
+            "providers": {
+                "qdrant": {"config": {"path": "./data/qdrant"}},
+                "pgvector": {
+                    "config": {
+                        "connection_string": "${DB_MEMORY_URL}",
+                        "collection_name": "atri_memories",
+                        "embedding_model_dims": 1024,
+                    }
+                },
+            },
+        }
+    }
+    translated = _translate_local_deploy(cfg)
+    assert translated["vector_store"] == {
+        "provider": "qdrant",
+        "config": {"path": "./data/qdrant"},
+    }
+
+
+def test_translate_local_deploy_selects_pgvector_from_provider_map() -> None:
+    cfg = {
+        "vector_store": {
+            "provider": "pgvector",
+            "providers": {
+                "qdrant": {"config": {"path": "./data/qdrant"}},
+                "pgvector": {
+                    "config": {
+                        "connection_string": "postgresql://user:pass@host/db?sslmode=require",
+                        "collection_name": "atri_memories",
+                        "embedding_model_dims": 1024,
+                        "hnsw": True,
+                        "diskann": False,
+                    }
+                },
+            },
+        }
+    }
+    translated = _translate_local_deploy(cfg)
+    assert translated["vector_store"]["provider"] == "pgvector"
+    assert translated["vector_store"]["config"]["collection_name"] == "atri_memories"
+    assert translated["vector_store"]["config"]["embedding_model_dims"] == 1024
+
+
+def test_translate_local_deploy_rejects_unknown_provider_from_provider_map() -> None:
+    cfg = {
+        "vector_store": {
+            "provider": "unknown",
+            "providers": {"qdrant": {"config": {"path": "./data/qdrant"}}},
+        }
+    }
+    with pytest.raises(ValueError, match="Unknown mem0 vector_store provider"):
+        _translate_local_deploy(cfg)
+
+
+def test_translate_local_deploy_rejects_unresolved_active_provider_placeholder() -> None:
+    cfg = {
+        "vector_store": {
+            "provider": "pgvector",
+            "providers": {
+                "pgvector": {
+                    "config": {
+                        "connection_string": "${DB_MEMORY_URL}",
+                        "collection_name": "atri_memories",
+                    }
+                }
+            },
+        }
+    }
+    with pytest.raises(ValueError, match="unresolved environment placeholders"):
+        _translate_local_deploy(cfg)
+
+
 def test_translate_local_deploy_enables_graph_when_flag_set() -> None:
     cfg = {
         "graph_store": {

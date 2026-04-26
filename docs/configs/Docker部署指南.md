@@ -79,9 +79,9 @@ cp .env.example .env
 至少需要填写：
 
 ```env
-OPENAI_API_KEY=sk-xxxx
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=deepseek-ai/DeepSeek-V3.2
+SILICONFLOW_API_KEY=sk-xxxx
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2
 COMPRESS_API_KEY=sk-xxxx
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 ```
@@ -368,4 +368,3 @@ volumes:
 ```
 
 不要只备份镜像。运行时数据在宿主机挂载目录中。
-

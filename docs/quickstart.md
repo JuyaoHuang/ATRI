@@ -65,7 +65,7 @@ bash install.sh --repo-url https://github.com/JuyaoHuang/atri.git --target-dir a
 .\install.bat --pypi-index https://mirrors.aliyun.com/pypi/simple/ --npm-registry https://registry.npmmirror.com
 ```
 
-安装完成后，编辑 `.env` 填写 `OPENAI_API_KEY` 和 `COMPRESS_API_KEY`，再分别启动后端和前端。
+安装完成后，编辑 `.env` 填写 `SILICONFLOW_API_KEY` 和 `COMPRESS_API_KEY`，再分别启动后端和前端。
 
 ## 2. 手动获取代码
 
@@ -119,7 +119,7 @@ Copy-Item .env.example .env
 编辑 `.env`，至少填写主聊天模型和压缩模型使用的密钥：
 
 ```env
-OPENAI_API_KEY=sk-xxxx
+SILICONFLOW_API_KEY=sk-xxxx
 COMPRESS_API_KEY=sk-xxxx
 ```
 
@@ -242,7 +242,32 @@ mem0:
   mode: local_deploy
 ```
 
-本地部署默认使用 `./data/qdrant` 作为嵌入式向量存储，并复用 `.env` 中的 `OPENAI_API_KEY` 调用 embedding 和事实抽取模型。
+本地部署默认使用 `./data/qdrant` 作为嵌入式向量存储，并复用 `.env` 中的 `SILICONFLOW_API_KEY` 调用 embedding 和事实抽取模型。
+
+如果云端部署时不想使用 mem0 SaaS，可以继续使用 `mem0.local_deploy`，并把向量存储切换到 Neon PostgreSQL + pgvector：
+
+```yaml
+mem0:
+  mode: local_deploy
+  local_deploy:
+    vector_store:
+      provider: pgvector
+      providers:
+        qdrant:
+          config:
+            path: ./data/qdrant
+        pgvector:
+          config:
+            connection_string: ${DB_MEMORY_URL}
+            collection_name: atri_memories
+            embedding_model_dims: 1024
+            hnsw: true
+            diskann: false
+            minconn: 1
+            maxconn: 5
+```
+
+`provider` 表示当前启用的向量库；`providers` 保留多套配置。默认使用 `qdrant` 时，`pgvector` 分支里的 `${DB_MEMORY_URL}` 不会被强制校验。切换到 `pgvector` 前，需要在 Neon 数据库中启用 `vector` 扩展，并确保 `.env` 已配置 `DB_MEMORY_URL`。
 
 ## 7. 认证配置
 
@@ -403,7 +428,7 @@ git submodule update --remote frontend
 
 ### 后端启动后立刻退出
 
-通常是 `.env` 中缺少 `OPENAI_API_KEY` 或 `COMPRESS_API_KEY`，或者 `config/llm_config.yaml` 中的模型地址不可用。先检查后端日志中的 `LLM role failed`。
+通常是 `.env` 中缺少 `SILICONFLOW_API_KEY` 或 `COMPRESS_API_KEY`，或者 `config/llm_config.yaml` 中的模型地址不可用。先检查后端日志中的 `LLM role failed`。
 
 ### 前端打不开或请求失败
 

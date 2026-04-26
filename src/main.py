@@ -8,7 +8,7 @@ Startup sequence:
 
 1. ``init_logger()`` / ``load_dotenv()``
 2. ``load_config()`` on ``config.yaml``
-3. Resolve 3 LLM roles (chat / l3_compress / l4_compact) for logging
+3. Resolve LLM roles (chat / l3_compress / l4_compact / title_gen) for logging
 4. Construct :class:`ServiceContext` (holds config, empty agent cache)
 5. ``ctx.get_or_create_agent("atri", user_id="main_demo")`` to build one
    ChatAgent end-to-end (Persona + LongTermMemory + MemoryManager + LLM)
@@ -49,7 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "config.yaml"
 _DEFAULT_ENV = _REPO_ROOT / ".env"
 
-_LLM_ROLES = ("chat", "l3_compress", "l4_compact")
+_LLM_ROLES = ("chat", "l3_compress", "l4_compact", "title_gen")
 _DEMO_CHARACTER = "atri"
 _DEMO_USER_ID = "main_demo"
 

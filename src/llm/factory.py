@@ -19,6 +19,104 @@ from typing import Any
 
 from src.llm.interface import LLMInterface
 
+_PROVIDER_FIELD = "provider"
+_ACTIVE_PROVIDER_FIELD = "active_provider"
+_PROVIDERS_FIELD = "providers"
+
+
+def _is_unresolved_placeholder(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("${") and value.endswith("}")
+
+
+def _find_unresolved_placeholders(value: Any, path: str) -> list[str]:
+    if _is_unresolved_placeholder(value):
+        return [path]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_find_unresolved_placeholders(item, f"{path}.{key}"))
+        return found
+    if isinstance(value, list):
+        found = []
+        for index, item in enumerate(value):
+            found.extend(_find_unresolved_placeholders(item, f"{path}[{index}]"))
+        return found
+    return []
+
+
+def _raise_on_unresolved_placeholders(value: Any, path: str) -> None:
+    unresolved = _find_unresolved_placeholders(value, path)
+    if unresolved:
+        joined = ", ".join(unresolved)
+        raise ValueError(f"{path} contains unresolved environment placeholders: {joined}")
+
+
+def _select_provider_config(pool_key: str, entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Resolve one LLM pool entry to ``(provider, kwargs)``.
+
+    Supported shapes:
+
+    1. Legacy single-provider shape:
+       ``{provider: openai_compatible, model: ..., api_key: ...}``
+    2. Multi-provider shape:
+       ``{provider: openai_compatible, providers: {openai_compatible: {...}}}``
+
+    Only the active provider branch is validated and forwarded, so inactive
+    provider branches may contain unresolved ``${ENV_VAR}`` placeholders.
+    """
+    provider_map = entry.get(_PROVIDERS_FIELD)
+    active_provider = entry.get(_PROVIDER_FIELD) or entry.get(_ACTIVE_PROVIDER_FIELD)
+
+    if provider_map is None:
+        if not active_provider:
+            raise KeyError(f"Pool entry {pool_key!r} is missing required 'provider' field")
+
+        # Compatibility with an early draft shape:
+        # {provider: openai_compatible, openai_compatible: {model: ...}}
+        if isinstance(entry.get(active_provider), dict):
+            selected = dict(entry[active_provider])
+            provider = selected.pop(_PROVIDER_FIELD, active_provider)
+            kwargs = selected
+        else:
+            kwargs = {
+                key: value
+                for key, value in entry.items()
+                if key not in {_PROVIDER_FIELD, _ACTIVE_PROVIDER_FIELD}
+            }
+            provider = active_provider
+
+        _raise_on_unresolved_placeholders(kwargs, f"llm_configs.{pool_key}")
+        return str(provider), kwargs
+
+    if not isinstance(provider_map, dict):
+        raise ValueError(f"llm_configs.{pool_key}.providers must be a mapping")
+    if not active_provider:
+        raise KeyError(
+            f"Pool entry {pool_key!r} is missing required 'provider' field for providers map"
+        )
+    if active_provider not in provider_map:
+        available = ", ".join(sorted(provider_map))
+        raise ValueError(
+            f"Unknown LLM provider branch {active_provider!r} in pool {pool_key!r}; "
+            f"available branches: {available}"
+        )
+
+    selected = provider_map[active_provider] or {}
+    if not isinstance(selected, dict):
+        raise ValueError(f"llm_configs.{pool_key}.providers.{active_provider} must be a mapping")
+
+    common = {
+        key: value
+        for key, value in entry.items()
+        if key not in {_PROVIDER_FIELD, _ACTIVE_PROVIDER_FIELD, _PROVIDERS_FIELD}
+    }
+    kwargs = {**common, **selected}
+    provider = kwargs.pop(_PROVIDER_FIELD, active_provider)
+    _raise_on_unresolved_placeholders(
+        kwargs, f"llm_configs.{pool_key}.providers.{active_provider}"
+    )
+    return str(provider), kwargs
+
 
 class LLMFactory:
     """Class-scoped registry mapping provider name -> provider class.
@@ -114,8 +212,5 @@ def create_from_role(role: str, llm_config: dict[str, Any]) -> LLMInterface:
         )
 
     entry = dict(pool[pool_key])
-    provider = entry.pop("provider", None)
-    if provider is None:
-        raise KeyError(f"Pool entry {pool_key!r} is missing required 'provider' field")
-
-    return LLMFactory.create(provider, **entry)
+    provider, kwargs = _select_provider_config(str(pool_key), entry)
+    return LLMFactory.create(provider, **kwargs)

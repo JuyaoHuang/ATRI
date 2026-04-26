@@ -40,11 +40,39 @@ mem0:
   # --- Mode B: local / self-hosted ---
   local_deploy:
     vector_store:
-      provider: qdrant
-      config:
-        path: ./data/qdrant          # embedded mode (default)
-        # host: localhost            # uncomment for server mode
-        # port: 6333
+      provider: pgvector  # active provider: qdrant | pgvector
+      providers:
+        qdrant:
+          config:
+            path: ./data/qdrant        # embedded mode (default)
+            # host: localhost          # uncomment for server mode
+            # port: 6333
+        pgvector:
+          config:
+            connection_string: ${DB_MEMORY_URL} # Neon/PostgreSQL connection string 
+
+            # PostgreSQL table name used by mem0 for vector memories.
+            # Use lowercase snake_case because mem0's pgvector backend does
+            collection_name: atri_memories
+
+            # Must match the embedding model output dimension.
+            # BAAI/bge-m3 is 1024; text-embedding-3-small is 1536.
+            # Changing this after data exists requires rebuilding the table.
+            embedding_model_dims: 1024  # BAAI/bge-m3 embedding dimension
+
+            # Create an HNSW vector index for faster approximate nearest-neighbor search.
+            # Recommended for common cloud PostgreSQL + pgvector deployments.
+            hnsw: true
+
+            # DiskANN requires the vectorscale extension, which is not always
+            # available on managed PostgreSQL. Keep false unless your provider supports it.
+            diskann: false
+
+            # PostgreSQL connection pool size used by mem0's pgvector backend.
+            # minconn keeps this many idle connections open; maxconn caps concurrent
+            # database connections. Keep maxconn modest on Neon free/small plans.
+            minconn: 1
+            maxconn: 5
 
     embedder:
       backend: api                # "ollama" | "api"
@@ -54,7 +82,7 @@ mem0:
       api:
         provider: openai
         model: BAAI/bge-m3
-        api_key: ${OPENAI_API_KEY}
+        api_key: ${SILICONFLOW_API_KEY}
         base_url: https://api.siliconflow.cn/v1
 
     llm:
@@ -66,8 +94,8 @@ mem0:
         temperature: 0.3             # fact extraction prefers low temperature for stable JSON
       api:
         provider: openai
-        model: deepseek-ai/DeepSeek-V3.2
-        api_key: ${OPENAI_API_KEY}
+        model: deepseek-ai/DeepSeek-V4-Flash
+        api_key: ${SILICONFLOW_API_KEY}
         base_url: https://api.siliconflow.cn/v1
         temperature: 0.3             # fact extraction prefers low temperature for stable JSON
 

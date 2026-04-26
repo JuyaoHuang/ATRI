@@ -12,6 +12,7 @@ Config translation (local_deploy mode):
     Our yaml shape                   mem0 shape
     ----------------------------------------------------------
     vector_store.{provider, config}  vector_store.{provider, config}
+    vector_store.{provider, providers}
     embedder.{backend='ollama',      embedder.{provider='ollama',
               ollama.{model,                   config.{model, ollama_base_url}}
               base_url}}
@@ -61,6 +62,89 @@ def _is_unresolved_placeholder(value: Any) -> bool:
     当 ``value`` 在 dotenv 加载后仍形如 ``${VAR}`` 时返回 True。
     """
     return isinstance(value, str) and value.startswith("${") and value.endswith("}")
+
+
+def _find_unresolved_placeholders(value: Any, path: str) -> list[str]:
+    """Return config paths whose values are unresolved ``${VAR}`` placeholders."""
+    if _is_unresolved_placeholder(value):
+        return [path]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_find_unresolved_placeholders(item, f"{path}.{key}"))
+        return found
+    if isinstance(value, list):
+        found = []
+        for index, item in enumerate(value):
+            found.extend(_find_unresolved_placeholders(item, f"{path}[{index}]"))
+        return found
+    return []
+
+
+def _raise_on_unresolved_placeholders(value: Any, path: str) -> None:
+    unresolved = _find_unresolved_placeholders(value, path)
+    if unresolved:
+        joined = ", ".join(unresolved)
+        raise ValueError(f"{path} contains unresolved environment placeholders: {joined}")
+
+
+def _select_vector_store_config(vector_store: dict[str, Any]) -> dict[str, Any]:
+    """Resolve ATRI's multi-provider vector_store block to mem0's shape.
+
+    Supported shapes:
+
+    1. Legacy mem0 shape:
+       ``{provider: qdrant, config: {...}}``
+    2. New ATRI multi-provider shape:
+       ``{provider: qdrant, providers: {qdrant: {config: ...}, pgvector: ...}}``
+
+    Only the selected provider branch is validated and forwarded. This keeps
+    inactive cloud branches such as pgvector from requiring ``DB_MEMORY_URL`` when
+    local qdrant is active.
+    """
+    provider_map = vector_store.get("providers")
+    active_provider = vector_store.get("provider") or vector_store.get("active_provider")
+
+    if provider_map is None:
+        # Compatibility with an early draft shape:
+        # vector_store: {provider: qdrant, qdrant: {config: {...}}}
+        if active_provider and isinstance(vector_store.get(active_provider), dict):
+            selected = vector_store[active_provider]
+            resolved = {
+                "provider": selected.get("provider", active_provider),
+                "config": selected.get("config") or {},
+            }
+        else:
+            resolved = vector_store
+        _raise_on_unresolved_placeholders(resolved, "mem0.local_deploy.vector_store")
+        return resolved
+
+    if not isinstance(provider_map, dict):
+        raise ValueError("mem0.local_deploy.vector_store.providers must be a mapping")
+    if not active_provider:
+        raise ValueError(
+            "mem0.local_deploy.vector_store.provider is required when providers is set"
+        )
+    if active_provider not in provider_map:
+        available = ", ".join(sorted(provider_map))
+        raise ValueError(
+            f"Unknown mem0 vector_store provider {active_provider!r}; available: {available}"
+        )
+
+    selected = provider_map[active_provider] or {}
+    if not isinstance(selected, dict):
+        raise ValueError(
+            f"mem0.local_deploy.vector_store.providers.{active_provider} must be a mapping"
+        )
+
+    resolved = {
+        "provider": selected.get("provider", active_provider),
+        "config": selected.get("config") or {},
+    }
+    _raise_on_unresolved_placeholders(
+        resolved, f"mem0.local_deploy.vector_store.providers.{active_provider}"
+    )
+    return resolved
 
 
 # Our short-term layer tags messages with internal role names (``human`` /
@@ -119,9 +203,8 @@ def _translate_local_deploy(cfg: dict[str, Any]) -> dict[str, Any]:
 
     vs = cfg.get("vector_store")
     if vs:
-        # Already matches mem0's {provider, config} shape.
-        # 已匹配 mem0 的 {provider, config} 形态。
-        out["vector_store"] = vs
+        # Accept both the legacy single-provider shape and ATRI's provider map.
+        out["vector_store"] = _select_vector_store_config(vs)
 
     embedder_cfg = cfg.get("embedder") or {}
     if embedder_cfg:

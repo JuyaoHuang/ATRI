@@ -81,6 +81,10 @@ def test_factory_registration_binds_openai_compatible() -> None:
     assert LLMFactory._registry.get("openai_compatible") is OpenAICompatibleLLM
 
 
+def test_factory_registration_binds_openai_alias() -> None:
+    assert LLMFactory._registry.get("openai") is OpenAICompatibleLLM
+
+
 @pytest.mark.asyncio
 async def test_stream_yields_non_empty_deltas_in_order(patched_client: Any) -> None:
     patched_client.chat.completions.create = AsyncMock(

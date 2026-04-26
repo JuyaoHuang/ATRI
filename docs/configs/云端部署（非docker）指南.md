@@ -69,9 +69,9 @@ cp .env.example .env
 至少需要填写：
 
 ```env
-OPENAI_API_KEY=sk-xxxx
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=deepseek-ai/DeepSeek-V3.2
+SILICONFLOW_API_KEY=sk-xxxx
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3.2
 COMPRESS_API_KEY=sk-xxxx
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 ```
@@ -459,4 +459,3 @@ location / {
 生产环境建议只开放 Nginx 的 `80/443`。后端 `8430` 应只允许本机访问。
 
 可以用防火墙限制，或确保后端只由 Nginx 通过 `127.0.0.1:8430` 访问。
-

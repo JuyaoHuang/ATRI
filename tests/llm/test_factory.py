@@ -95,6 +95,78 @@ def test_create_from_role_happy_path() -> None:
     assert llm.model == "m1"
 
 
+def test_create_from_role_selects_active_provider_branch() -> None:
+    LLMFactory.register("dummy_multi_a")(_DummyLLM)
+    LLMFactory.register("dummy_multi_b")(_DummyLLM)
+    config = {
+        "llm_configs": {
+            "pool_multi": {
+                "provider": "dummy_multi_b",
+                "providers": {
+                    "dummy_multi_a": {"model": "inactive", "api_key": "${UNUSED_KEY}"},
+                    "dummy_multi_b": {"model": "active", "temperature": 0.2},
+                },
+            }
+        },
+        "llm_roles": {"chat": "pool_multi"},
+    }
+    llm = create_from_role("chat", config)
+    assert isinstance(llm, _DummyLLM)
+    assert llm.model == "active"
+    assert llm.extra == {"temperature": 0.2}
+
+
+def test_create_from_role_multi_provider_allows_common_defaults() -> None:
+    LLMFactory.register("dummy_multi_common")(_DummyLLM)
+    config = {
+        "llm_configs": {
+            "pool_multi": {
+                "provider": "dummy_multi_common",
+                "timeout": 30,
+                "providers": {
+                    "dummy_multi_common": {"model": "active", "timeout": 10},
+                },
+            }
+        },
+        "llm_roles": {"chat": "pool_multi"},
+    }
+    llm = create_from_role("chat", config)
+    assert isinstance(llm, _DummyLLM)
+    assert llm.model == "active"
+    assert llm.extra == {"timeout": 10}
+
+
+def test_create_from_role_unknown_provider_branch_raises() -> None:
+    config = {
+        "llm_configs": {
+            "pool_multi": {
+                "provider": "missing_branch",
+                "providers": {"dummy": {"model": "m"}},
+            }
+        },
+        "llm_roles": {"chat": "pool_multi"},
+    }
+    with pytest.raises(ValueError, match="Unknown LLM provider branch"):
+        create_from_role("chat", config)
+
+
+def test_create_from_role_rejects_unresolved_active_provider_placeholder() -> None:
+    LLMFactory.register("dummy_multi_unresolved")(_DummyLLM)
+    config = {
+        "llm_configs": {
+            "pool_multi": {
+                "provider": "dummy_multi_unresolved",
+                "providers": {
+                    "dummy_multi_unresolved": {"model": "active", "api_key": "${ACTIVE_KEY}"}
+                },
+            }
+        },
+        "llm_roles": {"chat": "pool_multi"},
+    }
+    with pytest.raises(ValueError, match="unresolved environment placeholders"):
+        create_from_role("chat", config)
+
+
 def test_create_from_role_missing_role_raises() -> None:
     config = {"llm_configs": {}, "llm_roles": {"chat": "x"}}
     with pytest.raises(KeyError, match="not found in llm_roles"):
