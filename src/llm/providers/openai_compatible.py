@@ -42,6 +42,7 @@ from src.llm.interface import LLMInterface
 
 
 @LLMFactory.register("openai")
+@LLMFactory.register("siliconflow")
 @LLMFactory.register("openai_compatible")
 class OpenAICompatibleLLM(LLMInterface):
     """LLM provider speaking the OpenAI chat-completions protocol.

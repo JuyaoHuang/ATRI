@@ -31,7 +31,7 @@ short_term:
 
 # --- Long-term memory: mem0 ---
 mem0:
-  mode: sdk                 # "sdk" | "local_deploy"
+  mode: local_deploy                 # "sdk" | "local_deploy"
 
   # --- Mode A: mem0 SaaS ---
   sdk:
