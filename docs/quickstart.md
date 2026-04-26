@@ -7,12 +7,101 @@
 
 推荐使用两个终端分别启动后端和前端。
 
-## 1. 启动后端
+## 1. 一键安装
 
-进入后端目录：
+如果你已经克隆了 `atri` 主仓库，在主仓库根目录运行：
 
 ```powershell
-atri
+.\install.bat --skip-clone
+```
+
+Linux / macOS：
+
+```bash
+bash install.sh --skip-clone
+```
+
+脚本会自动完成：
+
+- 初始化并拉取 `frontend` 子模块
+- 从 `.env.example` 创建 `.env`
+- 使用清华 PyPI 镜像安装后端依赖
+- 使用 npm 国内镜像安装前端依赖
+
+默认镜像：
+
+| 依赖 | 默认镜像 |
+|---|---|
+| Python / PyPI | `https://pypi.tuna.tsinghua.edu.cn/simple` |
+| npm | `https://registry.npmmirror.com` |
+
+阿里云 PyPI 备用镜像：
+
+```text
+https://mirrors.aliyun.com/pypi/simple/
+```
+
+如果你在空目录里运行脚本，可以让它先克隆仓库：
+
+```powershell
+.\install.bat --repo-url https://github.com/JuyaoHuang/atri.git --target-dir atri
+```
+
+Linux / macOS：
+
+```bash
+bash install.sh --repo-url https://github.com/JuyaoHuang/atri.git --target-dir atri
+```
+
+如需更换镜像：
+
+```powershell
+.\install.bat --pypi-index https://pypi.tuna.tsinghua.edu.cn/simple --npm-registry https://registry.npmmirror.com
+```
+
+使用阿里云 PyPI 镜像：
+
+```powershell
+.\install.bat --pypi-index https://mirrors.aliyun.com/pypi/simple/ --npm-registry https://registry.npmmirror.com
+```
+
+安装完成后，编辑 `.env` 填写 `OPENAI_API_KEY` 和 `COMPRESS_API_KEY`，再分别启动后端和前端。
+
+## 2. 手动获取代码
+
+首次克隆主仓库时，推荐直接拉取子模块：
+
+```powershell
+git clone --recurse-submodules https://github.com/JuyaoHuang/atri.git
+cd atri
+```
+
+如果已经克隆过主仓库，再初始化前端子模块：
+
+```powershell
+git submodule update --init --recursive
+```
+
+以后更新前端子模块：
+
+```powershell
+git submodule update --remote frontend
+```
+
+当前前端子模块配置：
+
+| 项 | 值 |
+|---|---|
+| 子模块路径 | `frontend` |
+| 子模块仓库 | `https://github.com/JuyaoHuang/atri-webui.git` |
+| 跟踪分支 | `main` |
+
+## 3. 启动后端
+
+确认当前位于 `atri` 主仓库根目录。如果你打开了新的终端，先进入主仓库：
+
+```powershell
+cd path\to\atri
 ```
 
 安装依赖：
@@ -53,12 +142,12 @@ uv run python -m src.main
 
 后端能正常启动时，日志里会出现 `Server starting | host=0.0.0.0 | port=8430`。
 
-## 2. 启动前端
+## 4. 启动前端
 
 打开第二个终端，进入前端目录：
 
 ```powershell
-atri-webui
+cd path\to\atri\frontend
 ```
 
 安装依赖：
@@ -86,7 +175,7 @@ npm run dev
 http://localhost:5200
 ```
 
-## 3. 最小配置说明
+## 5. 最小配置说明
 
 ATRI 使用根配置 `config.yaml` 作为入口，再加载 `config/` 下的子配置：
 
@@ -109,7 +198,7 @@ config/memory_config.yaml
 config/auth.yaml
 ```
 
-## 4. 记忆系统配置
+## 6. 记忆系统配置
 
 ATRI 的核心是记忆存储。它把对话记忆分成三层：
 
@@ -155,7 +244,7 @@ mem0:
 
 本地部署默认使用 `./data/qdrant` 作为嵌入式向量存储，并复用 `.env` 中的 `OPENAI_API_KEY` 调用 embedding 和事实抽取模型。
 
-## 5. 认证配置
+## 7. 认证配置
 
 本地开发默认关闭认证：
 
@@ -216,12 +305,12 @@ jwt:
   expire_days: 7
 ```
 
-## 6. 常用开发命令
+## 8. 常用开发命令
 
 后端：
 
 ```powershell
-cd atri
+cd path\to\atri
 
 # 启动服务
 uv run python -m src.main
@@ -239,7 +328,7 @@ uv run python -m mypy src/ --ignore-missing-imports
 前端：
 
 ```powershell
-cd atri-webui
+cd path\to\atri\frontend
 
 # 启动开发服务器
 npm run dev
@@ -251,9 +340,37 @@ npm run type-check
 npm run build
 ```
 
-## 7. 数据目录
+子模块常用命令：
 
-默认运行时数据写入 `atri/data/`：
+```powershell
+cd path\to\atri
+
+# 查看子模块状态
+git submodule status
+
+# 初始化或恢复子模块内容
+git submodule update --init --recursive
+
+# 拉取 frontend 跟踪分支的最新提交
+git submodule update --remote frontend
+```
+
+如果你在 `frontend/` 中提交了前端改动，需要先在子模块仓库提交并推送，再回到 `atri` 提交子模块指针变化：
+
+```powershell
+cd path\to\atri\frontend
+git add .
+git commit --no-gpg-sign -m "your frontend change"
+git push
+
+cd ..
+git add frontend
+git commit --no-gpg-sign -m "chore: update frontend submodule"
+```
+
+## 9. 数据目录
+
+默认运行时数据写入主仓库的 `data/`：
 
 | 目录 | 内容 |
 |---|---|
@@ -264,7 +381,25 @@ npm run build
 
 `chat_history` 是记忆系统的事实来源。短期记忆文件损坏时，可以基于聊天历史重建。
 
-## 8. 常见问题
+## 10. 常见问题
+
+### frontend 目录为空
+
+说明前端子模块还没有初始化。在 `atri` 目录执行：
+
+```powershell
+git submodule update --init --recursive
+```
+
+### frontend 不是最新版本
+
+在 `atri` 目录执行：
+
+```powershell
+git submodule update --remote frontend
+```
+
+如果 `atri` 出现 `modified: frontend`，表示子模块指针变化了。确认前端版本正确后，需要在主仓库提交这个指针变化。
 
 ### 后端启动后立刻退出
 
@@ -272,7 +407,7 @@ npm run build
 
 ### 前端打不开或请求失败
 
-确认后端正在运行，并检查 `atri-webui/.env.development`：
+确认后端正在运行，并检查 `frontend/.env.development`：
 
 ```env
 VITE_API_BASE_URL=http://localhost:8430
@@ -312,7 +447,7 @@ enabled: false
 - 模型名是否被当前服务商支持
 - 压缩模型 `COMPRESS_API_KEY` 是否也已填写
 
-## 9. 下一步
+## 11. 下一步
 
 - 阅读 `docs/configs/认证系统使用指南.md` 配置公网登录。
 - 阅读 `docs/configs/ASR配置说明.md` 和 `docs/configs/TTS配置说明.md` 启用语音链路。
