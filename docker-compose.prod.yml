@@ -1,0 +1,40 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8430:8430"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./prompts/persona:/app/prompts/persona
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8430/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /
+        VITE_WS_URL: /ws
+    ports:
+      - "127.0.0.1:5200:80"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
