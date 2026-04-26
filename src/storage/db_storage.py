@@ -18,10 +18,19 @@ class DatabaseChatStorage(ChatStorageInterface):
     async def get_chat(self, chat_id: str) -> dict | None:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
+    async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
+    async def update_chat_for_user(self, user_id: str, chat_id: str, **kwargs: str) -> dict:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
     async def delete_chat(self, chat_id: str) -> None:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
+    async def delete_chat_for_user(self, user_id: str, chat_id: str) -> None:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
     async def append_message(
@@ -29,5 +38,15 @@ class DatabaseChatStorage(ChatStorageInterface):
     ) -> dict:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
+    async def append_message_for_user(
+        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+    ) -> dict:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
     async def get_messages(self, chat_id: str, limit: int = 50, offset: int = 0) -> list[dict]:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
+    async def get_messages_for_user(
+        self, user_id: str, chat_id: str, limit: int | None = 50, offset: int = 0
+    ) -> list[dict]:
         raise NotImplementedError("Database storage is reserved for Phase 7")

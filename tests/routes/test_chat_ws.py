@@ -51,6 +51,7 @@ def mock_storage():
     """
     storage = AsyncMock()
     storage.append_message = AsyncMock()
+    storage.append_message_for_user = AsyncMock()
     return storage
 
 
@@ -161,12 +162,12 @@ async def test_websocket_text_input_streaming(
 
             # Verify messages were persisted
             # 验证消息被持久化
-            assert mock_storage.append_message.call_count == 2
-            mock_storage.append_message.assert_any_call(
-                "test_chat_123", "human", "你好", name="default"
+            assert mock_storage.append_message_for_user.call_count == 2
+            mock_storage.append_message_for_user.assert_any_call(
+                "default", "test_chat_123", "human", "你好", name="default"
             )
-            mock_storage.append_message.assert_any_call(
-                "test_chat_123", "ai", "你好，主人！", name="atri"
+            mock_storage.append_message_for_user.assert_any_call(
+                "default", "test_chat_123", "ai", "你好，主人！", name="atri"
             )
 
 
@@ -220,11 +221,20 @@ async def test_websocket_text_input_passes_client_context_without_persisting_it(
                 "what time is it?",
                 runtime_context=client_context,
             )
-            mock_storage.append_message.assert_any_call(
-                "test_chat_time", "human", "what time is it?", name="default"
+            mock_storage.append_message_for_user.assert_any_call(
+                "default",
+                "test_chat_time",
+                "human",
+                "what time is it?",
+                name="default",
             )
-            persisted_user_args = mock_storage.append_message.call_args_list[0].args
-            assert persisted_user_args == ("test_chat_time", "human", "what time is it?")
+            persisted_user_args = mock_storage.append_message_for_user.call_args_list[0].args
+            assert persisted_user_args == (
+                "default",
+                "test_chat_time",
+                "human",
+                "what time is it?",
+            )
 
 
 @pytest.mark.asyncio
@@ -383,7 +393,7 @@ async def test_websocket_storage_persistence_failure(
 
     # Mock storage to raise ValueError (chat not found)
     # 模拟 storage 抛出 ValueError（聊天不存在）
-    mock_storage.append_message.side_effect = ValueError("Chat not found")
+    mock_storage.append_message_for_user.side_effect = ValueError("Chat not found")
 
     with (
         patch("src.app.ServiceContext", return_value=mock_context),

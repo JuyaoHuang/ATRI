@@ -30,6 +30,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 from starlette.websockets import WebSocketState
 
+from src.auth import get_websocket_user_id
 from src.llm.exceptions import LLMError
 
 
@@ -41,6 +42,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         websocket: FastAPI WebSocket connection.
                    FastAPI WebSocket 连接。
     """
+    try:
+        user_id = get_websocket_user_id(websocket)
+    except Exception as exc:
+        logger.warning(f"WebSocket authentication failed: {exc}")
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     logger.info("WebSocket connection established")
 
@@ -77,7 +85,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if msg_type == "ping":
                 await _handle_ping(websocket)
             elif msg_type == "input:text":
-                await _handle_text_input(websocket, message, service_context, storage)
+                await _handle_text_input(websocket, message, service_context, storage, user_id)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
                 await _send_error(
@@ -115,6 +123,7 @@ async def _handle_text_input(
     message: dict[str, Any],
     service_context: Any,
     storage: Any,
+    user_id: str,
 ) -> None:
     """Handle text input message and stream ChatAgent response.
     处理文本输入消息并流式传输 ChatAgent 响应。
@@ -153,7 +162,6 @@ async def _handle_text_input(
 
     # Get or create ChatAgent for this character/user
     # 获取或创建此 character/user 的 ChatAgent
-    user_id = "default"  # Phase 5: hardcoded user_id (D7)
     try:
         agent = service_context.get_or_create_agent(character_id, user_id)
     except Exception as e:
@@ -197,11 +205,16 @@ async def _handle_text_input(
         # 在发送完成事件之前持久化消息到存储
         # This ensures messages are saved before client closes connection
         # 这确保在客户端关闭连接前消息已保存
-        user_id = "default"  # Phase 5: hardcoded user_id (D7)
         try:
             logger.debug(f"Starting message persistence | chat_id={chat_id}")
-            await storage.append_message(chat_id, "human", text, name=user_id)
-            await storage.append_message(chat_id, "ai", full_reply, name=character_id)
+            await storage.append_message_for_user(user_id, chat_id, "human", text, name=user_id)
+            await storage.append_message_for_user(
+                user_id,
+                chat_id,
+                "ai",
+                full_reply,
+                name=character_id,
+            )
             logger.debug(f"Messages persisted | chat_id={chat_id}")
         except ValueError as e:
             # Chat not found (client may have deleted it)

@@ -1,0 +1,25 @@
+# Authentication configuration.
+#
+# Local development defaults to disabled auth so the app keeps the existing
+# single-user "default" behavior. Enable this before deploying publicly.
+
+enabled: true
+
+jwt:
+  secret_key: ${JWT_SECRET_KEY}
+  algorithm: HS256
+  expire_days: 7
+
+github:
+  client_id: ${GITHUB_CLIENT_ID}
+  client_secret: ${GITHUB_CLIENT_SECRET}
+  callback_url: http://localhost:8430/api/auth/callback
+  scope: read:user
+
+frontend:
+  callback_url: http://localhost:5200/auth/callback
+  login_url: http://localhost:5200/login
+
+whitelist:
+  users: 
+    - JuyaoHuang

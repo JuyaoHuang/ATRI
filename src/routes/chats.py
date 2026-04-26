@@ -20,6 +20,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
+from src.auth import get_request_user_id
 from src.llm.exceptions import LLMError
 from src.llm.factory import create_from_role
 
@@ -198,7 +199,7 @@ async def list_chats(
         聊天元数据列表。
     """
     storage = request.app.state.storage
-    user_id = "default"  # Phase 5: hardcoded user_id
+    user_id = get_request_user_id(request)
 
     chats = await storage.list_chats(user_id, character_id)
     return [ChatListItem(**chat) for chat in chats]
@@ -223,7 +224,7 @@ async def create_chat(
     """
     storage = request.app.state.storage
     config = request.app.state.config
-    user_id = "default"  # Phase 5: hardcoded user_id
+    user_id = get_request_user_id(request)
 
     llm_config = config.get("llm", {})
 
@@ -298,17 +299,23 @@ async def get_chat(
                        聊天不存在时返回 404。
     """
     storage = request.app.state.storage
+    user_id = get_request_user_id(request)
 
     # Get chat metadata
     # 获取聊天元数据
-    chat_meta = await storage.get_chat(chat_id)
+    chat_meta = await storage.get_chat_for_user(user_id, chat_id)
     if not chat_meta:
         raise HTTPException(status_code=404, detail=f"Chat '{chat_id}' not found")
 
     # Get messages
     # 获取消息
     resolved_limit = chat_meta["message_count"] if limit is None else limit
-    messages = await storage.get_messages(chat_id, limit=resolved_limit, offset=offset)
+    messages = await storage.get_messages_for_user(
+        user_id,
+        chat_id,
+        limit=resolved_limit,
+        offset=offset,
+    )
 
     return ChatDetailResponse(
         metadata=ChatListItem(**chat_meta),
@@ -338,9 +345,10 @@ async def update_chat_title(
                        聊天不存在时返回 404。
     """
     storage = request.app.state.storage
+    user_id = get_request_user_id(request)
 
     try:
-        updated_chat = await storage.update_chat(chat_id, title=body.title)
+        updated_chat = await storage.update_chat_for_user(user_id, chat_id, title=body.title)
         logger.info(f"Updated chat {chat_id} title to: {body.title}")
         return ChatListItem(**updated_chat)
     except ValueError as e:
@@ -361,9 +369,10 @@ async def delete_chat(request: Request, chat_id: str) -> None:
                        聊天不存在时返回 404。
     """
     storage = request.app.state.storage
+    user_id = get_request_user_id(request)
 
     try:
-        await storage.delete_chat(chat_id)
+        await storage.delete_chat_for_user(user_id, chat_id)
         logger.info(f"Deleted chat {chat_id}")
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

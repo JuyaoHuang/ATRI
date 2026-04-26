@@ -41,6 +41,8 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from src.asr import ASRConfigStore, ASRService
+from src.auth import AuthService
+from src.middleware.auth import auth_middleware
 from src.service_context import ServiceContext
 from src.storage.character_storage import CharacterStorage, get_default_character_avatar_dir
 from src.storage.factory import create_chat_storage
@@ -104,6 +106,7 @@ def create_app(config: dict) -> FastAPI:
     app.state.config = config
     app.state.asr_service = ASRService(ASRConfigStore(config.get("asr", {})))
     app.state.tts_service = TTSService(TTSConfigStore(config.get("tts", {})))
+    app.state.auth_service = AuthService(config.get("auth", {}))
     app.state.character_storage = CharacterStorage()
     app.state.live2d_storage = Live2DStorage()
 
@@ -137,9 +140,12 @@ def create_app(config: dict) -> FastAPI:
         )
         logger.info("CORS middleware enabled")
 
+    app.middleware("http")(auth_middleware)
+
     # Register routes
     # 注册路由
     from src.routes.asr import router as asr_router
+    from src.routes.auth import router as auth_router
     from src.routes.characters import router as characters_router
     from src.routes.chat_ws import websocket_endpoint
     from src.routes.chats import router as chats_router
@@ -148,6 +154,7 @@ def create_app(config: dict) -> FastAPI:
     from src.routes.tts import router as tts_router
 
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(asr_router)
     app.include_router(tts_router)
     app.include_router(characters_router)
