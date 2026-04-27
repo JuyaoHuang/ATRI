@@ -11,6 +11,7 @@ from starlette.responses import RedirectResponse
 
 from src.auth.dependencies import DEFAULT_USER_ID, get_auth_service
 from src.auth.exceptions import AuthError
+from src.auth.session import SESSION_COOKIE_NAME, SESSION_COOKIE_PATH, SESSION_COOKIE_SAMESITE
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -50,6 +51,11 @@ def _is_secure_oauth_cookie(request: Request) -> bool:
     return callback_url.startswith("https://")
 
 
+def _is_secure_session_cookie(request: Request) -> bool:
+    auth_service = get_auth_service(request.app)
+    return auth_service.frontend_callback_url.startswith("https://")
+
+
 def _set_oauth_state_cookie(request: Request, response: Response, state: str) -> None:
     response.set_cookie(
         key=OAUTH_STATE_COOKIE_NAME,
@@ -59,6 +65,29 @@ def _set_oauth_state_cookie(request: Request, response: Response, state: str) ->
         secure=_is_secure_oauth_cookie(request),
         httponly=True,
         samesite="lax",
+    )
+
+
+def _set_session_cookie(request: Request, response: Response, token: str) -> None:
+    auth_service = get_auth_service(request.app)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=auth_service.session_cookie_max_age_seconds,
+        path=SESSION_COOKIE_PATH,
+        secure=_is_secure_session_cookie(request),
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
+    )
+
+
+def _clear_session_cookie(request: Request, response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path=SESSION_COOKIE_PATH,
+        secure=_is_secure_session_cookie(request),
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
     )
 
 
@@ -172,13 +201,13 @@ async def github_callback(
             {"error": "github_oauth_failed"},
         )
 
-    params = {
-        "token": token,
-        "username": github_user.username,
-    }
-    if github_user.avatar_url:
-        params["avatar_url"] = github_user.avatar_url
-    return _redirect_with_cleared_oauth_state(request, auth_service.frontend_callback_url, params)
+    response = _redirect_with_cleared_oauth_state(
+        request,
+        auth_service.frontend_callback_url,
+        {"success": "1"},
+    )
+    _set_session_cookie(request, response, token)
+    return response
 
 
 @router.get("/me", response_model=AuthUserResponse)
@@ -187,7 +216,10 @@ async def get_current_user(request: Request) -> AuthUserResponse:
     if not auth_service.enabled:
         return AuthUserResponse(username=DEFAULT_USER_ID, auth_enabled=False)
     try:
-        user = auth_service.authenticate_bearer_token(request.headers.get("Authorization"))
+        user = auth_service.authenticate_credentials(
+            authorization=request.headers.get("Authorization"),
+            session_token=request.cookies.get(SESSION_COOKIE_NAME),
+        )
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -202,5 +234,6 @@ async def get_current_user(request: Request) -> AuthUserResponse:
 
 
 @router.post("/logout", response_model=AuthLogoutResponse)
-async def logout() -> AuthLogoutResponse:
+async def logout(request: Request, response: Response) -> AuthLogoutResponse:
+    _clear_session_cookie(request, response)
     return AuthLogoutResponse(success=True)
