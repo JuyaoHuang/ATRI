@@ -8,6 +8,7 @@ from typing import Any
 from src.auth.exceptions import AuthConfigError, AuthTokenError, AuthUnauthorizedError
 from src.auth.jwt import JWTManager
 from src.auth.oauth import GitHubOAuth, GitHubUser
+from src.auth.session import SESSION_COOKIE_NAME
 from src.auth.whitelist import Whitelist
 
 
@@ -32,6 +33,8 @@ class AuthService:
 
         self.jwt_manager: JWTManager | None = None
         self.github_oauth: GitHubOAuth | None = None
+        self.session_cookie_name = SESSION_COOKIE_NAME
+        self.session_cookie_max_age_seconds = int(jwt_config.get("expire_days", 7)) * 24 * 60 * 60
         self.whitelist = Whitelist(whitelist_config.get("users", []))
         self.frontend_callback_url = str(
             config.get("frontend", {}).get("callback_url")
@@ -70,6 +73,20 @@ class AuthService:
             raise AuthTokenError("Missing bearer token")
         return self.authenticate_token(authorization.removeprefix("Bearer ").strip())
 
+    def authenticate_credentials(
+        self,
+        *,
+        authorization: str | None,
+        session_token: str | None,
+    ) -> AuthenticatedUser:
+        if not self.enabled:
+            return AuthenticatedUser(username="default")
+        if session_token:
+            return self.authenticate_token(session_token)
+        if authorization and authorization.startswith("Bearer "):
+            return self.authenticate_bearer_token(authorization)
+        raise AuthTokenError("Missing session cookie")
+
     def authenticate_token(self, token: str | None) -> AuthenticatedUser:
         if not self.enabled:
             return AuthenticatedUser(username="default")
@@ -86,4 +103,3 @@ class AuthService:
             username=username,
             avatar_url=avatar_url if isinstance(avatar_url, str) else None,
         )
-

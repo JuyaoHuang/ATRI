@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request, WebSocket, status
 
 from src.auth.exceptions import AuthError
 from src.auth.service import AuthService
+from src.auth.session import SESSION_COOKIE_NAME
 
 DEFAULT_USER_ID = "default"
 
@@ -29,7 +30,10 @@ def get_request_user_id(request: Request) -> str:
     if not auth_service.enabled:
         return DEFAULT_USER_ID
     try:
-        user = auth_service.authenticate_bearer_token(request.headers.get("Authorization"))
+        user = auth_service.authenticate_credentials(
+            authorization=request.headers.get("Authorization"),
+            session_token=request.cookies.get(SESSION_COOKIE_NAME),
+        )
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -44,13 +48,14 @@ def get_websocket_user_id(websocket: WebSocket) -> str:
     auth_service = get_auth_service(websocket.app)
     if not auth_service.enabled:
         return DEFAULT_USER_ID
-    token = websocket.query_params.get("token")
     try:
-        user = auth_service.authenticate_token(token)
+        user = auth_service.authenticate_credentials(
+            authorization=None,
+            session_token=websocket.cookies.get(SESSION_COOKIE_NAME),
+        )
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from exc
     return user.username
-

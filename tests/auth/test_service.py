@@ -63,6 +63,69 @@ def test_enabled_auth_requires_bearer_token() -> None:
         service.authenticate_bearer_token(None)
 
 
+def test_enabled_auth_accepts_session_credentials() -> None:
+    service = AuthService(
+        {
+            "enabled": True,
+            "jwt": {"secret_key": "test-secret", "algorithm": "HS256", "expire_days": 7},
+            "github": {
+                "client_id": "client",
+                "client_secret": "secret",
+                "callback_url": "http://localhost:8430/api/auth/callback",
+            },
+            "whitelist": {"users": ["JuyaoHuang"]},
+        }
+    )
+    assert service.jwt_manager is not None
+    token = service.jwt_manager.create_token("JuyaoHuang")
+
+    user = service.authenticate_credentials(authorization=None, session_token=token)
+
+    assert user.username == "JuyaoHuang"
+
+
+def test_enabled_auth_credentials_keep_bearer_compatibility() -> None:
+    service = AuthService(
+        {
+            "enabled": True,
+            "jwt": {"secret_key": "test-secret", "algorithm": "HS256", "expire_days": 7},
+            "github": {
+                "client_id": "client",
+                "client_secret": "secret",
+                "callback_url": "http://localhost:8430/api/auth/callback",
+            },
+            "whitelist": {"users": ["JuyaoHuang"]},
+        }
+    )
+    assert service.jwt_manager is not None
+    token = service.jwt_manager.create_token("JuyaoHuang")
+
+    user = service.authenticate_credentials(
+        authorization=f"Bearer {token}",
+        session_token=None,
+    )
+
+    assert user.username == "JuyaoHuang"
+
+
+def test_enabled_auth_credentials_require_session_cookie() -> None:
+    service = AuthService(
+        {
+            "enabled": True,
+            "jwt": {"secret_key": "test-secret", "algorithm": "HS256", "expire_days": 7},
+            "github": {
+                "client_id": "client",
+                "client_secret": "secret",
+                "callback_url": "http://localhost:8430/api/auth/callback",
+            },
+            "whitelist": {"users": ["JuyaoHuang"]},
+        }
+    )
+
+    with pytest.raises(AuthTokenError, match="Missing session cookie"):
+        service.authenticate_credentials(authorization=None, session_token=None)
+
+
 def test_enabled_auth_rejects_non_whitelisted_token_subject() -> None:
     service = AuthService(
         {

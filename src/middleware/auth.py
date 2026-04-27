@@ -7,6 +7,7 @@ from starlette.responses import JSONResponse, Response
 
 from src.auth.dependencies import get_auth_service
 from src.auth.exceptions import AuthError
+from src.auth.session import SESSION_COOKIE_NAME
 
 PUBLIC_PATH_PREFIXES = (
     "/api/auth",
@@ -29,10 +30,12 @@ async def auth_middleware(request: Request, call_next) -> Response:
         return await call_next(request)
 
     try:
-        user = auth_service.authenticate_bearer_token(request.headers.get("Authorization"))
+        user = auth_service.authenticate_credentials(
+            authorization=request.headers.get("Authorization"),
+            session_token=request.cookies.get(SESSION_COOKIE_NAME),
+        )
     except AuthError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=401)
 
     request.state.user_id = user.username
     return await call_next(request)
-

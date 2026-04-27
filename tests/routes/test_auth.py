@@ -7,6 +7,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from src.app import create_app
+from src.auth.oauth import GitHubUser
+from src.auth.session import SESSION_COOKIE_NAME
 
 
 def _base_config(auth_config: dict) -> dict:
@@ -71,8 +73,11 @@ async def test_auth_me_returns_default_user_when_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_login_returns_github_authorization_url_when_enabled() -> None:
+async def test_auth_login_returns_github_authorization_url_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = create_app(_base_config(_enabled_auth_config()))
+    monkeypatch.setattr("src.routes.auth.secrets.token_urlsafe", lambda _size: "server-state")
 
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
@@ -93,7 +98,166 @@ async def test_auth_login_returns_github_authorization_url_when_enabled() -> Non
     assert params["client_id"] == ["github-client"]
     assert params["redirect_uri"] == ["http://localhost:8430/api/auth/callback"]
     assert params["scope"] == ["read:user"]
-    assert params["state"] == ["nonce"]
+    assert params["state"] == ["server-state"]
+
+    set_cookie = response.headers["set-cookie"]
+    assert "atri_oauth_state=server-state" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Max-Age=600" in set_cookie
+    assert "Path=/api/auth" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Secure" not in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_auth_login_sets_secure_oauth_state_cookie_for_https_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_config = _enabled_auth_config()
+    auth_config["github"]["callback_url"] = "https://example.com/api/auth/callback"
+    app = create_app(_base_config(auth_config))
+    monkeypatch.setattr("src.routes.auth.secrets.token_urlsafe", lambda _size: "server-state")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/api/auth/login")
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers["set-cookie"]
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_rejects_missing_oauth_state() -> None:
+    app = create_app(_base_config(_enabled_auth_config()))
+    app.state.auth_service.github_oauth.exchange_code_for_token = AsyncMock()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        response = await client.get("/api/auth/callback?code=github-code")
+
+    assert response.status_code == 307
+    location = urlparse(response.headers["location"])
+    assert location.path == "/auth/callback"
+    assert parse_qs(location.query)["error"] == ["invalid_state"]
+    app.state.auth_service.github_oauth.exchange_code_for_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_rejects_mismatched_oauth_state() -> None:
+    app = create_app(_base_config(_enabled_auth_config()))
+    app.state.auth_service.github_oauth.exchange_code_for_token = AsyncMock()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        client.cookies.set(
+            "atri_oauth_state",
+            "expected-state",
+            path="/api/auth",
+        )
+        response = await client.get(
+            "/api/auth/callback?code=github-code&state=actual-state",
+        )
+
+    assert response.status_code == 307
+    location = urlparse(response.headers["location"])
+    assert parse_qs(location.query)["error"] == ["invalid_state"]
+    assert "atri_oauth_state=" in response.headers["set-cookie"]
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    app.state.auth_service.github_oauth.exchange_code_for_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_accepts_matching_oauth_state() -> None:
+    app = create_app(_base_config(_enabled_auth_config()))
+    app.state.auth_service.github_oauth.exchange_code_for_token = AsyncMock(
+        return_value="github-access-token"
+    )
+    app.state.auth_service.github_oauth.get_user_info = AsyncMock(
+        return_value=GitHubUser(
+            username="JuyaoHuang",
+            avatar_url="https://avatar.example/me.png",
+        )
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        client.cookies.set(
+            "atri_oauth_state",
+            "expected-state",
+            path="/api/auth",
+        )
+        response = await client.get(
+            "/api/auth/callback?code=github-code&state=expected-state",
+        )
+
+    assert response.status_code == 307
+    location = urlparse(response.headers["location"])
+    params = parse_qs(location.query)
+    assert location.path == "/auth/callback"
+    assert params["success"] == ["1"]
+    assert "token" not in params
+
+    set_cookie = "\n".join(response.headers.get_list("set-cookie"))
+    assert "atri_oauth_state=" in set_cookie
+    assert f"{SESSION_COOKIE_NAME}=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Max-Age=604800" in set_cookie
+    assert "Path=/" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Secure" not in set_cookie
+    app.state.auth_service.github_oauth.exchange_code_for_token.assert_awaited_once_with(
+        "github-code"
+    )
+    app.state.auth_service.github_oauth.get_user_info.assert_awaited_once_with(
+        "github-access-token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_sets_secure_session_cookie_for_https_frontend() -> None:
+    auth_config = _enabled_auth_config()
+    auth_config["frontend"]["callback_url"] = "https://example.com/auth/callback"
+    app = create_app(_base_config(auth_config))
+    app.state.auth_service.github_oauth.exchange_code_for_token = AsyncMock(
+        return_value="github-access-token"
+    )
+    app.state.auth_service.github_oauth.get_user_info = AsyncMock(
+        return_value=GitHubUser(username="JuyaoHuang")
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        client.cookies.set(
+            "atri_oauth_state",
+            "expected-state",
+            path="/api/auth",
+        )
+        response = await client.get(
+            "/api/auth/callback?code=github-code&state=expected-state",
+        )
+
+    assert response.status_code == 307
+    set_cookie = "\n".join(response.headers.get_list("set-cookie"))
+    session_cookie = next(
+        cookie for cookie in response.headers.get_list("set-cookie")
+        if cookie.startswith(f"{SESSION_COOKIE_NAME}=")
+    )
+    assert "Secure" in session_cookie
+    assert f"{SESSION_COOKIE_NAME}=" in set_cookie
 
 
 @pytest.mark.asyncio
@@ -107,16 +271,37 @@ async def test_auth_me_requires_token_when_enabled() -> None:
         response = await client.get("/api/auth/me")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Missing bearer token"
+    assert response.json()["detail"] == "Missing session cookie"
 
 
 @pytest.mark.asyncio
-async def test_auth_me_returns_token_user_when_enabled() -> None:
+async def test_auth_me_returns_cookie_user_when_enabled() -> None:
     app = create_app(_base_config(_enabled_auth_config()))
     token = app.state.auth_service.jwt_manager.create_token(
         "JuyaoHuang",
         avatar_url="https://avatar.example/me.png",
     )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        client.cookies.set(SESSION_COOKIE_NAME, token, path="/")
+        response = await client.get("/api/auth/me")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "username": "JuyaoHuang",
+        "avatar_url": "https://avatar.example/me.png",
+        "name": None,
+        "auth_enabled": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_auth_me_still_accepts_bearer_token_for_compatibility() -> None:
+    app = create_app(_base_config(_enabled_auth_config()))
+    token = app.state.auth_service.jwt_manager.create_token("JuyaoHuang")
 
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
@@ -128,12 +313,24 @@ async def test_auth_me_returns_token_user_when_enabled() -> None:
         )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "username": "JuyaoHuang",
-        "avatar_url": "https://avatar.example/me.png",
-        "name": None,
-        "auth_enabled": True,
-    }
+    assert response.json()["username"] == "JuyaoHuang"
+
+
+@pytest.mark.asyncio
+async def test_auth_logout_clears_session_cookie() -> None:
+    app = create_app(_base_config(_enabled_auth_config()))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/api/auth/logout")
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True}
+    set_cookie = response.headers["set-cookie"]
+    assert f"{SESSION_COOKIE_NAME}=" in set_cookie
+    assert "Max-Age=0" in set_cookie
 
 
 @pytest.mark.asyncio
@@ -147,7 +344,7 @@ async def test_auth_middleware_rejects_protected_routes_without_token() -> None:
         response = await client.get("/api/chats")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Missing bearer token"
+    assert response.json()["detail"] == "Missing session cookie"
 
 
 @pytest.mark.asyncio
@@ -161,10 +358,8 @@ async def test_protected_chat_routes_use_authenticated_user() -> None:
         transport=ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
     ) as client:
-        response = await client.get(
-            "/api/chats",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        client.cookies.set(SESSION_COOKIE_NAME, token, path="/")
+        response = await client.get("/api/chats")
 
     assert response.status_code == 200
     assert response.json() == []
