@@ -149,6 +149,7 @@ def create_app(config: dict) -> FastAPI:
     from src.routes.characters import router as characters_router
     from src.routes.chat_ws import websocket_endpoint
     from src.routes.chats import router as chats_router
+    from src.routes.data import router as data_router
     from src.routes.health import router as health_router
     from src.routes.live2d import router as live2d_router
     from src.routes.tts import router as tts_router
@@ -159,6 +160,7 @@ def create_app(config: dict) -> FastAPI:
     app.include_router(tts_router)
     app.include_router(characters_router)
     app.include_router(chats_router)
+    app.include_router(data_router)
     app.include_router(live2d_router)
 
     # Register WebSocket endpoint
@@ -171,6 +173,6 @@ def create_app(config: dict) -> FastAPI:
         StaticFiles(directory=str(avatar_dir), check_dir=False),
         name="static-avatar-assets",
     )
-    
+
     logger.info("FastAPI app created successfully")
     return app

@@ -52,7 +52,7 @@ from src.agent.persona import load_persona
 from src.llm.factory import create_from_role
 from src.llm.interface import LLMInterface
 from src.memory.long_term import LongTermMemory
-from src.memory.manager import MemoryManager
+from src.memory.manager import MemoryManager, legacy_character_dir, resolve_user_character_dir
 
 
 def _safe_build_long_term(mem0_config: dict[str, Any]) -> LongTermMemory | None:
@@ -169,6 +169,45 @@ class ServiceContext:
             "on" if long_term is not None else "off",
         )
         return agent
+
+    def get_character_memory_dir(self, character_id: str, user_id: str) -> str:
+        """Return and migrate the user-scoped local memory directory path."""
+
+        memory_config = self.config.get("memory", {})
+        return str(resolve_user_character_dir(memory_config, user_id, character_id))
+
+    def get_legacy_character_memory_dir(self, character_id: str) -> str:
+        """Return the legacy pre-user-scope local memory directory path."""
+
+        memory_config = self.config.get("memory", {})
+        return str(legacy_character_dir(memory_config, character_id))
+
+    def reset_short_term_memory(self, character_id: str, user_id: str) -> bool:
+        """Hot-clear cached short-term memory for ``(character_id, user_id)``.
+
+        Returns ``True`` when a cached agent existed and was reset. A ``False``
+        return means the route only needs to delete persisted files because no
+        in-process memory state is alive yet.
+        """
+
+        agent = self._agents.get((character_id, user_id))
+        if agent is None:
+            return False
+
+        agent.memory_manager.reset_short_term()
+        return True
+
+    def get_cached_long_term_memory(
+        self,
+        character_id: str,
+        user_id: str,
+    ) -> LongTermMemory | None:
+        """Return a cached agent's long-term memory handle, if one exists."""
+
+        agent = self._agents.get((character_id, user_id))
+        if agent is None:
+            return None
+        return agent.memory_manager.long_term
 
     async def close_all(self) -> None:
         """Flush every cached agent's session and release long-term handles.

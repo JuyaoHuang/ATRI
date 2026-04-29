@@ -285,6 +285,27 @@ async def test_add_swallows_backend_errors() -> None:
         await ltm.add([], user_id="a", agent_id="b", run_id="c")
 
 
+@pytest.mark.asyncio
+async def test_delete_all_delegates_to_underlying_backend() -> None:
+    """delete_all scopes deletion to the current mem0 user/agent pair."""
+
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.delete_all = MagicMock(
+            return_value={
+                "message": "Delete in progress. This may take some time.",
+                "event_id": "evt-1",
+            }
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(_sdk_config())
+        result = await ltm.delete_all(user_id="alice", agent_id="atri")
+
+        mock_backend.delete_all.assert_called_once_with(user_id="alice", agent_id="atri")
+        assert result["event_id"] == "evt-1"
+
+
 # ---------------------------------------------------------------------------
 # Config translator helpers
 # 配置翻译器辅助函数
