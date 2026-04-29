@@ -191,6 +191,39 @@ async def test_update_system_character_allows_long_system_prompt(client_and_stor
 
 
 @pytest.mark.asyncio
+async def test_update_character_allows_long_greeting_and_description(client_and_storage):
+    client, _storage = client_and_storage
+    long_greeting = "问候语" * 400
+    long_description = "简介" * 300
+
+    create_response = await client.post(
+        "/api/characters",
+        json={
+            "name": "LongFieldsCard",
+            "greeting": "初始问候",
+            "description": "初始描述",
+            "system_prompt": "初始设定",
+        },
+    )
+    created = create_response.json()
+
+    update_response = await client.put(
+        f"/api/characters/{created['character_id']}",
+        json={
+            "name": "LongFieldsCard",
+            "greeting": long_greeting,
+            "description": long_description,
+            "system_prompt": "更新后的设定",
+        },
+    )
+    assert update_response.status_code == 200
+
+    updated = update_response.json()
+    assert updated["greeting"] == long_greeting
+    assert updated["description"] == long_description
+
+
+@pytest.mark.asyncio
 async def test_delete_character_removes_custom_persona_file(client_and_storage):
     client, storage = client_and_storage
 
