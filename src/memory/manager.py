@@ -61,6 +61,7 @@ from src.llm.interface import LLMInterface
 from src.memory.chat_history import ChatHistoryWriter
 from src.memory.compressor import l3_collapse, l4_super_compact
 from src.memory.long_term import LongTermMemory
+from src.memory.retrieval_policy import LongTermRetrievalPolicy
 from src.memory.short_term import ShortTermStore
 from src.memory.snip import snip
 
@@ -221,6 +222,14 @@ class MemoryManager:
         self.snip_config: dict[str, Any] = dict(short_term_cfg.get("snip", {}))
         self.l3_role: str = compressor_cfg.get("l3_role", "l3_compress")
         self.l4_role: str = compressor_cfg.get("l4_role", "l4_compact")
+        mem0_cfg = memory_config.get("mem0") or {}
+        search_cfg = mem0_cfg.get("search") if isinstance(mem0_cfg, dict) else {}
+        search_cfg = search_cfg if isinstance(search_cfg, dict) else {}
+        self.long_term_search_limit: int = int(search_cfg.get("limit", 5))
+        self.long_term_retrieval_policy = LongTermRetrievalPolicy.from_mem0_config(
+            mem0_cfg if isinstance(mem0_cfg, dict) else {}
+        )
+        self._last_long_term_search_round: int | None = None
 
         if character_dir is None:
             chars_root = Path(
@@ -745,7 +754,7 @@ class MemoryManager:
     async def search_long_term(
         self,
         query: str,
-        limit: int = 5,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve related long-term facts for the current user/agent pair.
 
@@ -761,11 +770,26 @@ class MemoryManager:
         """
         if self.long_term is None:
             return []
+        total_rounds = int(self._state.get("total_rounds", 0)) if self._state is not None else 0
+        decision = self.long_term_retrieval_policy.decide(
+            query,
+            current_round=total_rounds,
+            last_search_round=self._last_long_term_search_round,
+        )
+        if not decision.should_search:
+            logger.debug(
+                f"long-term retrieval skipped | reason={decision.reason} | "
+                f"character={self.character} | user_id={self.user_id}"
+            )
+            return []
+
+        resolved_limit = self.long_term_search_limit if limit is None else int(limit)
+        self._last_long_term_search_round = total_rounds
         return await self.long_term.search(
             query,
             user_id=self.user_id,
             agent_id=self.character,
-            limit=limit,
+            limit=resolved_limit,
         )
 
     # ------------------------------------------------------------------

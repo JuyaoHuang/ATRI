@@ -55,6 +55,8 @@ from typing import Any
 
 from loguru import logger
 
+from src.memory.search_cache import SearchCache
+
 
 def _is_unresolved_placeholder(value: Any) -> bool:
     """Return True when ``value`` still looks like ``${VAR}`` post-dotenv load.
@@ -289,6 +291,10 @@ class LongTermMemory:
             raise ValueError(f"mem0.mode must be 'sdk' or 'local_deploy', got {mode!r}")
         self.mode: str = mode
         self._backend: Any = None
+        search_cfg = mem0_config.get("search") or {}
+        self.default_search_limit = int(search_cfg.get("limit", 5))
+        self.default_search_threshold = float(search_cfg.get("threshold", 0.3))
+        self._search_cache = self._build_search_cache(mem0_config)
 
         if mode == "sdk":
             sdk_cfg = mem0_config.get("sdk") or {}
@@ -308,6 +314,24 @@ class LongTermMemory:
             self._backend = Memory.from_config(translated)
 
         logger.info(f"LongTermMemory ready | mode={mode}")
+
+    def _build_search_cache(self, mem0_config: dict[str, Any]) -> SearchCache | None:
+        retrieval_cfg = mem0_config.get("retrieval")
+        if not isinstance(retrieval_cfg, dict):
+            return None
+        cache_cfg = retrieval_cfg.get("cache")
+        if not isinstance(cache_cfg, dict) or not cache_cfg.get("enabled", False):
+            return None
+
+        backend = str(cache_cfg.get("backend", "memory")).strip().lower()
+        if backend != "memory":
+            logger.warning(f"Unsupported mem0 search cache backend {backend!r}; cache disabled")
+            return None
+
+        return SearchCache(
+            ttl_seconds=int(cache_cfg.get("ttl_seconds", 1800)),
+            max_entries=int(cache_cfg.get("max_entries", 512)),
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -345,6 +369,7 @@ class LongTermMemory:
                 agent_id=agent_id,
                 run_id=run_id,
             )
+            self.invalidate_search_cache(user_id, agent_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"mem0.add failed | {exc!r}")
 
@@ -353,8 +378,8 @@ class LongTermMemory:
         query: str,
         user_id: str,
         agent_id: str,
-        limit: int = 5,
-        threshold: float = 0.3,
+        limit: int | None = None,
+        threshold: float | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve related memories for the current user/agent pair.
 
@@ -373,13 +398,30 @@ class LongTermMemory:
         后端错误时返回 ``[]`` 并记录 WARNING，从而让 LLM 调用在不带长期
         上下文的情况下继续推进，而不是让整轮失败。
         """
+        resolved_limit = self.default_search_limit if limit is None else int(limit)
+        resolved_threshold = (
+            self.default_search_threshold if threshold is None else float(threshold)
+        )
+        cache_key = None
+        if self._search_cache is not None:
+            cache_key = SearchCache.make_key(
+                user_id=user_id,
+                agent_id=agent_id,
+                query=query,
+                limit=resolved_limit,
+                threshold=resolved_threshold,
+            )
+            cached = self._search_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         filters = {"user_id": user_id, "agent_id": agent_id}
         try:
             raw = await asyncio.to_thread(
                 self._backend.search,
                 query,
                 filters=filters,
-                top_k=limit,
+                top_k=resolved_limit,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"mem0.search failed | {exc!r}")
@@ -396,8 +438,16 @@ class LongTermMemory:
         else:
             items = []
 
-        filtered = [r for r in items if float(r.get("score", 1.0)) >= threshold]
-        return filtered[:limit]
+        filtered = [r for r in items if float(r.get("score", 1.0)) >= resolved_threshold]
+        results = filtered[:resolved_limit]
+        if self._search_cache is not None and cache_key is not None:
+            self._search_cache.set(cache_key, results)
+        return results
+
+    def invalidate_search_cache(self, user_id: str, agent_id: str) -> None:
+        """Drop cached search results for one user/agent scope."""
+        if self._search_cache is not None:
+            self._search_cache.invalidate_scope(user_id=user_id, agent_id=agent_id)
 
     def close(self) -> None:
         """Best-effort cleanup. No-op for SaaS; closes the Qdrant client
