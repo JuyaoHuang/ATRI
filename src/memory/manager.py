@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html import escape
@@ -65,6 +66,9 @@ from src.memory.short_term import ShortTermStore
 from src.memory.snip import snip
 
 LLMFactoryFn = Callable[[str], LLMInterface]
+_SHORT_TERM_FILENAME = "short_term_memory.json"
+_SESSIONS_SUBDIR = "sessions"
+_LEGACY_MIGRATION_MARKER = ".legacy_migrated"
 
 
 def _new_session_id() -> str:
@@ -74,6 +78,78 @@ def _new_session_id() -> str:
     """
     date = datetime.now(UTC).strftime("%Y-%m-%d")
     return f"{date}_{secrets.token_hex(4)}"
+
+
+def resolve_user_character_dir(
+    memory_config: dict[str, Any],
+    user_id: str,
+    character: str,
+    *,
+    migrate_legacy: bool = True,
+) -> Path:
+    """Return the user-scoped local memory directory for a character.
+
+    Legacy deployments stored short-term memory at
+    ``{characters_dir}/{character}``. The new path is
+    ``{characters_dir}/{user_id}/{character}``, matching chat storage and
+    mem0's ``user_id`` / ``agent_id`` scope. On first access, copy legacy
+    files into the current user's directory and keep the legacy files as a
+    fallback backup.
+    """
+
+    chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
+    character_dir = chars_root / user_id / character
+    if migrate_legacy:
+        _migrate_legacy_character_memory(chars_root / character, character_dir)
+    return character_dir
+
+
+def legacy_character_dir(memory_config: dict[str, Any], character: str) -> Path:
+    """Return the pre-user-scope memory directory for ``character``."""
+
+    chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
+    return chars_root / character
+
+
+def _migrate_legacy_character_memory(legacy_dir: Path, target_dir: Path) -> None:
+    if not legacy_dir.is_dir():
+        return
+
+    migrated_items: list[str] = []
+    handled_legacy = False
+    marker_path = target_dir / _LEGACY_MIGRATION_MARKER
+    if marker_path.exists():
+        return
+
+    legacy_short_term = legacy_dir / _SHORT_TERM_FILENAME
+    target_short_term = target_dir / _SHORT_TERM_FILENAME
+    if legacy_short_term.is_file():
+        if not target_short_term.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_short_term, target_short_term)
+            migrated_items.append(_SHORT_TERM_FILENAME)
+        handled_legacy = target_short_term.exists()
+
+    legacy_sessions = legacy_dir / _SESSIONS_SUBDIR
+    target_sessions = target_dir / _SESSIONS_SUBDIR
+    if legacy_sessions.is_dir():
+        if not target_sessions.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(legacy_sessions, target_sessions)
+            migrated_items.append(_SESSIONS_SUBDIR)
+        handled_legacy = handled_legacy or target_sessions.exists()
+
+    if handled_legacy:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        marker_path.touch(exist_ok=True)
+
+    if migrated_items:
+        logger.info(
+            "Legacy character memory copied | legacy={} | target={} | items={}",
+            legacy_dir,
+            target_dir,
+            ",".join(migrated_items),
+        )
 
 
 def _is_valid_round(ai_msg: dict[str, Any]) -> bool:
@@ -223,10 +299,7 @@ class MemoryManager:
         self.l4_role: str = compressor_cfg.get("l4_role", "l4_compact")
 
         if character_dir is None:
-            chars_root = Path(
-                memory_config.get("storage", {}).get("characters_dir", "./data/characters")
-            )
-            character_dir = chars_root / character
+            character_dir = resolve_user_character_dir(memory_config, user_id, character)
         self.character_dir = Path(character_dir)
 
         self._active_session_id: str | None = None
@@ -300,6 +373,41 @@ class MemoryManager:
     @property
     def active_session_id(self) -> str | None:
         return self._active_session_id
+
+    def reset_short_term(self) -> None:
+        """Hot-clear the in-memory short-term state and remove its file.
+
+        The manager remains usable after this call: the active session id is
+        preserved when present, and the next round starts with an empty
+        ``short_term_memory`` skeleton instead of restoring old context.
+        """
+
+        session_id = self._active_session_id or _new_session_id()
+        self._active_session_id = session_id
+        if self.short_term_store is None:
+            self.short_term_store = ShortTermStore(self.character_dir, session_id, self.character)
+        else:
+            self.short_term_store.session_id = session_id
+        if self.chat_history is None:
+            self.chat_history = ChatHistoryWriter(self.character_dir, session_id, self.character)
+
+        short_term_path = self.short_term_store.path
+        tmp_path = short_term_path.with_suffix(".json.tmp")
+        for path in (short_term_path, tmp_path):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("short_term delete failed | path={} | error={!r}", path, exc)
+        (self.character_dir / _LEGACY_MIGRATION_MARKER).touch(exist_ok=True)
+
+        self._state = ShortTermStore.get_skeleton(session_id, self.character)
+        self._dirty = False
+        logger.info(
+            "MemoryManager short-term state reset | character={} | user_id={} | session_id={}",
+            self.character,
+            self.user_id,
+            session_id,
+        )
 
     # ------------------------------------------------------------------
     # Explicit session lifecycle (US-MEM-007)

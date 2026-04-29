@@ -232,7 +232,23 @@ uv run ruff check . --fix
 
 ---
 
-## 8. 验收清单
+## 8. 数据清理接口验收
+
+验证 `/api/data` 的角色级数据清理能力：
+
+```bash
+uv run pytest tests/memory/test_manager.py tests/memory/test_long_term.py tests/routes/test_data.py -q
+```
+
+**期望结果**:
+- 全部测试通过
+- 短期记忆删除用户级 `short_term_memory.json`，并重置进程内 MemoryManager 状态
+- legacy `data/characters/{character_id}` 只迁移一次，清理后不会再次恢复旧短期记忆
+- 长期记忆调用 mem0 `delete_all(user_id=当前用户, agent_id=角色ID)` 并返回“已提交”语义
+
+---
+
+## 9. 验收清单
 
 - [ ] 快速自检通过（60+ 个 mock 测试）
 - [ ] 全量测试通过（259 passed, 4 deselected）
@@ -241,11 +257,12 @@ uv run ruff check . --fix
 - [ ] WebSocket 手动测试通过（ping/pong + 文本输入 + 错误处理）
 - [ ] mypy 类型检查通过
 - [ ] ruff 格式化和 lint 通过
+- [ ] 数据清理接口验收通过
 - [ ] 测试数据已清理
 
 ---
 
-## 9. 故障排查
+## 10. 故障排查
 
 ### 问题 1: Live 测试失败 - API Key 错误
 
@@ -293,6 +310,6 @@ lsof -ti:8000 | xargs kill -9
 
 ---
 
-## 10. 完成标志
+## 11. 完成标志
 
 当以上所有验收清单项都勾选完成时，Phase 5 FastAPI 服务层实现完成，可以提交 PR。
