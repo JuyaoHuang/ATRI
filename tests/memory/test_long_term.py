@@ -340,6 +340,28 @@ async def test_search_cache_reuses_same_query_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_uses_normalized_query_for_backend_and_cache() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            return_value={"results": [{"memory": "normalized fact", "score": 0.9}]}
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        first = await ltm.search("  same   query  ", user_id="alice", agent_id="atri")
+        second = await ltm.search("same query", user_id="alice", agent_id="atri")
+
+        assert first == second == [{"memory": "normalized fact", "score": 0.9}]
+        mock_backend.search.assert_called_once()
+        assert mock_backend.search.call_args.args[0] == "same query"
+
+
+@pytest.mark.asyncio
 async def test_add_success_invalidates_search_cache() -> None:
     with patch("mem0.MemoryClient") as mock_client_cls:
         mock_backend = MagicMock()

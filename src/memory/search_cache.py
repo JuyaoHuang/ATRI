@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def normalize_search_query(query: str) -> str:
+    return " ".join(query.strip().split())
+
+
 @dataclass(frozen=True)
 class SearchCacheKey:
     user_id: str
@@ -52,7 +56,7 @@ class SearchCache:
         return SearchCacheKey(
             user_id=user_id,
             agent_id=agent_id,
-            query=" ".join(query.strip().split()),
+            query=normalize_search_query(query),
             limit=limit,
             threshold=threshold,
         )
@@ -88,3 +92,6 @@ class SearchCache:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+
+__all__ = ["SearchCache", "SearchCacheKey", "normalize_search_query"]

@@ -562,6 +562,52 @@ async def test_search_long_term_short_query_skips_even_when_triggered(
     long_term.search.assert_not_awaited()
 
 
+def test_retrieval_trigger_keywords_string_is_single_keyword(tmp_path: Path) -> None:
+    mgr = MemoryManager(
+        _config_with_retrieval(
+            {
+                "policy": "triggered",
+                "min_query_chars": 1,
+                "trigger_keywords": "记得",
+            }
+        ),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+    )
+
+    assert mgr.long_term_retrieval_policy.trigger_keywords == ("记得",)
+    assert (
+        mgr.long_term_retrieval_policy.decide(
+            "我", current_round=0, last_search_round=None
+        ).should_search
+        is False
+    )
+    assert (
+        mgr.long_term_retrieval_policy.decide(
+            "你还记得吗", current_round=0, last_search_round=None
+        ).should_search
+        is True
+    )
+
+
+def test_retrieval_trigger_keywords_rejects_non_string_items(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="trigger_keywords"):
+        MemoryManager(
+            _config_with_retrieval(
+                {
+                    "policy": "triggered",
+                    "trigger_keywords": ["记得", 123],
+                }
+            ),
+            _make_factory(),
+            character="atri",
+            user_id="alice",
+            character_dir=tmp_path,
+        )
+
+
 @pytest.mark.asyncio
 async def test_search_long_term_returns_empty_when_no_backend(tmp_path: Path) -> None:
     # 未注入 long_term

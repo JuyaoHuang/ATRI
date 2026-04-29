@@ -13,6 +13,25 @@ from typing import Any
 VALID_POLICIES = {"always", "interval", "triggered", "hybrid"}
 
 
+def _parse_trigger_keywords(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, list | tuple):
+        raise ValueError("mem0.retrieval.trigger_keywords must be a list of strings")
+
+    keywords: list[str] = []
+    for keyword in value:
+        if not isinstance(keyword, str):
+            raise ValueError("mem0.retrieval.trigger_keywords must contain only strings")
+        text = keyword.strip()
+        if text:
+            keywords.append(text)
+    return tuple(keywords)
+
+
 @dataclass(frozen=True)
 class RetrievalDecision:
     should_search: bool
@@ -39,19 +58,12 @@ class LongTermRetrievalPolicy:
                 f"mem0.retrieval.policy must be one of {sorted(VALID_POLICIES)}, got {policy!r}"
             )
 
-        raw_keywords = retrieval_cfg.get("trigger_keywords") or ()
-        keywords = tuple(
-            str(keyword).strip()
-            for keyword in raw_keywords
-            if isinstance(keyword, str) and keyword.strip()
-        )
-
         return cls(
             enabled=bool(retrieval_cfg.get("enabled", True)),
             policy=policy,
             interval_turns=max(1, int(retrieval_cfg.get("interval_turns", 10))),
             min_query_chars=max(0, int(retrieval_cfg.get("min_query_chars", 0))),
-            trigger_keywords=keywords,
+            trigger_keywords=_parse_trigger_keywords(retrieval_cfg.get("trigger_keywords")),
         )
 
     def decide(
@@ -97,3 +109,6 @@ class LongTermRetrievalPolicy:
         if last_search_round is None:
             return True
         return current_round - last_search_round >= self.interval_turns
+
+
+__all__ = ["LongTermRetrievalPolicy", "RetrievalDecision"]

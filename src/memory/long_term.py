@@ -55,7 +55,7 @@ from typing import Any
 
 from loguru import logger
 
-from src.memory.search_cache import SearchCache
+from src.memory.search_cache import SearchCache, normalize_search_query
 
 
 def _is_unresolved_placeholder(value: Any) -> bool:
@@ -402,12 +402,13 @@ class LongTermMemory:
         resolved_threshold = (
             self.default_search_threshold if threshold is None else float(threshold)
         )
+        normalized_query = normalize_search_query(query)
         cache_key = None
         if self._search_cache is not None:
             cache_key = SearchCache.make_key(
                 user_id=user_id,
                 agent_id=agent_id,
-                query=query,
+                query=normalized_query,
                 limit=resolved_limit,
                 threshold=resolved_threshold,
             )
@@ -419,7 +420,7 @@ class LongTermMemory:
         try:
             raw = await asyncio.to_thread(
                 self._backend.search,
-                query,
+                normalized_query,
                 filters=filters,
                 top_k=resolved_limit,
             )
