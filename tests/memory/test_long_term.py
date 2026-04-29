@@ -386,6 +386,57 @@ def test_search_cache_expires_and_evicts_oldest() -> None:
     assert cache.get(key_b) is None
 
 
+@pytest.mark.asyncio
+async def test_delete_all_delegates_to_underlying_backend() -> None:
+    """delete_all scopes deletion to the current mem0 user/agent pair."""
+
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.delete_all = MagicMock(
+            return_value={
+                "message": "Delete in progress. This may take some time.",
+                "event_id": "evt-1",
+            }
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(_sdk_config())
+        result = await ltm.delete_all(user_id="alice", agent_id="atri")
+
+        mock_backend.delete_all.assert_called_once_with(user_id="alice", agent_id="atri")
+        assert result["event_id"] == "evt-1"
+
+
+@pytest.mark.asyncio
+async def test_delete_all_success_invalidates_search_cache() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            side_effect=[
+                {"results": [{"memory": "old fact", "score": 0.9}]},
+                {"results": [{"memory": "after delete", "score": 0.9}]},
+            ]
+        )
+        mock_backend.delete_all = MagicMock(
+            return_value={"message": "Delete in progress.", "event_id": "evt-1"}
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "old fact", "score": 0.9}
+        ]
+        await ltm.delete_all(user_id="alice", agent_id="atri")
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "after delete", "score": 0.9}
+        ]
+        assert mock_backend.search.call_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Config translator helpers
 # 配置翻译器辅助函数

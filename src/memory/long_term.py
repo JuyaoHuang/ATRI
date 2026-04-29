@@ -449,6 +449,39 @@ class LongTermMemory:
         if self._search_cache is not None:
             self._search_cache.invalidate_scope(user_id=user_id, agent_id=agent_id)
 
+    async def delete_all(
+        self,
+        user_id: str,
+        agent_id: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Delete long-term memories for the given mem0 scope.
+
+        Hosted mem0 may return an asynchronous "delete in progress" response;
+        callers should surface that as a submitted cleanup operation instead
+        of assuming immediate dashboard consistency.
+        """
+
+        kwargs: dict[str, str] = {"user_id": user_id, "agent_id": agent_id}
+        if run_id:
+            kwargs["run_id"] = run_id
+
+        try:
+            raw = await asyncio.to_thread(self._backend.delete_all, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "mem0.delete_all failed | user_id={} | agent_id={} | error={!r}",
+                user_id,
+                agent_id,
+                exc,
+            )
+            raise
+
+        self.invalidate_search_cache(user_id, agent_id)
+        if isinstance(raw, dict):
+            return raw
+        return {"message": str(raw)}
+
     def close(self) -> None:
         """Best-effort cleanup. No-op for SaaS; closes the Qdrant client
         handle for local_deploy so embedded rocksdb locks release promptly.

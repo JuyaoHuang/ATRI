@@ -40,7 +40,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.memory.chat_history import ChatHistoryWriter
-from src.memory.manager import MemoryManager, _is_valid_round
+from src.memory.manager import MemoryManager, _is_valid_round, resolve_user_character_dir
 from src.memory.short_term import ShortTermStore
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,105 @@ def _new_manager(tmp_path: Path, factory=None) -> MemoryManager:
         user_id="alice",
         character_dir=tmp_path,
     )
+
+
+def test_resolve_user_character_dir_copies_legacy_short_term(tmp_path: Path) -> None:
+    characters_root = tmp_path / "characters"
+    legacy_dir = characters_root / "atri"
+    legacy_dir.mkdir(parents=True)
+    legacy_payload = {
+        "session_id": "legacy-session",
+        "character": "atri",
+        "total_rounds": 3,
+        "meta_blocks": [],
+        "active_blocks": [],
+        "recent_messages": [{"role": "human", "content": "legacy"}],
+    }
+    (legacy_dir / "short_term_memory.json").write_text(
+        json.dumps(legacy_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    target = resolve_user_character_dir(
+        {"storage": {"characters_dir": str(characters_root)}},
+        "alice",
+        "atri",
+    )
+
+    assert target == characters_root / "alice" / "atri"
+    copied = json.loads((target / "short_term_memory.json").read_text(encoding="utf-8"))
+    assert copied["session_id"] == "legacy-session"
+    assert (legacy_dir / "short_term_memory.json").is_file()
+
+
+def test_resolve_user_character_dir_does_not_remigrate_after_marker(tmp_path: Path) -> None:
+    characters_root = tmp_path / "characters"
+    legacy_dir = characters_root / "atri"
+    target_dir = characters_root / "alice" / "atri"
+    legacy_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+    (target_dir / ".legacy_migrated").touch()
+    (legacy_dir / "short_term_memory.json").write_text(
+        json.dumps({"session_id": "legacy-session"}),
+        encoding="utf-8",
+    )
+
+    target = resolve_user_character_dir(
+        {"storage": {"characters_dir": str(characters_root)}},
+        "alice",
+        "atri",
+    )
+
+    assert target == target_dir
+    assert not (target / "short_term_memory.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_reset_short_term_hot_clears_memory_and_file(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    await mgr.on_round_complete(_human("old memory"), _ai("old reply"))
+    assert mgr.short_term_store is not None
+    assert mgr.short_term_store.path.is_file()
+    assert mgr.state["recent_messages"]
+
+    mgr.reset_short_term()
+
+    assert mgr.short_term_store is not None
+    assert not mgr.short_term_store.path.exists()
+    assert mgr.state["total_rounds"] == 0
+    assert mgr.state["recent_messages"] == []
+    assert mgr.state["active_blocks"] == []
+    assert mgr.state["meta_blocks"] == []
+    assert (tmp_path / ".legacy_migrated").is_file()
+
+
+def test_reset_short_term_marks_legacy_migration_complete_for_new_manager(tmp_path: Path) -> None:
+    characters_root = tmp_path / "characters"
+    legacy_dir = characters_root / "atri"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "short_term_memory.json").write_text(
+        json.dumps(
+            {
+                "session_id": "legacy-session",
+                "character": "atri",
+                "total_rounds": 3,
+                "meta_blocks": [],
+                "active_blocks": [],
+                "recent_messages": [{"role": "human", "content": "legacy"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = {"storage": {"characters_dir": str(characters_root)}}
+    mgr = MemoryManager(config, _make_factory(), character="atri", user_id="alice")
+
+    assert mgr.short_term_store is not None
+    assert mgr.short_term_store.path.is_file()
+    mgr.reset_short_term()
+
+    assert not mgr.short_term_store.path.exists()
+    MemoryManager(config, _make_factory(), character="atri", user_id="alice")
+    assert not (characters_root / "alice" / "atri" / "short_term_memory.json").exists()
 
 
 # ---------------------------------------------------------------------------
