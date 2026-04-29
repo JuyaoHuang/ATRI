@@ -32,3 +32,7 @@ data/avatars/
 .env
 .env.*
 !.env.example
+
+.claude/
+
+prompts/persona/
