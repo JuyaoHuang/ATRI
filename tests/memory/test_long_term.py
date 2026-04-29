@@ -35,6 +35,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.memory.long_term import LongTermMemory, _translate_local_deploy
+from src.memory.search_cache import SearchCache
 
 # ---------------------------------------------------------------------------
 # Config fixtures
@@ -42,8 +43,18 @@ from src.memory.long_term import LongTermMemory, _translate_local_deploy
 # ---------------------------------------------------------------------------
 
 
-def _sdk_config(api_key: str = "m0-test-key") -> dict[str, Any]:
-    return {"mode": "sdk", "sdk": {"api_key": api_key}}
+def _sdk_config(
+    api_key: str = "m0-test-key",
+    *,
+    search: dict[str, Any] | None = None,
+    retrieval: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = {"mode": "sdk", "sdk": {"api_key": api_key}}
+    if search is not None:
+        config["search"] = search
+    if retrieval is not None:
+        config["retrieval"] = retrieval
+    return config
 
 
 def _local_deploy_config() -> dict[str, Any]:
@@ -254,6 +265,28 @@ async def test_search_respects_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_uses_configured_default_limit_and_threshold() -> None:
+    """mem0.search defaults come from memory_config.yaml when caller omits them."""
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            return_value={
+                "results": [
+                    {"memory": "strong", "score": 0.8},
+                    {"memory": "weak", "score": 0.4},
+                ]
+            }
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(_sdk_config(search={"limit": 1, "threshold": 0.5}))
+        results = await ltm.search("q", user_id="a", agent_id="b")
+
+        assert mock_backend.search.call_args.kwargs["top_k"] == 1
+        assert results == [{"memory": "strong", "score": 0.8}]
+
+
+@pytest.mark.asyncio
 async def test_search_returns_empty_on_backend_error() -> None:
     """A broken mem0 must degrade gracefully -- we don't crash the chat turn.
 
@@ -286,6 +319,96 @@ async def test_add_swallows_backend_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_cache_reuses_same_query_result() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            return_value={"results": [{"memory": "cached fact", "score": 0.9}]}
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        first = await ltm.search("  same   query  ", user_id="alice", agent_id="atri")
+        second = await ltm.search("same query", user_id="alice", agent_id="atri")
+
+        assert first == second == [{"memory": "cached fact", "score": 0.9}]
+        assert mock_backend.search.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_search_uses_normalized_query_for_backend_and_cache() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            return_value={"results": [{"memory": "normalized fact", "score": 0.9}]}
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        first = await ltm.search("  same   query  ", user_id="alice", agent_id="atri")
+        second = await ltm.search("same query", user_id="alice", agent_id="atri")
+
+        assert first == second == [{"memory": "normalized fact", "score": 0.9}]
+        mock_backend.search.assert_called_once()
+        assert mock_backend.search.call_args.args[0] == "same query"
+
+
+@pytest.mark.asyncio
+async def test_add_success_invalidates_search_cache() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            side_effect=[
+                {"results": [{"memory": "old fact", "score": 0.9}]},
+                {"results": [{"memory": "new fact", "score": 0.9}]},
+            ]
+        )
+        mock_backend.add = MagicMock(return_value={"results": []})
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "old fact", "score": 0.9}
+        ]
+        await ltm.add([{"role": "human", "content": "new"}], "alice", "atri", "sess")
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "new fact", "score": 0.9}
+        ]
+        assert mock_backend.search.call_count == 2
+
+
+def test_search_cache_expires_and_evicts_oldest() -> None:
+    now = 100.0
+
+    def _time() -> float:
+        return now
+
+    cache = SearchCache(ttl_seconds=10, max_entries=1, time_fn=_time)
+    key_a = SearchCache.make_key(user_id="u", agent_id="a", query="first", limit=5, threshold=0.3)
+    key_b = SearchCache.make_key(user_id="u", agent_id="a", query="second", limit=5, threshold=0.3)
+
+    cache.set(key_a, [{"memory": "A"}])
+    cache.set(key_b, [{"memory": "B"}])
+    assert cache.get(key_a) is None
+    assert cache.get(key_b) == [{"memory": "B"}]
+
+    now = 111.0
+    assert cache.get(key_b) is None
+
+
+@pytest.mark.asyncio
 async def test_delete_all_delegates_to_underlying_backend() -> None:
     """delete_all scopes deletion to the current mem0 user/agent pair."""
 
@@ -304,6 +427,36 @@ async def test_delete_all_delegates_to_underlying_backend() -> None:
 
         mock_backend.delete_all.assert_called_once_with(user_id="alice", agent_id="atri")
         assert result["event_id"] == "evt-1"
+
+
+@pytest.mark.asyncio
+async def test_delete_all_success_invalidates_search_cache() -> None:
+    with patch("mem0.MemoryClient") as mock_client_cls:
+        mock_backend = MagicMock()
+        mock_backend.search = MagicMock(
+            side_effect=[
+                {"results": [{"memory": "old fact", "score": 0.9}]},
+                {"results": [{"memory": "after delete", "score": 0.9}]},
+            ]
+        )
+        mock_backend.delete_all = MagicMock(
+            return_value={"message": "Delete in progress.", "event_id": "evt-1"}
+        )
+        mock_client_cls.return_value = mock_backend
+
+        ltm = LongTermMemory(
+            _sdk_config(
+                retrieval={"cache": {"enabled": True, "backend": "memory", "ttl_seconds": 60}}
+            )
+        )
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "old fact", "score": 0.9}
+        ]
+        await ltm.delete_all(user_id="alice", agent_id="atri")
+        assert await ltm.search("q", user_id="alice", agent_id="atri") == [
+            {"memory": "after delete", "score": 0.9}
+        ]
+        assert mock_backend.search.call_count == 2
 
 
 # ---------------------------------------------------------------------------

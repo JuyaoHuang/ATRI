@@ -21,6 +21,17 @@ uv run pytest tests/memory/ -v
 
 **期望**：`113 passed`
 
+## 2.1 长期记忆检索策略与缓存
+
+```bash
+uv run pytest tests/memory/test_manager.py tests/memory/test_long_term.py -q
+```
+
+**期望**：
+- `MemoryManager` 缺少 `mem0.retrieval` 时仍保持每轮检索。
+- `hybrid` 策略按关键词或间隔兜底触发，短输入跳过。
+- `LongTermMemory` 使用 `mem0.search.limit/threshold`，重复查询命中进程内缓存，`add()` 成功后清除同 user/agent 缓存。
+
 ## 3. Live 端到端测试（消耗真实 mem0 + LLM tokens）
 
 ### 前置 `.env`

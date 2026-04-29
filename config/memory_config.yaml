@@ -114,6 +114,27 @@ mem0:
     threshold: 0.3
     rerank: false
 
+  # Long-term retrieval policy. Missing this block keeps legacy behavior
+  # (search every turn); this default saves mem0 retrieval quota.
+  retrieval:
+    enabled: true
+    policy: hybrid                  # always | interval | triggered | hybrid
+    interval_turns: 10              # fallback search after N valid rounds
+    min_query_chars: 6              # skip very short inputs
+    trigger_keywords:
+      - 记得
+      - 还记得
+      - 之前
+      - 上次
+      - 我说过
+      - 我的偏好
+      - 我的信息
+    cache:
+      enabled: true
+      backend: memory               # process-local cache, no external service
+      ttl_seconds: 1800
+      max_entries: 512
+
 # --- Storage paths ---
 storage:
   characters_dir: ./data/characters
