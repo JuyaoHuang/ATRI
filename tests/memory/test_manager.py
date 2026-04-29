@@ -72,6 +72,12 @@ def _default_config() -> dict[str, Any]:
     }
 
 
+def _config_with_retrieval(retrieval: dict[str, Any]) -> dict[str, Any]:
+    config = _default_config()
+    config["mem0"] = {"search": {"limit": 5, "threshold": 0.3}, "retrieval": retrieval}
+    return config
+
+
 def _make_llm(response: str = "mock summary") -> MagicMock:
     llm = MagicMock()
     llm.chat_completion = AsyncMock(return_value=response)
@@ -368,6 +374,93 @@ async def test_search_long_term_delegates_to_injected_backend(tmp_path: Path) ->
     results = await mgr.search_long_term("hello", limit=3)
     long_term.search.assert_awaited_once_with("hello", user_id="alice", agent_id="atri", limit=3)
     assert results == [{"memory": "fact1", "score": 0.9}]
+
+
+@pytest.mark.asyncio
+async def test_search_long_term_without_retrieval_config_preserves_always_policy(
+    tmp_path: Path,
+) -> None:
+    long_term = MagicMock()
+    long_term.search = AsyncMock(return_value=[])
+    mgr = MemoryManager(
+        _default_config(),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+
+    await mgr.search_long_term("one")
+    await mgr.search_long_term("two")
+
+    assert long_term.search.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_search_long_term_hybrid_skips_until_interval_or_trigger(
+    tmp_path: Path,
+) -> None:
+    long_term = MagicMock()
+    long_term.search = AsyncMock(return_value=[])
+    mgr = MemoryManager(
+        _config_with_retrieval(
+            {
+                "policy": "hybrid",
+                "interval_turns": 10,
+                "min_query_chars": 6,
+                "trigger_keywords": ["还记得", "之前", "我说过"],
+            }
+        ),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+
+    assert await mgr.search_long_term("今天天气不错") == []
+    assert long_term.search.await_count == 1
+
+    mgr.state["total_rounds"] = 5
+    assert await mgr.search_long_term("继续聊一下") == []
+    assert long_term.search.await_count == 1
+
+    assert await mgr.search_long_term("你还记得我的偏好吗") == []
+    assert long_term.search.await_count == 2
+
+    mgr.state["total_rounds"] = 14
+    assert await mgr.search_long_term("普通话题继续") == []
+    assert long_term.search.await_count == 2
+
+    mgr.state["total_rounds"] = 15
+    assert await mgr.search_long_term("普通话题继续") == []
+    assert long_term.search.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_search_long_term_short_query_skips_even_when_triggered(
+    tmp_path: Path,
+) -> None:
+    long_term = MagicMock()
+    long_term.search = AsyncMock(return_value=[])
+    mgr = MemoryManager(
+        _config_with_retrieval(
+            {
+                "policy": "triggered",
+                "min_query_chars": 6,
+                "trigger_keywords": ["记得"],
+            }
+        ),
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        character_dir=tmp_path,
+        long_term=long_term,
+    )
+
+    assert await mgr.search_long_term("记得") == []
+    long_term.search.assert_not_awaited()
 
 
 @pytest.mark.asyncio
