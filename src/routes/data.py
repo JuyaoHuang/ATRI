@@ -56,7 +56,13 @@ async def _ensure_user_chat(
     chat_id: str,
 ) -> dict:
     storage = request.app.state.storage
-    chat = await storage.get_chat_for_user(user_id, chat_id)
+    try:
+        chat = await storage.get_chat_for_user_character(user_id, character_id, chat_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     if chat is None or chat.get("character_id") != character_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -95,18 +101,25 @@ async def clear_short_term_memory(
     user_id = get_request_user_id(request)
     await _ensure_user_chat(request, user_id, character_id, chat_id)
     context = _service_context(request)
-    chat_dir = Path(context.get_character_chat_memory_dir(character_id, user_id, chat_id))
-    short_term_path = chat_dir / _SHORT_TERM_FILENAME
-    tmp_path = short_term_path.with_suffix(".json.tmp")
+    try:
+        chat_dir = Path(context.get_character_chat_memory_dir(character_id, user_id, chat_id))
+        short_term_path = chat_dir / _SHORT_TERM_FILENAME
+        tmp_path = short_term_path.with_suffix(".json.tmp")
+        legacy_path = (
+            Path(context.get_legacy_character_memory_dir(character_id)) / _SHORT_TERM_FILENAME
+        )
+        character_scoped_path = (
+            Path(context.get_character_memory_dir(character_id, user_id)) / _SHORT_TERM_FILENAME
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     removed_short_term = await _unlink_if_exists(short_term_path)
     removed_tmp = await _unlink_if_exists(tmp_path)
     cache_reset = context.reset_short_term_memory(character_id, user_id, chat_id)
-
-    legacy_path = Path(context.get_legacy_character_memory_dir(character_id)) / _SHORT_TERM_FILENAME
-    character_scoped_path = (
-        Path(context.get_character_memory_dir(character_id, user_id)) / _SHORT_TERM_FILENAME
-    )
 
     logger.info(
         "Short-term memory cleared | character={} | user_id={} | chat_id={} | "

@@ -285,6 +285,30 @@ def test_agent_builds_when_safe_build_long_term_returns_none(
     assert agent.memory_manager.long_term is None
 
 
+def test_long_term_failure_is_not_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long_term = _make_long_term_mock()
+    calls = 0
+
+    def _fake_safe_build_long_term(mem0_config: dict[str, Any]) -> MagicMock | None:
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else long_term
+
+    _install_stubs(monkeypatch, long_term=None)
+    monkeypatch.setattr("src.service_context._safe_build_long_term", _fake_safe_build_long_term)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    first = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    second = ctx.get_or_create_agent("atri", "alice", "chat-b")
+
+    assert first.memory_manager.long_term is None
+    assert second.memory_manager.long_term is long_term
+    assert ctx.get_cached_long_term_memory("atri", "alice") is long_term
+    assert calls == 2
+
+
 # ---------------------------------------------------------------------------
 # close_all -- graceful shutdown
 # close_all——优雅关闭

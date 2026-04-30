@@ -118,7 +118,7 @@ class ServiceContext:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self._agents: dict[tuple[str, str, str], ChatAgent] = {}
-        self._long_term_memories: dict[tuple[str, str], LongTermMemory | None] = {}
+        self._long_term_memories: dict[tuple[str, str], LongTermMemory] = {}
 
     def get_or_create_agent(self, character_id: str, user_id: str, chat_id: str) -> ChatAgent:
         """Return the cached agent for ``(character_id, user_id, chat_id)`` or build one.
@@ -190,11 +190,16 @@ class ServiceContext:
         """Return the shared long-term memory handle for ``(character_id, user_id)``."""
 
         key = (character_id, user_id)
-        if key not in self._long_term_memories:
-            memory_config = self.config.get("memory", {})
-            mem0_config = memory_config.get("mem0", {})
-            self._long_term_memories[key] = _safe_build_long_term(mem0_config)
-        return self._long_term_memories[key]
+        cached = self._long_term_memories.get(key)
+        if cached is not None:
+            return cached
+
+        memory_config = self.config.get("memory", {})
+        mem0_config = memory_config.get("mem0", {})
+        long_term = _safe_build_long_term(mem0_config)
+        if long_term is not None:
+            self._long_term_memories[key] = long_term
+        return long_term
 
     def get_character_memory_dir(self, character_id: str, user_id: str) -> str:
         """Return and migrate the user-scoped local memory directory path."""
@@ -268,8 +273,6 @@ class ServiceContext:
                     exc,
                 )
         for memory_key, long_term in self._long_term_memories.items():
-            if long_term is None:
-                continue
             try:
                 long_term.close()
             except Exception as exc:  # noqa: BLE001

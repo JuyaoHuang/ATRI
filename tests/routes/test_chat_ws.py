@@ -40,7 +40,7 @@ def mock_service_context() -> tuple[MagicMock, MagicMock]:
 @pytest.fixture
 def mock_storage() -> AsyncMock:
     storage = AsyncMock()
-    storage.get_chat_for_user = AsyncMock(
+    storage.get_chat_for_user_character = AsyncMock(
         return_value={"id": "test_chat_123", "character_id": "atri"}
     )
     storage.append_message_for_user = AsyncMock()
@@ -96,7 +96,9 @@ async def test_websocket_text_input_streaming(
         assert complete_response["type"] == "output:chat:complete"
         assert complete_response["data"]["full_reply"] == "".join(chunks)
 
-    mock_storage.get_chat_for_user.assert_awaited_once_with("default", "test_chat_123")
+    mock_storage.get_chat_for_user_character.assert_awaited_once_with(
+        "default", "atri", "test_chat_123"
+    )
     mock_context.get_or_create_agent.assert_called_once_with("atri", "default", "test_chat_123")
     mock_storage.append_message_for_user.assert_any_call(
         "default", "test_chat_123", "human", "你好", name="default"
@@ -113,7 +115,7 @@ async def test_websocket_rejects_missing_chat(
     mock_storage: AsyncMock,
 ) -> None:
     mock_context, _mock_agent = mock_service_context
-    mock_storage.get_chat_for_user.return_value = None
+    mock_storage.get_chat_for_user_character.return_value = None
     app = _make_app(mock_config, mock_context, mock_storage)
 
     client = TestClient(app)
@@ -133,9 +135,45 @@ async def test_websocket_rejects_missing_chat(
         assert response["type"] == "error"
         assert "not found" in response["data"]["message"]
 
-    mock_storage.get_chat_for_user.assert_awaited_once_with("default", "../outside")
+    mock_storage.get_chat_for_user_character.assert_awaited_once_with(
+        "default", "atri", "../outside"
+    )
     mock_context.get_or_create_agent.assert_not_called()
     mock_storage.append_message_for_user.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_invalid_chat_path(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    mock_storage.get_chat_for_user_character.side_effect = ValueError(
+        "Invalid chat_id: '../outside'"
+    )
+    app = _make_app(mock_config, mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:text",
+                "data": {
+                    "text": "hello",
+                    "chat_id": "../outside",
+                    "character_id": "atri",
+                },
+            }
+        )
+
+        response = websocket.receive_json()
+        assert response["type"] == "error"
+        assert "Invalid chat request" in response["data"]["message"]
+
+    mock_context.get_or_create_agent.assert_not_called()
+    mock_storage.append_message_for_user.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_websocket_rejects_character_mismatch(
@@ -144,7 +182,7 @@ async def test_websocket_rejects_character_mismatch(
     mock_storage: AsyncMock,
 ) -> None:
     mock_context, _mock_agent = mock_service_context
-    mock_storage.get_chat_for_user.return_value = {
+    mock_storage.get_chat_for_user_character.return_value = {
         "id": "test_chat_123",
         "character_id": "bilibili",
     }

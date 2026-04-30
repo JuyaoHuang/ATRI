@@ -165,6 +165,21 @@ async def test_clear_short_term_memory_does_not_restore_previously_migrated_lega
 
 
 @pytest.mark.asyncio
+async def test_clear_short_term_memory_rejects_invalid_chat_path(tmp_path: Path) -> None:
+    config = _test_config(tmp_path)
+    app = create_app(config)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            response = await client.delete(
+                "/api/data/characters/atri/chats/nested%5Coutside/short-term-memory"
+            )
+
+    assert response.status_code == 400
+    assert "Invalid" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_clear_long_term_memory_submits_mem0_delete(tmp_path: Path) -> None:
     config = _test_config(tmp_path)
     app = create_app(config)

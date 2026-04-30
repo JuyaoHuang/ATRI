@@ -160,7 +160,19 @@ async def _handle_text_input(
 
     logger.info(f"Received text input | chat_id={chat_id} | character_id={character_id}")
 
-    chat = await storage.get_chat_for_user(user_id, chat_id)
+    try:
+        chat = await storage.get_chat_for_user_character(user_id, character_id, chat_id)
+    except ValueError as exc:
+        logger.warning(
+            "Rejected invalid chat input | user_id={} | chat_id={} | character_id={} | error={!r}",
+            user_id,
+            chat_id,
+            character_id,
+            exc,
+        )
+        await _send_error(websocket, f"Invalid chat request: {exc}", chat_id=chat_id)
+        return
+
     if chat is None or chat.get("character_id") != character_id:
         logger.warning(
             "Rejected chat input for mismatched chat | user_id={} | chat_id={} | character_id={}",
