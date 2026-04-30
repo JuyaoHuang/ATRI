@@ -70,6 +70,7 @@ LLMFactoryFn = Callable[[str], LLMInterface]
 _SHORT_TERM_FILENAME = "short_term_memory.json"
 _SESSIONS_SUBDIR = "sessions"
 _LEGACY_MIGRATION_MARKER = ".legacy_migrated"
+_CHAT_SCOPE_MIGRATION_MARKER = ".chat_scope_migrated"
 
 
 def _new_session_id() -> str:
@@ -149,6 +150,69 @@ def _migrate_legacy_character_memory(legacy_dir: Path, target_dir: Path) -> None
             "Legacy character memory copied | legacy={} | target={} | items={}",
             legacy_dir,
             target_dir,
+            ",".join(migrated_items),
+        )
+
+
+def resolve_user_character_chat_dir(
+    memory_config: dict[str, Any],
+    user_id: str,
+    character: str,
+    chat_id: str,
+    *,
+    migrate_legacy: bool = True,
+) -> Path:
+    """Return the chat-scoped local memory directory for a character chat."""
+
+    character_dir = resolve_user_character_dir(
+        memory_config,
+        user_id,
+        character,
+        migrate_legacy=migrate_legacy,
+    )
+    chat_dir = character_dir / "chats" / chat_id
+    if migrate_legacy:
+        _migrate_character_scope_memory_to_chat(character_dir, chat_dir)
+    return chat_dir
+
+
+def _migrate_character_scope_memory_to_chat(character_dir: Path, chat_dir: Path) -> None:
+    if not character_dir.is_dir():
+        return
+
+    marker_path = character_dir / _CHAT_SCOPE_MIGRATION_MARKER
+    if marker_path.exists():
+        return
+
+    source_short_term = character_dir / _SHORT_TERM_FILENAME
+    source_sessions = character_dir / _SESSIONS_SUBDIR
+    target_short_term = chat_dir / _SHORT_TERM_FILENAME
+    target_sessions = chat_dir / _SESSIONS_SUBDIR
+    migrated_items: list[str] = []
+    handled_legacy = False
+
+    if source_short_term.is_file():
+        if not target_short_term.exists():
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_short_term, target_short_term)
+            migrated_items.append(_SHORT_TERM_FILENAME)
+        handled_legacy = target_short_term.exists()
+
+    if source_sessions.is_dir():
+        if not target_sessions.exists():
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_sessions, target_sessions)
+            migrated_items.append(_SESSIONS_SUBDIR)
+        handled_legacy = handled_legacy or target_sessions.exists()
+
+    if handled_legacy:
+        marker_path.touch(exist_ok=True)
+
+    if migrated_items:
+        logger.info(
+            "Character-scoped memory copied to chat scope | legacy={} | target={} | items={}",
+            character_dir,
+            chat_dir,
             ",".join(migrated_items),
         )
 
@@ -277,6 +341,7 @@ class MemoryManager:
         llm_factory_fn: LLMFactoryFn,
         character: str,
         user_id: str,
+        chat_id: str | None = None,
         character_dir: Path | None = None,
         long_term: LongTermMemory | None = None,
     ) -> None:
@@ -284,6 +349,7 @@ class MemoryManager:
         self.llm_factory_fn = llm_factory_fn
         self.character = character
         self.user_id = user_id
+        self.chat_id = chat_id
         self.long_term = long_term
 
         short_term_cfg = memory_config.get("short_term", {})
@@ -308,7 +374,15 @@ class MemoryManager:
         self._last_long_term_search_round: int | None = None
 
         if character_dir is None:
-            character_dir = resolve_user_character_dir(memory_config, user_id, character)
+            if chat_id is None:
+                character_dir = resolve_user_character_dir(memory_config, user_id, character)
+            else:
+                character_dir = resolve_user_character_chat_dir(
+                    memory_config,
+                    user_id,
+                    character,
+                    chat_id,
+                )
         self.character_dir = Path(character_dir)
 
         self._active_session_id: str | None = None
@@ -412,9 +486,10 @@ class MemoryManager:
         self._state = ShortTermStore.get_skeleton(session_id, self.character)
         self._dirty = False
         logger.info(
-            "MemoryManager short-term state reset | character={} | user_id={} | session_id={}",
+            "MemoryManager short-term state reset | character={} | user_id={} | chat_id={} | session_id={}",
             self.character,
             self.user_id,
+            self.chat_id,
             session_id,
         )
 
@@ -993,4 +1068,10 @@ class MemoryManager:
         return messages
 
 
-__all__ = ["MemoryManager", "LLMFactoryFn"]
+__all__ = [
+    "MemoryManager",
+    "LLMFactoryFn",
+    "legacy_character_dir",
+    "resolve_user_character_chat_dir",
+    "resolve_user_character_dir",
+]

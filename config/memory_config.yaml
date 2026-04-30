@@ -114,13 +114,13 @@ mem0:
     threshold: 0.3
     rerank: false
 
-  # Long-term retrieval policy. Missing this block keeps legacy behavior
+  # 长期检索政策。缺少此块会保留遗留行为
   # (search every turn); this default saves mem0 retrieval quota.
   retrieval:
     enabled: true
     policy: hybrid                  # always | interval | triggered | hybrid
-    interval_turns: 10              # fallback search after N valid rounds
-    min_query_chars: 6              # skip very short inputs
+    interval_turns: 10              # N 个有效轮次后的回退搜索
+    min_query_chars: 6              # 跳过非常短的输入
     trigger_keywords:
       - 记得
       - 还记得
@@ -131,7 +131,7 @@ mem0:
       - 我的信息
     cache:
       enabled: true
-      backend: memory               # process-local cache, no external service
+      backend: memory               #进程本地缓存，无外部服务
       ttl_seconds: 1800
       max_entries: 512
 

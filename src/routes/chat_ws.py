@@ -160,10 +160,10 @@ async def _handle_text_input(
 
     logger.info(f"Received text input | chat_id={chat_id} | character_id={character_id}")
 
-    # Get or create ChatAgent for this character/user
-    # 获取或创建此 character/user 的 ChatAgent
+    # Get or create ChatAgent for this character/user/chat.
+    # 获取或创建此 character/user/chat 的 ChatAgent。
     try:
-        agent = service_context.get_or_create_agent(character_id, user_id)
+        agent = service_context.get_or_create_agent(character_id, user_id, chat_id)
     except Exception as e:
         logger.error(f"Failed to get ChatAgent: {e}")
         await _send_error(

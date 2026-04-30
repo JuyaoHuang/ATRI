@@ -52,7 +52,12 @@ from src.agent.persona import load_persona
 from src.llm.factory import create_from_role
 from src.llm.interface import LLMInterface
 from src.memory.long_term import LongTermMemory
-from src.memory.manager import MemoryManager, legacy_character_dir, resolve_user_character_dir
+from src.memory.manager import (
+    MemoryManager,
+    legacy_character_dir,
+    resolve_user_character_chat_dir,
+    resolve_user_character_dir,
+)
 
 
 def _safe_build_long_term(mem0_config: dict[str, Any]) -> LongTermMemory | None:
@@ -109,10 +114,10 @@ class ServiceContext:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self._agents: dict[tuple[str, str], ChatAgent] = {}
+        self._agents: dict[tuple[str, str, str], ChatAgent] = {}
 
-    def get_or_create_agent(self, character_id: str, user_id: str) -> ChatAgent:
-        """Return the cached agent for ``(character_id, user_id)`` or build a new one.
+    def get_or_create_agent(self, character_id: str, user_id: str, chat_id: str) -> ChatAgent:
+        """Return the cached agent for ``(character_id, user_id, chat_id)`` or build one.
 
         Creation path (US-AGT-005 PRD):
           1. ``persona = load_persona(character_id)``
@@ -136,7 +141,7 @@ class ServiceContext:
           5. 通过 ``create_from_role('chat', ...)`` 构造主聊天 LLM。
           6. ``agent = ChatAgent(chat_llm, mgr, persona)``。
         """
-        key = (character_id, user_id)
+        key = (character_id, user_id, chat_id)
         cached = self._agents.get(key)
         if cached is not None:
             return cached
@@ -156,6 +161,7 @@ class ServiceContext:
             _llm_factory_fn,
             character=character_id,
             user_id=user_id,
+            chat_id=chat_id,
             long_term=long_term,
         )
         chat_llm = create_from_role("chat", llm_config)
@@ -163,9 +169,10 @@ class ServiceContext:
 
         self._agents[key] = agent
         logger.info(
-            "ChatAgent created | character={} | user_id={} | long_term={}",
+            "ChatAgent created | character={} | user_id={} | chat_id={} | long_term={}",
             character_id,
             user_id,
+            chat_id,
             "on" if long_term is not None else "off",
         )
         return agent
@@ -176,21 +183,32 @@ class ServiceContext:
         memory_config = self.config.get("memory", {})
         return str(resolve_user_character_dir(memory_config, user_id, character_id))
 
+    def get_character_chat_memory_dir(
+        self,
+        character_id: str,
+        user_id: str,
+        chat_id: str,
+    ) -> str:
+        """Return and migrate the chat-scoped local memory directory path."""
+
+        memory_config = self.config.get("memory", {})
+        return str(resolve_user_character_chat_dir(memory_config, user_id, character_id, chat_id))
+
     def get_legacy_character_memory_dir(self, character_id: str) -> str:
         """Return the legacy pre-user-scope local memory directory path."""
 
         memory_config = self.config.get("memory", {})
         return str(legacy_character_dir(memory_config, character_id))
 
-    def reset_short_term_memory(self, character_id: str, user_id: str) -> bool:
-        """Hot-clear cached short-term memory for ``(character_id, user_id)``.
+    def reset_short_term_memory(self, character_id: str, user_id: str, chat_id: str) -> bool:
+        """Hot-clear cached short-term memory for ``(character_id, user_id, chat_id)``.
 
         Returns ``True`` when a cached agent existed and was reset. A ``False``
         return means the route only needs to delete persisted files because no
         in-process memory state is alive yet.
         """
 
-        agent = self._agents.get((character_id, user_id))
+        agent = self._agents.get((character_id, user_id, chat_id))
         if agent is None:
             return False
 
@@ -204,10 +222,12 @@ class ServiceContext:
     ) -> LongTermMemory | None:
         """Return a cached agent's long-term memory handle, if one exists."""
 
-        agent = self._agents.get((character_id, user_id))
-        if agent is None:
-            return None
-        return agent.memory_manager.long_term
+        for cached_character_id, cached_user_id, _chat_id in self._agents:
+            if cached_character_id == character_id and cached_user_id == user_id:
+                return self._agents[
+                    (cached_character_id, cached_user_id, _chat_id)
+                ].memory_manager.long_term
+        return None
 
     async def close_all(self) -> None:
         """Flush every cached agent's session and release long-term handles.
