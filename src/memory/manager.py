@@ -486,7 +486,8 @@ class MemoryManager:
         self._state = ShortTermStore.get_skeleton(session_id, self.character)
         self._dirty = False
         logger.info(
-            "MemoryManager short-term state reset | character={} | user_id={} | chat_id={} | session_id={}",
+            "MemoryManager short-term state reset | character={} | user_id={} | "
+            "chat_id={} | session_id={}",
             self.character,
             self.user_id,
             self.chat_id,

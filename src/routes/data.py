@@ -49,7 +49,12 @@ async def _unlink_if_exists(path: Path) -> bool:
     return await asyncio.to_thread(_delete)
 
 
-async def _ensure_user_chat(request: Request, user_id: str, character_id: str, chat_id: str) -> dict:
+async def _ensure_user_chat(
+    request: Request,
+    user_id: str,
+    character_id: str,
+    chat_id: str,
+) -> dict:
     storage = request.app.state.storage
     chat = await storage.get_chat_for_user(user_id, chat_id)
     if chat is None or chat.get("character_id") != character_id:
@@ -104,7 +109,8 @@ async def clear_short_term_memory(
     )
 
     logger.info(
-        "Short-term memory cleared | character={} | user_id={} | chat_id={} | removed={} | cache_reset={}",
+        "Short-term memory cleared | character={} | user_id={} | chat_id={} | "
+        "removed={} | cache_reset={}",
         character_id,
         user_id,
         chat_id,
