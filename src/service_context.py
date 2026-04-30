@@ -222,11 +222,9 @@ class ServiceContext:
     ) -> LongTermMemory | None:
         """Return a cached agent's long-term memory handle, if one exists."""
 
-        for cached_character_id, cached_user_id, _chat_id in self._agents:
+        for (cached_character_id, cached_user_id, _chat_id), agent in self._agents.items():
             if cached_character_id == character_id and cached_user_id == user_id:
-                return self._agents[
-                    (cached_character_id, cached_user_id, _chat_id)
-                ].memory_manager.long_term
+                return agent.memory_manager.long_term
         return None
 
     async def close_all(self) -> None:
