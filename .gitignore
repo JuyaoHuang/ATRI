@@ -36,3 +36,5 @@ data/avatars/
 .claude/
 
 prompts/persona/
+*.chat_scope_migrated
+*.legacy_migrated

@@ -10,9 +10,9 @@ Covers PRD US-MEM-005 acceptance criteria:
 针对 src/memory/manager.py 的测试——按轮次驱动的触发调度。
 
 覆盖 PRD US-MEM-005 的验收标准：
-  * 25 轮 -> 不触发 L3
-  * 恰好 26 轮 -> L3 触发一次，追加一个块
-  * 52 轮 -> L3 触发两次，两个块
+  * 39 轮 -> 不触发 L3
+  * 恰好 40 轮 -> L3 触发一次，追加一个块并保留 20 轮原文
+  * 60 轮 -> L3 触发两次，两个块并保留 20 轮原文
   * 累计 4 个块 -> L4 触发一次，meta_blocks 增长，active_blocks 重置
   * 无效轮次（ai 内容以 'Error' 开头）不增加 total_rounds
 
@@ -202,6 +202,29 @@ def test_resolve_user_character_chat_dir_copies_character_scope_memory_once(
         "chat-b",
     )
     assert not (chat_b / "short_term_memory.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("user_id", "character", "chat_id"),
+    [
+        ("../alice", "atri", "chat-a"),
+        ("alice", "../atri", "chat-a"),
+        ("alice", "atri", "../outside"),
+        ("alice", "atri", "nested/chat"),
+        ("alice", "atri", r"nested\chat"),
+        ("alice", "atri", ""),
+    ],
+)
+def test_resolve_user_character_chat_dir_rejects_unsafe_path_components(
+    tmp_path: Path,
+    user_id: str,
+    character: str,
+    chat_id: str,
+) -> None:
+    config = {"storage": {"characters_dir": str(tmp_path / "characters")}}
+
+    with pytest.raises(ValueError, match="Invalid|must be"):
+        resolve_user_character_chat_dir(config, user_id, character, chat_id)
 
 
 def test_memory_manager_chat_id_uses_chat_scoped_directory(tmp_path: Path) -> None:
@@ -892,8 +915,8 @@ async def test_resume_behind_catches_up_tail(tmp_path: Path) -> None:
     # 尾部内容来自 chat_history 中追加的消息对。
     assert mgr.state["recent_messages"][-2]["content"] == "h11"
     assert mgr.state["recent_messages"][-1]["content"] == "a11"
-    # No L3 boundary crossed (12 < 26), no long_term.add invoked.
-    # 未越过 L3 边界（12 < 26），故 long_term.add 未被调用。
+    # No L3 boundary crossed (12 < 40), no long_term.add invoked.
+    # 未越过 L3 边界（12 < 40），故 long_term.add 未被调用。
     long_term.add.assert_not_awaited()
 
 
@@ -901,7 +924,7 @@ async def test_resume_behind_catches_up_tail(tmp_path: Path) -> None:
 async def test_resume_on_boundary_triggers_l3(tmp_path: Path) -> None:
     """Stored total_rounds=20, chat_history=40 -> replay keeps 20 raw rounds and fires L3.
 
-    已存 total_rounds=20，chat_history=26 -> 重放至 26 => L3 触发。
+    已存 total_rounds=20，chat_history=40 -> 重放至 40 => L3 触发。
     """
     session_id = "2026-04-19_c0ffee01"
     _seed_session_files(tmp_path, session_id, "atri", stored_rounds=20, chat_rounds=40)
@@ -916,8 +939,8 @@ async def test_resume_on_boundary_triggers_l3(tmp_path: Path) -> None:
     # L3 触发 -> long_term.add 被调用一次，传入 40 条消息的压缩窗口。
     long_term.add.assert_awaited_once()
     assert len(long_term.add.call_args.args[0]) == 40
-    # 6 rounds remain raw = 12 msgs.
-    # 保留 6 轮原始消息 = 12 条。
+    # 20 rounds remain raw = 40 msgs.
+    # 保留 20 轮原始消息 = 40 条。
     assert len(mgr.state["recent_messages"]) == 40
 
 

@@ -199,6 +199,21 @@ def test_same_character_user_different_chat_yields_distinct_instances(
     assert chat_a.memory_manager.character_dir != chat_b.memory_manager.character_dir
 
 
+def test_same_character_user_different_chat_shares_long_term(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long_term = _make_long_term_mock()
+    _install_stubs(monkeypatch, long_term=long_term)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    chat_a = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    chat_b = ctx.get_or_create_agent("atri", "alice", "chat-b")
+
+    assert chat_a.memory_manager.long_term is long_term
+    assert chat_b.memory_manager.long_term is long_term
+    assert ctx.get_cached_long_term_memory("atri", "alice") is long_term
+
+
 def test_different_character_id_yields_distinct_instances(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,21 +321,21 @@ async def test_close_all_awaits_close_session_on_every_agent(
 async def test_close_all_calls_long_term_close_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """long_term.close() is called once per agent whose long_term is set.
+    """long_term.close() is called once per user/character long-term handle.
 
-    每个持有 long_term 的 agent 触发一次 long_term.close()。
+    每个 user/character 长期记忆句柄触发一次 long_term.close()。
     """
     long_term = _make_long_term_mock()
     _install_stubs(monkeypatch, long_term=long_term)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    for cid in ("atri", "shizuku"):
-        agent = ctx.get_or_create_agent(cid, "alice", "chat-a")
+    for args in (("atri", "alice", "chat-a"), ("atri", "alice", "chat-b")):
+        agent = ctx.get_or_create_agent(*args)
         agent.memory_manager.close_session = AsyncMock()
 
     await ctx.close_all()
 
-    assert long_term.close.call_count == 2
+    long_term.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -345,8 +360,6 @@ async def test_close_all_tolerates_close_session_raising(
 
     a1.memory_manager.close_session.assert_awaited_once()
     a2.memory_manager.close_session.assert_awaited_once()
-    # long_term.close was still attempted for both agents (per-agent try/except)
-    # 两个 agent 都尝试了 long_term.close（每个 agent 独立的 try/except）
     assert long_term.close.call_count == 2
 
 

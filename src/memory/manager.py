@@ -53,7 +53,7 @@ import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html import escape
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from loguru import logger
@@ -71,6 +71,23 @@ _SHORT_TERM_FILENAME = "short_term_memory.json"
 _SESSIONS_SUBDIR = "sessions"
 _LEGACY_MIGRATION_MARKER = ".legacy_migrated"
 _CHAT_SCOPE_MIGRATION_MARKER = ".chat_scope_migrated"
+
+
+def _validate_path_component(label: str, value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    clean = value.strip()
+    path = PurePath(clean)
+    if (
+        not clean
+        or clean in {".", ".."}
+        or path.is_absolute()
+        or len(path.parts) != 1
+        or "/" in clean
+        or "\\" in clean
+    ):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return clean
 
 
 def _new_session_id() -> str:
@@ -99,18 +116,21 @@ def resolve_user_character_dir(
     fallback backup.
     """
 
+    safe_user_id = _validate_path_component("user_id", user_id)
+    safe_character = _validate_path_component("character", character)
     chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
-    character_dir = chars_root / user_id / character
+    character_dir = chars_root / safe_user_id / safe_character
     if migrate_legacy:
-        _migrate_legacy_character_memory(chars_root / character, character_dir)
+        _migrate_legacy_character_memory(chars_root / safe_character, character_dir)
     return character_dir
 
 
 def legacy_character_dir(memory_config: dict[str, Any], character: str) -> Path:
     """Return the pre-user-scope memory directory for ``character``."""
 
+    safe_character = _validate_path_component("character", character)
     chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
-    return chars_root / character
+    return chars_root / safe_character
 
 
 def _migrate_legacy_character_memory(legacy_dir: Path, target_dir: Path) -> None:
@@ -164,13 +184,14 @@ def resolve_user_character_chat_dir(
 ) -> Path:
     """Return the chat-scoped local memory directory for a character chat."""
 
+    safe_chat_id = _validate_path_component("chat_id", chat_id)
     character_dir = resolve_user_character_dir(
         memory_config,
         user_id,
         character,
         migrate_legacy=migrate_legacy,
     )
-    chat_dir = character_dir / "chats" / chat_id
+    chat_dir = character_dir / "chats" / safe_chat_id
     if migrate_legacy:
         _migrate_character_scope_memory_to_chat(character_dir, chat_dir)
     return chat_dir

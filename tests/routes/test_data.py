@@ -177,9 +177,7 @@ async def test_clear_long_term_memory_submits_mem0_delete(tmp_path: Path) -> Non
                 "event_id": "evt-test",
             }
             mock_long_term.close = lambda: None
-            app.state.service_context._agents[("atri", "default", "chat-a")] = SimpleNamespace(
-                memory_manager=SimpleNamespace(long_term=mock_long_term)
-            )
+            app.state.service_context._long_term_memories[("atri", "default")] = mock_long_term
 
             response = await client.delete("/api/data/characters/atri/long-term-memory")
 

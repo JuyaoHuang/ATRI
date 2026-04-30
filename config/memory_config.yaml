@@ -14,7 +14,7 @@ short_term:
 
   # L3 Collapse -- round-driven compression
   collapse:
-    trigger_rounds: 20               # compatibility: raw tail trigger uses keep_recent + compress
+    trigger_rounds: 20               # deprecated compatibility field; no trigger logic reads it
     compress_rounds: 20              # oldest M rounds get compressed
     keep_recent_rounds: 20           # keep latest K rounds raw
 
@@ -131,7 +131,7 @@ mem0:
       - 我的信息
     cache:
       enabled: true
-      backend: memory               #进程本地缓存，无外部服务
+      backend: memory               # 进程本地缓存，无外部服务
       ttl_seconds: 1800
       max_entries: 512
 
