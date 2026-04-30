@@ -68,6 +68,23 @@ class ChatStorageInterface(ABC):
         ...
 
     @abstractmethod
+    async def get_chat_for_user_character(
+        self, user_id: str, character_id: str, chat_id: str
+    ) -> dict | None:
+        """
+        Get chat metadata by ID, scoped to a user and character.
+
+        Args:
+            user_id: User identifier
+            character_id: Character identifier
+            chat_id: Chat identifier
+
+        Returns:
+            Chat metadata dict or None if not found for this user/character
+        """
+        ...
+
+    @abstractmethod
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
         """
         Update chat metadata (e.g., title).

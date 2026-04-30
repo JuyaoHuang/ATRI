@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import NamedTuple
 
 from src.memory._io_utils import atomic_replace
@@ -17,6 +17,23 @@ class _ChatLocation(NamedTuple):
     chat: dict
 
 
+def _validate_path_component(label: str, value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    clean = value.strip()
+    path = PurePath(clean)
+    if (
+        not clean
+        or clean in {".", ".."}
+        or path.is_absolute()
+        or len(path.parts) != 1
+        or "/" in clean
+        or "\\" in clean
+    ):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return clean
+
+
 class JSONChatStorage(ChatStorageInterface):
     """JSON file-based chat storage with file system persistence."""
 
@@ -25,7 +42,9 @@ class JSONChatStorage(ChatStorageInterface):
 
     def _get_user_dir(self, user_id: str, character_id: str) -> Path:
         """Get user-character directory path."""
-        return self.base_path / user_id / character_id
+        safe_user_id = _validate_path_component("user_id", user_id)
+        safe_character_id = _validate_path_component("character_id", character_id)
+        return self.base_path / safe_user_id / safe_character_id
 
     def _get_index_path(self, user_id: str, character_id: str) -> Path:
         """Get index.json path."""
@@ -33,7 +52,8 @@ class JSONChatStorage(ChatStorageInterface):
 
     def _get_session_path(self, user_id: str, character_id: str, chat_id: str) -> Path:
         """Get session file path."""
-        return self._get_user_dir(user_id, character_id) / "sessions" / f"{chat_id}.json"
+        safe_chat_id = _validate_path_component("chat_id", chat_id)
+        return self._get_user_dir(user_id, character_id) / "sessions" / f"{safe_chat_id}.json"
 
     async def _read_json(self, path: Path) -> dict | list | None:
         """Read JSON file asynchronously."""
@@ -78,22 +98,43 @@ class JSONChatStorage(ChatStorageInterface):
         return f"{date_str}_{uuid_str}"
 
     async def _find_chat_location(
-        self, chat_id: str, user_id: str | None = None
+        self,
+        chat_id: str,
+        user_id: str | None = None,
+        character_id: str | None = None,
     ) -> _ChatLocation | None:
-        """Find a chat location, optionally scoped to one user."""
+        """Find a chat location, optionally scoped to one user/character."""
+        safe_chat_id = _validate_path_component("chat_id", chat_id)
+        safe_user_id = (
+            _validate_path_component("user_id", user_id) if user_id is not None else None
+        )
+        safe_character_id = (
+            _validate_path_component("character_id", character_id)
+            if character_id is not None
+            else None
+        )
         if not self.base_path.is_dir():
             return None
 
-        user_dirs = [self.base_path / user_id] if user_id else list(self.base_path.iterdir())
+        user_dirs = (
+            [self.base_path / safe_user_id]
+            if safe_user_id is not None
+            else list(self.base_path.iterdir())
+        )
         for user_dir in user_dirs:
             if not user_dir.is_dir():
                 continue
-            for char_dir in user_dir.iterdir():
+            char_dirs = (
+                [user_dir / safe_character_id]
+                if safe_character_id is not None
+                else list(user_dir.iterdir())
+            )
+            for char_dir in char_dirs:
                 if not char_dir.is_dir():
                     continue
                 index = await self._load_index(user_dir.name, char_dir.name)
                 for chat in index["chats"]:
-                    if chat["id"] == chat_id:
+                    if chat["id"] == safe_chat_id:
                         return _ChatLocation(user_dir.name, char_dir.name, chat)
         return None
 
@@ -130,11 +171,12 @@ class JSONChatStorage(ChatStorageInterface):
         else:
             # Aggregate across all characters
             chats = []
-            user_dir = self.base_path / user_id
+            safe_user_id = _validate_path_component("user_id", user_id)
+            user_dir = self.base_path / safe_user_id
             if user_dir.exists():
                 for char_dir in user_dir.iterdir():
                     if char_dir.is_dir():
-                        index = await self._load_index(user_id, char_dir.name)
+                        index = await self._load_index(safe_user_id, char_dir.name)
                         chats.extend(index["chats"])
 
         # Sort by updated_at descending
@@ -149,6 +191,17 @@ class JSONChatStorage(ChatStorageInterface):
     async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
         """Get chat metadata by ID, scoped to a user."""
         location = await self._find_chat_location(chat_id, user_id=user_id)
+        return location.chat if location else None
+
+    async def get_chat_for_user_character(
+        self, user_id: str, character_id: str, chat_id: str
+    ) -> dict | None:
+        """Get chat metadata by ID, scoped to one user-character index."""
+        location = await self._find_chat_location(
+            chat_id,
+            user_id=user_id,
+            character_id=character_id,
+        )
         return location.chat if location else None
 
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:

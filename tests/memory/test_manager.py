@@ -1,18 +1,18 @@
 """Tests for src/memory/manager.py -- round-driven trigger scheduling.
 
 Covers PRD US-MEM-005 acceptance criteria:
-  * 25 rounds -> no L3 trigger
-  * exactly 26 rounds -> L3 fires, one block appended
-  * 52 rounds -> L3 fires twice, two blocks
+  * 20 rounds -> no L3 trigger
+  * 40 rounds -> L3 fires, one block appended, latest 20 rounds stay raw
+  * 60 rounds -> L3 fires twice, two blocks
   * 4 blocks accumulated -> L4 fires once, meta_blocks grows, active_blocks resets
   * invalid round (ai content starts with 'Error') does not increment total
 
 针对 src/memory/manager.py 的测试——按轮次驱动的触发调度。
 
 覆盖 PRD US-MEM-005 的验收标准：
-  * 25 轮 -> 不触发 L3
-  * 恰好 26 轮 -> L3 触发一次，追加一个块
-  * 52 轮 -> L3 触发两次，两个块
+  * 39 轮 -> 不触发 L3
+  * 恰好 40 轮 -> L3 触发一次，追加一个块并保留 20 轮原文
+  * 60 轮 -> L3 触发两次，两个块并保留 20 轮原文
   * 累计 4 个块 -> L4 触发一次，meta_blocks 增长，active_blocks 重置
   * 无效轮次（ai 内容以 'Error' 开头）不增加 total_rounds
 
@@ -40,7 +40,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.memory.chat_history import ChatHistoryWriter
-from src.memory.manager import MemoryManager, _is_valid_round, resolve_user_character_dir
+from src.memory.manager import (
+    MemoryManager,
+    _is_valid_round,
+    resolve_user_character_chat_dir,
+    resolve_user_character_dir,
+)
 from src.memory.short_term import ShortTermStore
 
 # ---------------------------------------------------------------------------
@@ -58,9 +63,9 @@ def _default_config() -> dict[str, Any]:
                 "max_single_message_tokens": 800,
             },
             "collapse": {
-                "trigger_rounds": 26,
+                "trigger_rounds": 20,
                 "compress_rounds": 20,
-                "keep_recent_rounds": 6,
+                "keep_recent_rounds": 20,
             },
             "super_compact": {"trigger_blocks": 4},
             "compressor": {
@@ -166,6 +171,84 @@ def test_resolve_user_character_dir_does_not_remigrate_after_marker(tmp_path: Pa
     assert not (target / "short_term_memory.json").exists()
 
 
+def test_resolve_user_character_chat_dir_copies_character_scope_memory_once(
+    tmp_path: Path,
+) -> None:
+    characters_root = tmp_path / "characters"
+    character_dir = characters_root / "alice" / "atri"
+    character_dir.mkdir(parents=True)
+    (character_dir / "short_term_memory.json").write_text(
+        json.dumps({"session_id": "character-scope"}),
+        encoding="utf-8",
+    )
+
+    chat_dir = resolve_user_character_chat_dir(
+        {"storage": {"characters_dir": str(characters_root)}},
+        "alice",
+        "atri",
+        "chat-a",
+    )
+
+    assert chat_dir == character_dir / "chats" / "chat-a"
+    copied = json.loads((chat_dir / "short_term_memory.json").read_text(encoding="utf-8"))
+    assert copied["session_id"] == "character-scope"
+    assert (character_dir / "short_term_memory.json").is_file()
+    assert (character_dir / ".chat_scope_migrated").is_file()
+
+    chat_b = resolve_user_character_chat_dir(
+        {"storage": {"characters_dir": str(characters_root)}},
+        "alice",
+        "atri",
+        "chat-b",
+    )
+    assert not (chat_b / "short_term_memory.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("user_id", "character", "chat_id"),
+    [
+        ("../alice", "atri", "chat-a"),
+        ("alice", "../atri", "chat-a"),
+        ("alice", "atri", "../outside"),
+        ("alice", "atri", "nested/chat"),
+        ("alice", "atri", r"nested\chat"),
+        ("alice", "atri", ""),
+    ],
+)
+def test_resolve_user_character_chat_dir_rejects_unsafe_path_components(
+    tmp_path: Path,
+    user_id: str,
+    character: str,
+    chat_id: str,
+) -> None:
+    config = {"storage": {"characters_dir": str(tmp_path / "characters")}}
+
+    with pytest.raises(ValueError, match="Invalid|must be"):
+        resolve_user_character_chat_dir(config, user_id, character, chat_id)
+
+
+def test_memory_manager_chat_id_uses_chat_scoped_directory(tmp_path: Path) -> None:
+    config = {"storage": {"characters_dir": str(tmp_path / "characters")}}
+
+    chat_a = MemoryManager(
+        config,
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        chat_id="chat-a",
+    )
+    chat_b = MemoryManager(
+        config,
+        _make_factory(),
+        character="atri",
+        user_id="alice",
+        chat_id="chat-b",
+    )
+
+    assert chat_a.character_dir == tmp_path / "characters" / "alice" / "atri" / "chats" / "chat-a"
+    assert chat_b.character_dir == tmp_path / "characters" / "alice" / "atri" / "chats" / "chat-b"
+
+
 @pytest.mark.asyncio
 async def test_reset_short_term_hot_clears_memory_and_file(tmp_path: Path) -> None:
     mgr = _new_manager(tmp_path)
@@ -247,43 +330,68 @@ def test_is_valid_round_rejects_missing_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_25_rounds_does_not_trigger_l3(tmp_path: Path) -> None:
+async def test_20_rounds_does_not_trigger_l3(tmp_path: Path) -> None:
     mgr = _new_manager(tmp_path)
-    for _ in range(25):
+    for _ in range(20):
         await mgr.on_round_complete(_human(), _ai())
-    assert mgr.state["total_rounds"] == 25
+    assert mgr.state["total_rounds"] == 20
     assert mgr.state["active_blocks"] == []
     assert mgr.state["meta_blocks"] == []
-    # All 25 rounds * 2 = 50 messages stay in recent_messages.
-    # 全部 25 轮 * 2 = 50 条消息保留在 recent_messages 中。
-    assert len(mgr.state["recent_messages"]) == 50
+    assert len(mgr.state["recent_messages"]) == 40
 
 
 @pytest.mark.asyncio
-async def test_exactly_26_rounds_triggers_l3_once(tmp_path: Path) -> None:
+async def test_40_rounds_triggers_l3_once_and_keeps_latest_20(tmp_path: Path) -> None:
     mgr = _new_manager(tmp_path)
-    for _ in range(26):
-        await mgr.on_round_complete(_human(), _ai())
-    assert mgr.state["total_rounds"] == 26
+    for index in range(40):
+        await mgr.on_round_complete(_human(f"h{index + 1}"), _ai(f"a{index + 1}"))
+    assert mgr.state["total_rounds"] == 40
     assert len(mgr.state["active_blocks"]) == 1
     assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
-    # 20 rounds compressed -> 40 head msgs popped; 6 rounds remain = 12 msgs.
-    # 压缩 20 轮 -> 弹出头部 40 条消息；余下 6 轮 = 12 条消息。
-    assert len(mgr.state["recent_messages"]) == 12
+    assert len(mgr.state["recent_messages"]) == 40
+    assert mgr.state["recent_messages"][0]["content"] == "h21"
+    assert mgr.state["recent_messages"][-1]["content"] == "a40"
 
 
 @pytest.mark.asyncio
-async def test_52_rounds_triggers_l3_twice(tmp_path: Path) -> None:
+async def test_41_rounds_keeps_l3_plus_latest_21_raw_rounds(tmp_path: Path) -> None:
     mgr = _new_manager(tmp_path)
-    for _ in range(52):
-        await mgr.on_round_complete(_human(), _ai())
-    assert mgr.state["total_rounds"] == 52
+    for index in range(41):
+        await mgr.on_round_complete(_human(f"h{index + 1}"), _ai(f"a{index + 1}"))
+    assert mgr.state["total_rounds"] == 41
+    assert len(mgr.state["active_blocks"]) == 1
+    assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
+    assert len(mgr.state["recent_messages"]) == 42
+    assert mgr.state["recent_messages"][0]["content"] == "h21"
+    assert mgr.state["recent_messages"][-1]["content"] == "a41"
+
+
+@pytest.mark.asyncio
+async def test_60_rounds_triggers_l3_twice_and_keeps_latest_20(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    for index in range(60):
+        await mgr.on_round_complete(_human(f"h{index + 1}"), _ai(f"a{index + 1}"))
+    assert mgr.state["total_rounds"] == 60
     assert len(mgr.state["active_blocks"]) == 2
     assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
     assert mgr.state["active_blocks"][1]["covers_rounds"] == [21, 40]
-    # 12 rounds remain = 24 msgs (52 total - 40 compressed).
-    # 余下 12 轮 = 24 条消息（总计 52 - 压缩 40）。
-    assert len(mgr.state["recent_messages"]) == 24
+    assert len(mgr.state["recent_messages"]) == 40
+    assert mgr.state["recent_messages"][0]["content"] == "h41"
+    assert mgr.state["recent_messages"][-1]["content"] == "a60"
+
+
+@pytest.mark.asyncio
+async def test_78_rounds_keeps_latest_38_raw_rounds(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    for index in range(78):
+        await mgr.on_round_complete(_human(f"h{index + 1}"), _ai(f"a{index + 1}"))
+    assert mgr.state["total_rounds"] == 78
+    assert len(mgr.state["active_blocks"]) == 2
+    assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
+    assert mgr.state["active_blocks"][1]["covers_rounds"] == [21, 40]
+    assert len(mgr.state["recent_messages"]) == 76
+    assert mgr.state["recent_messages"][0]["content"] == "h41"
+    assert mgr.state["recent_messages"][-1]["content"] == "a78"
 
 
 @pytest.mark.asyncio
@@ -293,11 +401,9 @@ async def test_four_blocks_trigger_l4(tmp_path: Path) -> None:
     累计 4 个 L3 块 -> L4 触发，消耗全部 4 个块。
     """
     mgr = _new_manager(tmp_path)
-    # 104 rounds = four L3 triggers at rounds 26, 52, 78, 104.
-    # 104 轮 = 分别在第 26、52、78、104 轮触发 4 次 L3。
-    for _ in range(104):
+    for _ in range(100):
         await mgr.on_round_complete(_human(), _ai())
-    assert mgr.state["total_rounds"] == 104
+    assert mgr.state["total_rounds"] == 100
     # After 4 L3 triggers the active_blocks hit 4, L4 consumed them.
     # 4 次 L3 触发后 active_blocks 达到 4，L4 将其全部消耗。
     assert mgr.state["active_blocks"] == []
@@ -385,9 +491,7 @@ async def test_llm_factory_called_with_configured_roles(tmp_path: Path) -> None:
         return shared
 
     mgr = _new_manager(tmp_path, factory=factory)
-    # Up to round 26 -> triggers L3 once
-    # 执行到第 26 轮 -> 触发一次 L3
-    for _ in range(26):
+    for _ in range(40):
         await mgr.on_round_complete(_human(), _ai())
     assert seen.count("l3_compress") == 1
     assert "l4_compact" not in seen
@@ -425,7 +529,7 @@ async def test_l3_trigger_calls_long_term_add(tmp_path: Path) -> None:
         character_dir=tmp_path,
         long_term=long_term,
     )
-    for _ in range(26):
+    for _ in range(40):
         await mgr.on_round_complete(_human(), _ai())
 
     # L3 fired exactly once -> long_term.add awaited exactly once.
@@ -451,9 +555,9 @@ async def test_no_long_term_injection_skips_mem0_call(tmp_path: Path) -> None:
     """
     # long_term 默认为 None
     mgr = _new_manager(tmp_path)  # long_term defaults to None
-    for _ in range(26):
+    for _ in range(40):
         await mgr.on_round_complete(_human(), _ai())
-    assert mgr.state["total_rounds"] == 26
+    assert mgr.state["total_rounds"] == 40
     assert len(mgr.state["active_blocks"]) == 1
 
 
@@ -811,33 +915,33 @@ async def test_resume_behind_catches_up_tail(tmp_path: Path) -> None:
     # 尾部内容来自 chat_history 中追加的消息对。
     assert mgr.state["recent_messages"][-2]["content"] == "h11"
     assert mgr.state["recent_messages"][-1]["content"] == "a11"
-    # No L3 boundary crossed (12 < 26), no long_term.add invoked.
-    # 未越过 L3 边界（12 < 26），故 long_term.add 未被调用。
+    # No L3 boundary crossed (12 < 40), no long_term.add invoked.
+    # 未越过 L3 边界（12 < 40），故 long_term.add 未被调用。
     long_term.add.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_resume_on_boundary_triggers_l3(tmp_path: Path) -> None:
-    """Stored total_rounds=20, chat_history=26 -> replay lands on 26 => L3 fires.
+    """Stored total_rounds=20, chat_history=40 -> replay keeps 20 raw rounds and fires L3.
 
-    已存 total_rounds=20，chat_history=26 -> 重放至 26 => L3 触发。
+    已存 total_rounds=20，chat_history=40 -> 重放至 40 => L3 触发。
     """
     session_id = "2026-04-19_c0ffee01"
-    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=20, chat_rounds=26)
+    _seed_session_files(tmp_path, session_id, "atri", stored_rounds=20, chat_rounds=40)
     mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
 
     await mgr.resume_session(session_id)
 
-    assert mgr.state["total_rounds"] == 26
+    assert mgr.state["total_rounds"] == 40
     assert len(mgr.state["active_blocks"]) == 1
     assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
     # L3 trigger -> long_term.add invoked once with the 40-msg compress window.
     # L3 触发 -> long_term.add 被调用一次，传入 40 条消息的压缩窗口。
     long_term.add.assert_awaited_once()
     assert len(long_term.add.call_args.args[0]) == 40
-    # 6 rounds remain raw = 12 msgs.
-    # 保留 6 轮原始消息 = 12 条。
-    assert len(mgr.state["recent_messages"]) == 12
+    # 20 rounds remain raw = 40 msgs.
+    # 保留 20 轮原始消息 = 40 条。
+    assert len(mgr.state["recent_messages"]) == 40
 
 
 @pytest.mark.asyncio
@@ -852,20 +956,20 @@ async def test_resume_corrupt_json_rebuilds_from_chat_history(tmp_path: Path) ->
         session_id,
         "atri",
         stored_rounds=0,
-        chat_rounds=26,
+        chat_rounds=40,
         short_term_body='{"this is not": valid json',
     )
     mgr, long_term = _make_manager_with_mock_long_term(tmp_path)
 
     await mgr.resume_session(session_id)
 
-    assert mgr.state["total_rounds"] == 26
+    assert mgr.state["total_rounds"] == 40
     assert len(mgr.state["active_blocks"]) == 1
     assert mgr.state["active_blocks"][0]["covers_rounds"] == [1, 20]
     # Rebuild replays L3 windows through long_term.add for idempotency.
     # 重建时通过 long_term.add 重放 L3 窗口以保证幂等性。
     long_term.add.assert_awaited_once()
-    assert len(mgr.state["recent_messages"]) == 12
+    assert len(mgr.state["recent_messages"]) == 40
 
 
 @pytest.mark.asyncio

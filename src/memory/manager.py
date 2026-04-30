@@ -7,8 +7,8 @@ Responsibilities (Phase 3 Step 5 + Step 6 scope, per US-MEM-005/006):
   error rounds so the frontend can render them).
 * Track ``total_rounds`` and maintain ``recent_messages`` -- valid rounds
   only, per §3.2 round definition.
-* Trigger L3 Collapse every ``trigger_rounds`` (compress the oldest
-  ``compress_rounds`` rounds in ``recent_messages``). When a
+* Trigger L3 Collapse when ``recent_messages`` holds enough raw rounds to
+  both compress ``compress_rounds`` and still keep ``keep_recent_rounds``. When a
   :class:`LongTermMemory` is injected, the same raw window is persisted to
   mem0 via ``long_term.add`` (best-effort; errors log WARNING but never
   break the round).
@@ -31,8 +31,8 @@ Memory Manager——按轮次编排短期记忆。
   以便前端渲染）。
 * 跟踪 ``total_rounds`` 并维护 ``recent_messages``——仅统计有效轮次，
   轮次定义参见 §3.2。
-* 每 ``trigger_rounds`` 触发一次 L3 Collapse（压缩 ``recent_messages``
-  中最早的 ``compress_rounds`` 轮）。当注入了 :class:`LongTermMemory`
+* 当 ``recent_messages`` 中原始轮次足够同时压缩 ``compress_rounds`` 并保留
+  ``keep_recent_rounds`` 时触发 L3 Collapse。当注入了 :class:`LongTermMemory`
   时，同一原始窗口会通过 ``long_term.add`` 持久化到 mem0（尽力而为；
   失败仅记录 WARNING，绝不中断当前轮次）。
 * 当 ``len(active_blocks) >= trigger_blocks`` 时触发 L4 Super-Compact。
@@ -53,7 +53,7 @@ import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html import escape
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from loguru import logger
@@ -70,6 +70,24 @@ LLMFactoryFn = Callable[[str], LLMInterface]
 _SHORT_TERM_FILENAME = "short_term_memory.json"
 _SESSIONS_SUBDIR = "sessions"
 _LEGACY_MIGRATION_MARKER = ".legacy_migrated"
+_CHAT_SCOPE_MIGRATION_MARKER = ".chat_scope_migrated"
+
+
+def _validate_path_component(label: str, value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    clean = value.strip()
+    path = PurePath(clean)
+    if (
+        not clean
+        or clean in {".", ".."}
+        or path.is_absolute()
+        or len(path.parts) != 1
+        or "/" in clean
+        or "\\" in clean
+    ):
+        raise ValueError(f"Invalid {label}: {value!r}")
+    return clean
 
 
 def _new_session_id() -> str:
@@ -98,18 +116,21 @@ def resolve_user_character_dir(
     fallback backup.
     """
 
+    safe_user_id = _validate_path_component("user_id", user_id)
+    safe_character = _validate_path_component("character", character)
     chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
-    character_dir = chars_root / user_id / character
+    character_dir = chars_root / safe_user_id / safe_character
     if migrate_legacy:
-        _migrate_legacy_character_memory(chars_root / character, character_dir)
+        _migrate_legacy_character_memory(chars_root / safe_character, character_dir)
     return character_dir
 
 
 def legacy_character_dir(memory_config: dict[str, Any], character: str) -> Path:
     """Return the pre-user-scope memory directory for ``character``."""
 
+    safe_character = _validate_path_component("character", character)
     chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
-    return chars_root / character
+    return chars_root / safe_character
 
 
 def _migrate_legacy_character_memory(legacy_dir: Path, target_dir: Path) -> None:
@@ -149,6 +170,70 @@ def _migrate_legacy_character_memory(legacy_dir: Path, target_dir: Path) -> None
             "Legacy character memory copied | legacy={} | target={} | items={}",
             legacy_dir,
             target_dir,
+            ",".join(migrated_items),
+        )
+
+
+def resolve_user_character_chat_dir(
+    memory_config: dict[str, Any],
+    user_id: str,
+    character: str,
+    chat_id: str,
+    *,
+    migrate_legacy: bool = True,
+) -> Path:
+    """Return the chat-scoped local memory directory for a character chat."""
+
+    safe_chat_id = _validate_path_component("chat_id", chat_id)
+    character_dir = resolve_user_character_dir(
+        memory_config,
+        user_id,
+        character,
+        migrate_legacy=migrate_legacy,
+    )
+    chat_dir = character_dir / "chats" / safe_chat_id
+    if migrate_legacy:
+        _migrate_character_scope_memory_to_chat(character_dir, chat_dir)
+    return chat_dir
+
+
+def _migrate_character_scope_memory_to_chat(character_dir: Path, chat_dir: Path) -> None:
+    if not character_dir.is_dir():
+        return
+
+    marker_path = character_dir / _CHAT_SCOPE_MIGRATION_MARKER
+    if marker_path.exists():
+        return
+
+    source_short_term = character_dir / _SHORT_TERM_FILENAME
+    source_sessions = character_dir / _SESSIONS_SUBDIR
+    target_short_term = chat_dir / _SHORT_TERM_FILENAME
+    target_sessions = chat_dir / _SESSIONS_SUBDIR
+    migrated_items: list[str] = []
+    handled_legacy = False
+
+    if source_short_term.is_file():
+        if not target_short_term.exists():
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_short_term, target_short_term)
+            migrated_items.append(_SHORT_TERM_FILENAME)
+        handled_legacy = target_short_term.exists()
+
+    if source_sessions.is_dir():
+        if not target_sessions.exists():
+            chat_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_sessions, target_sessions)
+            migrated_items.append(_SESSIONS_SUBDIR)
+        handled_legacy = handled_legacy or target_sessions.exists()
+
+    if handled_legacy:
+        marker_path.touch(exist_ok=True)
+
+    if migrated_items:
+        logger.info(
+            "Character-scoped memory copied to chat scope | legacy={} | target={} | items={}",
+            character_dir,
+            chat_dir,
             ",".join(migrated_items),
         )
 
@@ -248,7 +333,7 @@ class MemoryManager:
       1. L1 snip the user message.
       2. Append both turns to chat_history (regardless of round validity).
       3. Update ``recent_messages`` + ``total_rounds`` (valid rounds only).
-      4. Trigger L3 Collapse when ``total_rounds % trigger_rounds == 0``.
+      4. Trigger L3 Collapse once the raw tail can keep K rounds and compress M rounds.
       5. Trigger L4 Super-Compact when ``len(active_blocks) >= trigger_blocks``.
       6. Persist via :class:`ShortTermStore` once per round.
 
@@ -262,7 +347,7 @@ class MemoryManager:
       1. 对用户消息执行 L1 snip。
       2. 将双方消息追加到 chat_history（无论轮次是否有效）。
       3. 更新 ``recent_messages`` + ``total_rounds``（仅统计有效轮次）。
-      4. 当 ``total_rounds % trigger_rounds == 0`` 时触发 L3 Collapse。
+      4. 当原始尾部足够保留 K 轮并压缩 M 轮时触发 L3 Collapse。
       5. 当 ``len(active_blocks) >= trigger_blocks`` 时触发 L4 Super-Compact。
       6. 每轮通过 :class:`ShortTermStore` 持久化一次。
 
@@ -277,6 +362,7 @@ class MemoryManager:
         llm_factory_fn: LLMFactoryFn,
         character: str,
         user_id: str,
+        chat_id: str | None = None,
         character_dir: Path | None = None,
         long_term: LongTermMemory | None = None,
     ) -> None:
@@ -284,6 +370,7 @@ class MemoryManager:
         self.llm_factory_fn = llm_factory_fn
         self.character = character
         self.user_id = user_id
+        self.chat_id = chat_id
         self.long_term = long_term
 
         short_term_cfg = memory_config.get("short_term", {})
@@ -308,7 +395,15 @@ class MemoryManager:
         self._last_long_term_search_round: int | None = None
 
         if character_dir is None:
-            character_dir = resolve_user_character_dir(memory_config, user_id, character)
+            if chat_id is None:
+                character_dir = resolve_user_character_dir(memory_config, user_id, character)
+            else:
+                character_dir = resolve_user_character_chat_dir(
+                    memory_config,
+                    user_id,
+                    character,
+                    chat_id,
+                )
         self.character_dir = Path(character_dir)
 
         self._active_session_id: str | None = None
@@ -412,9 +507,11 @@ class MemoryManager:
         self._state = ShortTermStore.get_skeleton(session_id, self.character)
         self._dirty = False
         logger.info(
-            "MemoryManager short-term state reset | character={} | user_id={} | session_id={}",
+            "MemoryManager short-term state reset | character={} | user_id={} | "
+            "chat_id={} | session_id={}",
             self.character,
             self.user_id,
+            self.chat_id,
             session_id,
         )
 
@@ -599,11 +696,7 @@ class MemoryManager:
             state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
             state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
 
-            total = int(state["total_rounds"])
-            if total > 0 and total % self.trigger_rounds == 0:
-                await self._trigger_l3()
-            if len(state["active_blocks"]) >= self.trigger_blocks:
-                await self._trigger_l4()
+            await self._maybe_trigger_l3()
 
         self.short_term_store.save(state)
         # Catch-up only replays already-persisted chat_history; no new data
@@ -648,11 +741,7 @@ class MemoryManager:
             state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
             state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
 
-            total = int(state["total_rounds"])
-            if total > 0 and total % self.trigger_rounds == 0:
-                await self._trigger_l3()
-            if len(state["active_blocks"]) >= self.trigger_blocks:
-                await self._trigger_l4()
+            await self._maybe_trigger_l3()
 
         self.short_term_store.save(state)
         self._dirty = False
@@ -738,12 +827,7 @@ class MemoryManager:
             self._state["total_rounds"] = int(self._state.get("total_rounds", 0)) + 1
             self._dirty = True
 
-        total_rounds: int = int(self._state["total_rounds"])
-        if total_rounds > 0 and total_rounds % self.trigger_rounds == 0:
-            await self._trigger_l3()
-
-        if len(self._state["active_blocks"]) >= self.trigger_blocks:
-            await self._trigger_l4()
+        await self._maybe_trigger_l3()
 
         self.short_term_store.save(self._state)
 
@@ -798,6 +882,16 @@ class MemoryManager:
             if end > max_end:
                 max_end = end
         return max_end + 1
+
+    async def _maybe_trigger_l3(self) -> None:
+        assert self._state is not None
+        recent: list[dict[str, Any]] = self._state["recent_messages"]
+        required_rounds = self.keep_recent_rounds + self.compress_rounds
+        required_messages = required_rounds * 2
+        while len(recent) >= required_messages:
+            await self._trigger_l3()
+            if len(self._state["active_blocks"]) >= self.trigger_blocks:
+                await self._trigger_l4()
 
     async def _trigger_l3(self) -> None:
         assert self._state is not None
@@ -993,4 +1087,10 @@ class MemoryManager:
         return messages
 
 
-__all__ = ["MemoryManager", "LLMFactoryFn"]
+__all__ = [
+    "MemoryManager",
+    "LLMFactoryFn",
+    "legacy_character_dir",
+    "resolve_user_character_chat_dir",
+    "resolve_user_character_dir",
+]

@@ -10,7 +10,7 @@ Startup sequence:
 2. ``load_config()`` on ``config.yaml``
 3. Resolve LLM roles (chat / l3_compress / l4_compact / title_gen) for logging
 4. Construct :class:`ServiceContext` (holds config, empty agent cache)
-5. ``ctx.get_or_create_agent("atri", user_id="main_demo")`` to build one
+5. ``ctx.get_or_create_agent("atri", user_id="main_demo", chat_id="main_demo")`` to build one
    ChatAgent end-to-end (Persona + LongTermMemory + MemoryManager + LLM)
 6. Log ``ChatAgent ready | character=atri | persona={name} | long_term={on|off}``
 7. Create FastAPI app via ``create_app(config)``
@@ -52,6 +52,7 @@ _DEFAULT_ENV = _REPO_ROOT / ".env"
 _LLM_ROLES = ("chat", "l3_compress", "l4_compact", "title_gen")
 _DEMO_CHARACTER = "atri"
 _DEMO_USER_ID = "main_demo"
+_DEMO_CHAT_ID = "main_demo"
 
 
 def main() -> None:
@@ -96,7 +97,11 @@ def main() -> None:
         ctx = None
         try:
             ctx = ServiceContext(config)
-            agent = ctx.get_or_create_agent(_DEMO_CHARACTER, user_id=_DEMO_USER_ID)
+            agent = ctx.get_or_create_agent(
+                _DEMO_CHARACTER,
+                user_id=_DEMO_USER_ID,
+                chat_id=_DEMO_CHAT_ID,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.error("ServiceContext / ChatAgent construction failed | error={!r}", exc)
             if ctx:

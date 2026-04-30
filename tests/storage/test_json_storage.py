@@ -109,6 +109,28 @@ async def test_get_chat_for_user_does_not_cross_user_boundary(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_chat_for_user_character_does_not_cross_character_boundary(tmp_path):
+    """Character-scoped lookup should only read one character index."""
+    storage = JSONChatStorage(base_path=str(tmp_path))
+    created = await storage.create_chat("user1", "atri", "Test")
+    await storage.create_chat("user1", "other", "Other")
+
+    assert await storage.get_chat_for_user_character("user1", "atri", created["id"]) is not None
+    assert await storage.get_chat_for_user_character("user1", "other", created["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_get_chat_for_user_character_rejects_unsafe_path_components(tmp_path):
+    """Character-scoped lookup should reject traversal before touching paths."""
+    storage = JSONChatStorage(base_path=str(tmp_path))
+
+    with pytest.raises(ValueError, match="Invalid"):
+        await storage.get_chat_for_user_character("user1", "atri", "../outside")
+    with pytest.raises(ValueError, match="Invalid"):
+        await storage.get_chat_for_user_character("user1", "../atri", "chat-a")
+
+
+@pytest.mark.asyncio
 async def test_update_chat_modifies_title(tmp_path):
     """Test update_chat changes title and updates updated_at."""
     storage = JSONChatStorage(base_path=str(tmp_path))

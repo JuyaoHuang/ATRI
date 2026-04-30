@@ -95,9 +95,9 @@ def _memory_config_sdk(mem0_api_key: str) -> dict[str, Any]:
                 "max_single_message_tokens": 800,
             },
             "collapse": {
-                "trigger_rounds": 26,
+                "trigger_rounds": 20,
                 "compress_rounds": 20,
-                "keep_recent_rounds": 6,
+                "keep_recent_rounds": 20,
             },
             "super_compact": {"trigger_blocks": 4},
             "compressor": {

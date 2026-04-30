@@ -2,16 +2,17 @@
 
 One ServiceContext per process. It holds the merged config (from
 :func:`src.utils.config_loader.load_config`) and lazily constructs one
-:class:`src.agent.chat_agent.ChatAgent` per ``(character_id, user_id)``
-pair, caching each instance so subsequent requests reuse the same memory
-state. Phase 5 FastAPI WebSocket handlers will route by ``character_id``
-from the frontend session and call :meth:`get_or_create_agent`.
+:class:`src.agent.chat_agent.ChatAgent` per ``(character_id, user_id, chat_id)``
+tuple, caching each instance so subsequent requests reuse the same short-term
+memory state for that chat. Long-term memory handles are shared per
+``(character_id, user_id)`` so facts remain cross-chat for the same character.
 
 Key invariants (per docs/Phase4_执行规格.md §US-AGT-005 and decision S3):
 
-* Cache key is the **tuple** ``(character_id, user_id)`` -- same character
-  accessed by two users yields two independent :class:`MemoryManager`
-  instances (distinct ``user_id`` -> distinct mem0 filters).
+* Agent cache key is the **tuple** ``(character_id, user_id, chat_id)`` -- same
+  user/character in two chats gets two independent short-term memories.
+* Long-term memory cache key is ``(character_id, user_id)`` -- facts remain
+  shared across chats while still using distinct mem0 filters per user.
 * ``_safe_build_long_term`` is best-effort: if mem0 construction fails
   (missing API key, Qdrant unreachable, etc.) it logs a WARNING and returns
   ``None``; the resulting ChatAgent still works with short-term memory only.
@@ -24,16 +25,18 @@ docs/LLM调用层设计讨论.md §2.3 (role-based LLMFactory).
 ServiceContext——ChatAgent 生命周期的顶层拥有者（Phase 4，US-AGT-005）。
 
 每个进程持有一个 ServiceContext。它保存合并后的配置（来自
-:func:`src.utils.config_loader.load_config`），并按 ``(character_id, user_id)``
-元组懒加载构造 :class:`src.agent.chat_agent.ChatAgent`，缓存实例，使后续请求
-复用同一份记忆状态。Phase 5 的 FastAPI WebSocket 处理器将根据前端会话的
-``character_id`` 路由并调用 :meth:`get_or_create_agent`。
+:func:`src.utils.config_loader.load_config`），并按
+``(character_id, user_id, chat_id)`` 元组懒加载构造
+:class:`src.agent.chat_agent.ChatAgent`，缓存实例，使后续请求复用该聊天的短期
+记忆状态。长期记忆句柄按 ``(character_id, user_id)`` 共享，使同一角色下不同
+聊天标题共享长期事实。
 
 关键不变式（对齐 docs/Phase4_执行规格.md §US-AGT-005 和决策 S3）：
 
-* 缓存键是 ``(character_id, user_id)`` **元组**——同一角色被两个用户访问
-  会得到两个独立的 :class:`MemoryManager` 实例（不同的 ``user_id`` 对应
-  不同的 mem0 过滤器）。
+* Agent 缓存键是 ``(character_id, user_id, chat_id)`` **元组**——同一用户、
+  同一角色的不同聊天标题会得到独立的短期记忆。
+* 长期记忆缓存键是 ``(character_id, user_id)``——同一角色下不同聊天标题共享
+  长期事实，同时不同用户仍对应不同 mem0 过滤器。
 * ``_safe_build_long_term`` 尽力而为：若 mem0 构造失败（缺 API key、
   Qdrant 不可达等），记录 WARNING 并返回 ``None``；生成的 ChatAgent 仍能
   基于短期记忆工作。
@@ -52,7 +55,12 @@ from src.agent.persona import load_persona
 from src.llm.factory import create_from_role
 from src.llm.interface import LLMInterface
 from src.memory.long_term import LongTermMemory
-from src.memory.manager import MemoryManager, legacy_character_dir, resolve_user_character_dir
+from src.memory.manager import (
+    MemoryManager,
+    legacy_character_dir,
+    resolve_user_character_chat_dir,
+    resolve_user_character_dir,
+)
 
 
 def _safe_build_long_term(mem0_config: dict[str, Any]) -> LongTermMemory | None:
@@ -109,44 +117,46 @@ class ServiceContext:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self._agents: dict[tuple[str, str], ChatAgent] = {}
+        self._agents: dict[tuple[str, str, str], ChatAgent] = {}
+        self._long_term_memories: dict[tuple[str, str], LongTermMemory] = {}
 
-    def get_or_create_agent(self, character_id: str, user_id: str) -> ChatAgent:
-        """Return the cached agent for ``(character_id, user_id)`` or build a new one.
+    def get_or_create_agent(self, character_id: str, user_id: str, chat_id: str) -> ChatAgent:
+        """Return the cached agent for ``(character_id, user_id, chat_id)`` or build one.
 
         Creation path (US-AGT-005 PRD):
           1. ``persona = load_persona(character_id)``
-          2. ``long_term = _safe_build_long_term(config['memory']['mem0'])``
+          2. ``long_term = _get_or_create_long_term(character_id, user_id)``
           3. Build ``llm_factory_fn`` closure that defers to
              :func:`create_from_role` with the full ``llm`` config.
           4. Construct ``MemoryManager(config['memory'], llm_factory_fn,
-             character=character_id, user_id=user_id, long_term=long_term)``.
+             character=character_id, user_id=user_id, chat_id=chat_id,
+             long_term=long_term)``.
           5. Build the main-chat LLM via ``create_from_role('chat', ...)``.
           6. ``agent = ChatAgent(chat_llm, mgr, persona)``.
 
-        返回 ``(character_id, user_id)`` 对应的缓存 Agent；未命中则新建。
+        返回 ``(character_id, user_id, chat_id)`` 对应的缓存 Agent；未命中则新建。
 
         创建路径（US-AGT-005 PRD）：
           1. ``persona = load_persona(character_id)``
-          2. ``long_term = _safe_build_long_term(config['memory']['mem0'])``
+          2. ``long_term = _get_or_create_long_term(character_id, user_id)``
           3. 构造 ``llm_factory_fn`` 闭包，委托给携带完整 ``llm`` 配置的
              :func:`create_from_role`。
           4. 构造 ``MemoryManager(config['memory'], llm_factory_fn,
-             character=character_id, user_id=user_id, long_term=long_term)``。
+             character=character_id, user_id=user_id, chat_id=chat_id,
+             long_term=long_term)``。
           5. 通过 ``create_from_role('chat', ...)`` 构造主聊天 LLM。
           6. ``agent = ChatAgent(chat_llm, mgr, persona)``。
         """
-        key = (character_id, user_id)
+        key = (character_id, user_id, chat_id)
         cached = self._agents.get(key)
         if cached is not None:
             return cached
 
         llm_config = self.config.get("llm", {})
         memory_config = self.config.get("memory", {})
-        mem0_config = memory_config.get("mem0", {})
 
         persona = load_persona(character_id)
-        long_term = _safe_build_long_term(mem0_config)
+        long_term = self._get_or_create_long_term(character_id, user_id)
 
         def _llm_factory_fn(role: str) -> LLMInterface:
             return create_from_role(role, llm_config)
@@ -156,6 +166,7 @@ class ServiceContext:
             _llm_factory_fn,
             character=character_id,
             user_id=user_id,
+            chat_id=chat_id,
             long_term=long_term,
         )
         chat_llm = create_from_role("chat", llm_config)
@@ -163,12 +174,32 @@ class ServiceContext:
 
         self._agents[key] = agent
         logger.info(
-            "ChatAgent created | character={} | user_id={} | long_term={}",
+            "ChatAgent created | character={} | user_id={} | chat_id={} | long_term={}",
             character_id,
             user_id,
+            chat_id,
             "on" if long_term is not None else "off",
         )
         return agent
+
+    def _get_or_create_long_term(
+        self,
+        character_id: str,
+        user_id: str,
+    ) -> LongTermMemory | None:
+        """Return the shared long-term memory handle for ``(character_id, user_id)``."""
+
+        key = (character_id, user_id)
+        cached = self._long_term_memories.get(key)
+        if cached is not None:
+            return cached
+
+        memory_config = self.config.get("memory", {})
+        mem0_config = memory_config.get("mem0", {})
+        long_term = _safe_build_long_term(mem0_config)
+        if long_term is not None:
+            self._long_term_memories[key] = long_term
+        return long_term
 
     def get_character_memory_dir(self, character_id: str, user_id: str) -> str:
         """Return and migrate the user-scoped local memory directory path."""
@@ -176,21 +207,32 @@ class ServiceContext:
         memory_config = self.config.get("memory", {})
         return str(resolve_user_character_dir(memory_config, user_id, character_id))
 
+    def get_character_chat_memory_dir(
+        self,
+        character_id: str,
+        user_id: str,
+        chat_id: str,
+    ) -> str:
+        """Return and migrate the chat-scoped local memory directory path."""
+
+        memory_config = self.config.get("memory", {})
+        return str(resolve_user_character_chat_dir(memory_config, user_id, character_id, chat_id))
+
     def get_legacy_character_memory_dir(self, character_id: str) -> str:
         """Return the legacy pre-user-scope local memory directory path."""
 
         memory_config = self.config.get("memory", {})
         return str(legacy_character_dir(memory_config, character_id))
 
-    def reset_short_term_memory(self, character_id: str, user_id: str) -> bool:
-        """Hot-clear cached short-term memory for ``(character_id, user_id)``.
+    def reset_short_term_memory(self, character_id: str, user_id: str, chat_id: str) -> bool:
+        """Hot-clear cached short-term memory for ``(character_id, user_id, chat_id)``.
 
         Returns ``True`` when a cached agent existed and was reset. A ``False``
         return means the route only needs to delete persisted files because no
         in-process memory state is alive yet.
         """
 
-        agent = self._agents.get((character_id, user_id))
+        agent = self._agents.get((character_id, user_id, chat_id))
         if agent is None:
             return False
 
@@ -202,12 +244,9 @@ class ServiceContext:
         character_id: str,
         user_id: str,
     ) -> LongTermMemory | None:
-        """Return a cached agent's long-term memory handle, if one exists."""
+        """Return the cached long-term memory handle for ``(character_id, user_id)``."""
 
-        agent = self._agents.get((character_id, user_id))
-        if agent is None:
-            return None
-        return agent.memory_manager.long_term
+        return self._long_term_memories.get((character_id, user_id))
 
     async def close_all(self) -> None:
         """Flush every cached agent's session and release long-term handles.
@@ -224,25 +263,24 @@ class ServiceContext:
         会话从未接收过轮次，也可在进程关闭期间安全调用。
         """
         logger.info("ServiceContext close_all | agent_count={}", len(self._agents))
-        for key, agent in self._agents.items():
+        for agent_key, agent in self._agents.items():
             try:
                 await agent.memory_manager.close_session()
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "close_session failed during close_all | key={} error={!r}",
-                    key,
+                    agent_key,
                     exc,
                 )
-            long_term = agent.memory_manager.long_term
-            if long_term is not None:
-                try:
-                    long_term.close()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "long_term.close failed during close_all | key={} error={!r}",
-                        key,
-                        exc,
-                    )
+        for memory_key, long_term in self._long_term_memories.items():
+            try:
+                long_term.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "long_term.close failed during close_all | key={} error={!r}",
+                    memory_key,
+                    exc,
+                )
         logger.info("ServiceContext close_all complete")
 
 

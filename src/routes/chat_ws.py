@@ -160,10 +160,37 @@ async def _handle_text_input(
 
     logger.info(f"Received text input | chat_id={chat_id} | character_id={character_id}")
 
-    # Get or create ChatAgent for this character/user
-    # 获取或创建此 character/user 的 ChatAgent
     try:
-        agent = service_context.get_or_create_agent(character_id, user_id)
+        chat = await storage.get_chat_for_user_character(user_id, character_id, chat_id)
+    except ValueError as exc:
+        logger.warning(
+            "Rejected invalid chat input | user_id={} | chat_id={} | character_id={} | error={!r}",
+            user_id,
+            chat_id,
+            character_id,
+            exc,
+        )
+        await _send_error(websocket, f"Invalid chat request: {exc}", chat_id=chat_id)
+        return
+
+    if chat is None or chat.get("character_id") != character_id:
+        logger.warning(
+            "Rejected chat input for mismatched chat | user_id={} | chat_id={} | character_id={}",
+            user_id,
+            chat_id,
+            character_id,
+        )
+        await _send_error(
+            websocket,
+            f"Chat '{chat_id}' not found for character '{character_id}'",
+            chat_id=chat_id,
+        )
+        return
+
+    # Get or create ChatAgent for this character/user/chat.
+    # 获取或创建此 character/user/chat 的 ChatAgent。
+    try:
+        agent = service_context.get_or_create_agent(character_id, user_id, chat_id)
     except Exception as e:
         logger.error(f"Failed to get ChatAgent: {e}")
         await _send_error(

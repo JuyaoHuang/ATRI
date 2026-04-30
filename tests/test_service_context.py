@@ -105,9 +105,9 @@ def _make_config(characters_dir: Path) -> dict[str, Any]:
             "short_term": {
                 "snip": {"filler_words": []},
                 "collapse": {
-                    "trigger_rounds": 26,
+                    "trigger_rounds": 20,
                     "compress_rounds": 20,
-                    "keep_recent_rounds": 6,
+                    "keep_recent_rounds": 20,
                 },
                 "super_compact": {"trigger_blocks": 4},
                 "compressor": {"l3_role": "l3_compress", "l4_role": "l4_compact"},
@@ -177,11 +177,41 @@ def test_same_key_returns_same_instance(tmp_path: Path, monkeypatch: pytest.Monk
     _install_stubs(monkeypatch)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    first = ctx.get_or_create_agent("atri", "alice")
-    second = ctx.get_or_create_agent("atri", "alice")
+    first = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    second = ctx.get_or_create_agent("atri", "alice", "chat-a")
 
     assert first is second
     assert isinstance(first, ChatAgent)
+
+
+def test_same_character_user_different_chat_yields_distinct_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_stubs(monkeypatch)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    chat_a = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    chat_b = ctx.get_or_create_agent("atri", "alice", "chat-b")
+
+    assert chat_a is not chat_b
+    assert chat_a.memory_manager.chat_id == "chat-a"
+    assert chat_b.memory_manager.chat_id == "chat-b"
+    assert chat_a.memory_manager.character_dir != chat_b.memory_manager.character_dir
+
+
+def test_same_character_user_different_chat_shares_long_term(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long_term = _make_long_term_mock()
+    _install_stubs(monkeypatch, long_term=long_term)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    chat_a = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    chat_b = ctx.get_or_create_agent("atri", "alice", "chat-b")
+
+    assert chat_a.memory_manager.long_term is long_term
+    assert chat_b.memory_manager.long_term is long_term
+    assert ctx.get_cached_long_term_memory("atri", "alice") is long_term
 
 
 def test_different_character_id_yields_distinct_instances(
@@ -195,8 +225,8 @@ def test_different_character_id_yields_distinct_instances(
     _install_stubs(monkeypatch)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    atri = ctx.get_or_create_agent("atri", "alice")
-    shizuku = ctx.get_or_create_agent("shizuku", "alice")
+    atri = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    shizuku = ctx.get_or_create_agent("shizuku", "alice", "chat-a")
 
     assert atri is not shizuku
     assert atri.persona.character_id == "atri"
@@ -215,8 +245,8 @@ def test_same_character_different_user_yields_distinct_instances(
     _install_stubs(monkeypatch)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    alice_agent = ctx.get_or_create_agent("atri", "alice")
-    bob_agent = ctx.get_or_create_agent("atri", "bob")
+    alice_agent = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    bob_agent = ctx.get_or_create_agent("atri", "bob", "chat-a")
 
     assert alice_agent is not bob_agent
     assert alice_agent.memory_manager.user_id == "alice"
@@ -233,10 +263,11 @@ def test_memory_manager_wired_with_expected_character_and_user(
     _install_stubs(monkeypatch)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    agent = ctx.get_or_create_agent("atri", "alice")
+    agent = ctx.get_or_create_agent("atri", "alice", "chat-a")
 
     assert agent.memory_manager.character == "atri"
     assert agent.memory_manager.user_id == "alice"
+    assert agent.memory_manager.chat_id == "chat-a"
 
 
 def test_agent_builds_when_safe_build_long_term_returns_none(
@@ -249,9 +280,33 @@ def test_agent_builds_when_safe_build_long_term_returns_none(
     _install_stubs(monkeypatch, long_term=None)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    agent = ctx.get_or_create_agent("atri", "alice")
+    agent = ctx.get_or_create_agent("atri", "alice", "chat-a")
 
     assert agent.memory_manager.long_term is None
+
+
+def test_long_term_failure_is_not_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long_term = _make_long_term_mock()
+    calls = 0
+
+    def _fake_safe_build_long_term(mem0_config: dict[str, Any]) -> MagicMock | None:
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else long_term
+
+    _install_stubs(monkeypatch, long_term=None)
+    monkeypatch.setattr("src.service_context._safe_build_long_term", _fake_safe_build_long_term)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    first = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    second = ctx.get_or_create_agent("atri", "alice", "chat-b")
+
+    assert first.memory_manager.long_term is None
+    assert second.memory_manager.long_term is long_term
+    assert ctx.get_cached_long_term_memory("atri", "alice") is long_term
+    assert calls == 2
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +328,9 @@ async def test_close_all_awaits_close_session_on_every_agent(
     ctx = ServiceContext(_make_config(tmp_path))
 
     agents = [
-        ctx.get_or_create_agent("atri", "alice"),
-        ctx.get_or_create_agent("atri", "bob"),
-        ctx.get_or_create_agent("shizuku", "alice"),
+        ctx.get_or_create_agent("atri", "alice", "chat-a"),
+        ctx.get_or_create_agent("atri", "bob", "chat-a"),
+        ctx.get_or_create_agent("shizuku", "alice", "chat-a"),
     ]
     for agent in agents:
         agent.memory_manager.close_session = AsyncMock()
@@ -290,21 +345,21 @@ async def test_close_all_awaits_close_session_on_every_agent(
 async def test_close_all_calls_long_term_close_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """long_term.close() is called once per agent whose long_term is set.
+    """long_term.close() is called once per user/character long-term handle.
 
-    每个持有 long_term 的 agent 触发一次 long_term.close()。
+    每个 user/character 长期记忆句柄触发一次 long_term.close()。
     """
     long_term = _make_long_term_mock()
     _install_stubs(monkeypatch, long_term=long_term)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    for cid in ("atri", "shizuku"):
-        agent = ctx.get_or_create_agent(cid, "alice")
+    for args in (("atri", "alice", "chat-a"), ("atri", "alice", "chat-b")):
+        agent = ctx.get_or_create_agent(*args)
         agent.memory_manager.close_session = AsyncMock()
 
     await ctx.close_all()
 
-    assert long_term.close.call_count == 2
+    long_term.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -320,8 +375,8 @@ async def test_close_all_tolerates_close_session_raising(
     _install_stubs(monkeypatch, long_term=long_term)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    a1 = ctx.get_or_create_agent("atri", "alice")
-    a2 = ctx.get_or_create_agent("atri", "bob")
+    a1 = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    a2 = ctx.get_or_create_agent("atri", "bob", "chat-a")
     a1.memory_manager.close_session = AsyncMock(side_effect=RuntimeError("boom"))
     a2.memory_manager.close_session = AsyncMock()
 
@@ -329,8 +384,6 @@ async def test_close_all_tolerates_close_session_raising(
 
     a1.memory_manager.close_session.assert_awaited_once()
     a2.memory_manager.close_session.assert_awaited_once()
-    # long_term.close was still attempted for both agents (per-agent try/except)
-    # 两个 agent 都尝试了 long_term.close（每个 agent 独立的 try/except）
     assert long_term.close.call_count == 2
 
 
@@ -347,8 +400,8 @@ async def test_close_all_tolerates_long_term_close_raising(
     _install_stubs(monkeypatch, long_term=long_term)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    a1 = ctx.get_or_create_agent("atri", "alice")
-    a2 = ctx.get_or_create_agent("atri", "bob")
+    a1 = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    a2 = ctx.get_or_create_agent("atri", "bob", "chat-a")
     a1.memory_manager.close_session = AsyncMock()
     a2.memory_manager.close_session = AsyncMock()
 
@@ -373,7 +426,7 @@ async def test_close_all_skips_long_term_close_when_none(
     _install_stubs(monkeypatch, long_term=None)
     ctx = ServiceContext(_make_config(tmp_path))
 
-    agent = ctx.get_or_create_agent("atri", "alice")
+    agent = ctx.get_or_create_agent("atri", "alice", "chat-a")
     agent.memory_manager.close_session = AsyncMock()
 
     await ctx.close_all()

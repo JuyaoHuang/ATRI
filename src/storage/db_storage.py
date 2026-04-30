@@ -21,6 +21,11 @@ class DatabaseChatStorage(ChatStorageInterface):
     async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
+    async def get_chat_for_user_character(
+        self, user_id: str, character_id: str, chat_id: str
+    ) -> dict | None:
+        raise NotImplementedError("Database storage is reserved for Phase 7")
+
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 

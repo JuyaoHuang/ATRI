@@ -25,12 +25,13 @@ def _test_config(tmp_path: Path) -> dict[str, Any]:
     return config
 
 
-def _make_memory_manager(config: dict[str, Any]) -> MemoryManager:
+def _make_memory_manager(config: dict[str, Any], chat_id: str = "chat-a") -> MemoryManager:
     return MemoryManager(
         config["memory"],
         lambda _role: AsyncMock(),
         character="atri",
         user_id="default",
+        chat_id=chat_id,
         long_term=None,
     )
 
@@ -44,8 +45,10 @@ async def test_clear_short_term_memory_deletes_user_scoped_file_and_hot_cache(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            manager = _make_memory_manager(config)
-            app.state.service_context._agents[("atri", "default")] = SimpleNamespace(
+            await app.state.storage.create_chat("default", "atri", "chat-a")
+            chat_id = (await app.state.storage.list_chats("default", "atri"))[0]["id"]
+            manager = _make_memory_manager(config, chat_id)
+            app.state.service_context._agents[("atri", "default", chat_id)] = SimpleNamespace(
                 memory_manager=manager
             )
             assert manager.short_term_store is not None
@@ -62,11 +65,14 @@ async def test_clear_short_term_memory_deletes_user_scoped_file_and_hot_cache(
             manager.short_term_store.save(manager.state)
             assert manager.short_term_store.path.is_file()
 
-            response = await client.delete("/api/data/characters/atri/short-term-memory")
+            response = await client.delete(
+                f"/api/data/characters/atri/chats/{chat_id}/short-term-memory"
+            )
 
             assert response.status_code == 200
             data = response.json()
             assert data["target"] == "short_term_memory"
+            assert data["chat_id"] == chat_id
             assert data["details"]["cache_reset"] is True
             assert not manager.short_term_store.path.exists()
             assert manager.state["total_rounds"] == 0
@@ -96,11 +102,22 @@ async def test_clear_short_term_memory_migrates_legacy_file_before_delete(tmp_pa
     app = create_app(config)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            response = await client.delete("/api/data/characters/atri/short-term-memory")
+            await app.state.storage.create_chat("default", "atri", "chat-a")
+            chat_id = (await app.state.storage.list_chats("default", "atri"))[0]["id"]
+            response = await client.delete(
+                f"/api/data/characters/atri/chats/{chat_id}/short-term-memory"
+            )
 
     assert response.status_code == 200
-    user_scoped_path = characters_root / "default" / "atri" / "short_term_memory.json"
-    assert not user_scoped_path.exists()
+    chat_scoped_path = (
+        characters_root
+        / "default"
+        / "atri"
+        / "chats"
+        / chat_id
+        / "short_term_memory.json"
+    )
+    assert not chat_scoped_path.exists()
     assert (legacy_dir / "short_term_memory.json").is_file()
     assert (characters_root / "default" / "atri" / ".legacy_migrated").is_file()
 
@@ -127,13 +144,39 @@ async def test_clear_short_term_memory_does_not_restore_previously_migrated_lega
     app = create_app(config)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         async with app.router.lifespan_context(app):
-            response = await client.delete("/api/data/characters/atri/short-term-memory")
+            await app.state.storage.create_chat("default", "atri", "chat-a")
+            chat_id = (await app.state.storage.list_chats("default", "atri"))[0]["id"]
+            response = await client.delete(
+                f"/api/data/characters/atri/chats/{chat_id}/short-term-memory"
+            )
             assert response.status_code == 200
 
-            new_manager = _make_memory_manager(config)
+            new_manager = MemoryManager(
+                config["memory"],
+                lambda _role: AsyncMock(),
+                character="atri",
+                user_id="default",
+                chat_id=chat_id,
+                long_term=None,
+            )
 
     assert new_manager.short_term_store is not None
     assert not new_manager.short_term_store.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_clear_short_term_memory_rejects_invalid_chat_path(tmp_path: Path) -> None:
+    config = _test_config(tmp_path)
+    app = create_app(config)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with app.router.lifespan_context(app):
+            response = await client.delete(
+                "/api/data/characters/atri/chats/nested%5Coutside/short-term-memory"
+            )
+
+    assert response.status_code == 400
+    assert "Invalid" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -149,9 +192,7 @@ async def test_clear_long_term_memory_submits_mem0_delete(tmp_path: Path) -> Non
                 "event_id": "evt-test",
             }
             mock_long_term.close = lambda: None
-            app.state.service_context._agents[("atri", "default")] = SimpleNamespace(
-                memory_manager=SimpleNamespace(long_term=mock_long_term)
-            )
+            app.state.service_context._long_term_memories[("atri", "default")] = mock_long_term
 
             response = await client.delete("/api/data/characters/atri/long-term-memory")
 

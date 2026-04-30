@@ -206,9 +206,9 @@ def _build_full_config(env: dict[str, str], characters_dir: Path) -> dict[str, A
                     "max_single_message_tokens": 800,
                 },
                 "collapse": {
-                    "trigger_rounds": 26,
+                    "trigger_rounds": 20,
                     "compress_rounds": 20,
-                    "keep_recent_rounds": 6,
+                    "keep_recent_rounds": 20,
                 },
                 "super_compact": {"trigger_blocks": 4},
                 "compressor": {"l3_role": "l3_compress", "l4_role": "l4_compact"},
@@ -232,9 +232,9 @@ def _build_offline_memory_config(characters_dir: Path) -> dict[str, Any]:
         "short_term": {
             "snip": {"filler_words": []},
             "collapse": {
-                "trigger_rounds": 26,
+                "trigger_rounds": 20,
                 "compress_rounds": 20,
-                "keep_recent_rounds": 6,
+                "keep_recent_rounds": 20,
             },
             "super_compact": {"trigger_blocks": 4},
             "compressor": {"l3_role": "l3_compress", "l4_role": "l4_compact"},
@@ -256,7 +256,7 @@ async def test_live_chat_agent_ten_rounds(tmp_path: Path) -> None:
     Structural assertions (after 10 rounds, before probes):
       * chat_history.json has exactly 21 JSON objects (1 metadata + 10 human + 10 ai)
       * short_term_memory.json: total_rounds=10, recent_messages len=20,
-        active_blocks and meta_blocks both empty (L3 trigger=26, not reached)
+        active_blocks and meta_blocks both empty (raw tail has not reached 40 rounds)
 
     Recall probes (round 11, 12) drive the real LLM and assert the user
     facts revealed in round 1 are still reachable via ``recent_messages``
@@ -278,7 +278,7 @@ async def test_live_chat_agent_ten_rounds(tmp_path: Path) -> None:
     config = _build_full_config(env, tmp_path)
 
     ctx = ServiceContext(config)
-    agent = ctx.get_or_create_agent("atri", user_id="pytest_alice")
+    agent = ctx.get_or_create_agent("atri", user_id="pytest_alice", chat_id="live-test")
 
     conversations = [
         "我叫 Alice，最爱喝珍珠奶茶",
