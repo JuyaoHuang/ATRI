@@ -7,8 +7,8 @@ Responsibilities (Phase 3 Step 5 + Step 6 scope, per US-MEM-005/006):
   error rounds so the frontend can render them).
 * Track ``total_rounds`` and maintain ``recent_messages`` -- valid rounds
   only, per §3.2 round definition.
-* Trigger L3 Collapse every ``trigger_rounds`` (compress the oldest
-  ``compress_rounds`` rounds in ``recent_messages``). When a
+* Trigger L3 Collapse when ``recent_messages`` holds enough raw rounds to
+  both compress ``compress_rounds`` and still keep ``keep_recent_rounds``. When a
   :class:`LongTermMemory` is injected, the same raw window is persisted to
   mem0 via ``long_term.add`` (best-effort; errors log WARNING but never
   break the round).
@@ -31,8 +31,8 @@ Memory Manager——按轮次编排短期记忆。
   以便前端渲染）。
 * 跟踪 ``total_rounds`` 并维护 ``recent_messages``——仅统计有效轮次，
   轮次定义参见 §3.2。
-* 每 ``trigger_rounds`` 触发一次 L3 Collapse（压缩 ``recent_messages``
-  中最早的 ``compress_rounds`` 轮）。当注入了 :class:`LongTermMemory`
+* 当 ``recent_messages`` 中原始轮次足够同时压缩 ``compress_rounds`` 并保留
+  ``keep_recent_rounds`` 时触发 L3 Collapse。当注入了 :class:`LongTermMemory`
   时，同一原始窗口会通过 ``long_term.add`` 持久化到 mem0（尽力而为；
   失败仅记录 WARNING，绝不中断当前轮次）。
 * 当 ``len(active_blocks) >= trigger_blocks`` 时触发 L4 Super-Compact。
@@ -312,7 +312,7 @@ class MemoryManager:
       1. L1 snip the user message.
       2. Append both turns to chat_history (regardless of round validity).
       3. Update ``recent_messages`` + ``total_rounds`` (valid rounds only).
-      4. Trigger L3 Collapse when ``total_rounds % trigger_rounds == 0``.
+      4. Trigger L3 Collapse once the raw tail can keep K rounds and compress M rounds.
       5. Trigger L4 Super-Compact when ``len(active_blocks) >= trigger_blocks``.
       6. Persist via :class:`ShortTermStore` once per round.
 
@@ -326,7 +326,7 @@ class MemoryManager:
       1. 对用户消息执行 L1 snip。
       2. 将双方消息追加到 chat_history（无论轮次是否有效）。
       3. 更新 ``recent_messages`` + ``total_rounds``（仅统计有效轮次）。
-      4. 当 ``total_rounds % trigger_rounds == 0`` 时触发 L3 Collapse。
+      4. 当原始尾部足够保留 K 轮并压缩 M 轮时触发 L3 Collapse。
       5. 当 ``len(active_blocks) >= trigger_blocks`` 时触发 L4 Super-Compact。
       6. 每轮通过 :class:`ShortTermStore` 持久化一次。
 
@@ -674,11 +674,7 @@ class MemoryManager:
             state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
             state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
 
-            total = int(state["total_rounds"])
-            if total > 0 and total % self.trigger_rounds == 0:
-                await self._trigger_l3()
-            if len(state["active_blocks"]) >= self.trigger_blocks:
-                await self._trigger_l4()
+            await self._maybe_trigger_l3()
 
         self.short_term_store.save(state)
         # Catch-up only replays already-persisted chat_history; no new data
@@ -723,11 +719,7 @@ class MemoryManager:
             state["recent_messages"].append({"role": "ai", "content": ai_msg.get("content", "")})
             state["total_rounds"] = int(state.get("total_rounds", 0)) + 1
 
-            total = int(state["total_rounds"])
-            if total > 0 and total % self.trigger_rounds == 0:
-                await self._trigger_l3()
-            if len(state["active_blocks"]) >= self.trigger_blocks:
-                await self._trigger_l4()
+            await self._maybe_trigger_l3()
 
         self.short_term_store.save(state)
         self._dirty = False
@@ -813,12 +805,7 @@ class MemoryManager:
             self._state["total_rounds"] = int(self._state.get("total_rounds", 0)) + 1
             self._dirty = True
 
-        total_rounds: int = int(self._state["total_rounds"])
-        if total_rounds > 0 and total_rounds % self.trigger_rounds == 0:
-            await self._trigger_l3()
-
-        if len(self._state["active_blocks"]) >= self.trigger_blocks:
-            await self._trigger_l4()
+        await self._maybe_trigger_l3()
 
         self.short_term_store.save(self._state)
 
@@ -873,6 +860,16 @@ class MemoryManager:
             if end > max_end:
                 max_end = end
         return max_end + 1
+
+    async def _maybe_trigger_l3(self) -> None:
+        assert self._state is not None
+        recent: list[dict[str, Any]] = self._state["recent_messages"]
+        required_rounds = self.keep_recent_rounds + self.compress_rounds
+        required_messages = required_rounds * 2
+        while len(recent) >= required_messages:
+            await self._trigger_l3()
+            if len(self._state["active_blocks"]) >= self.trigger_blocks:
+                await self._trigger_l4()
 
     async def _trigger_l3(self) -> None:
         assert self._state is not None
