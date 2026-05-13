@@ -30,7 +30,7 @@
 llm_configs:
   # 主聊天模型配置（供 chat 角色使用）
   chat_main:
-    provider: siliconflow        # 提供商名称，须与工厂注册名一致
+    provider: xiaomi        # 提供商名称，须与工厂注册名一致
     providers:
       openai_compatible:
         model: deepseek-ai/DeepSeek-V4-Flash                   # 模型名称
@@ -39,7 +39,7 @@ llm_configs:
         temperature: 0.8                   # 采样温度(DS默认0-1)
 
       siliconflow:
-        model: deepseek-ai/DeepSeek-V3.2    # 模型名称
+        model: deepseek-ai/DeepSeek-V3.2    # 模型名称 
         base_url: https://api.siliconflow.cn/v1 # API 基础 URL
         api_key: ${SILICONFLOW_API_KEY}         # API 密钥（从环境变量读取）
         temperature: 0.8     
@@ -49,6 +49,30 @@ llm_configs:
         base_url: https://api.openai.com/v1
         api_key: ${OPENAI_API_KEY}
         temperature: 0.7
+      
+      xiaomi:
+        model: mimo-v2.5-pro
+        base_url: https://token-plan-sgp.xiaomimimo.com/v1
+        api_key: ${XIAOMI_API_KEY}
+        # Xiaomi 官方文档：mimo-v2.5-pro 默认 temperature 为 1.0，范围 [0, 1.5]。
+        # 若开启 thinking 模式，temperature 会被后端强制覆盖为 1.0。
+        temperature: 1.0
+        request_options:
+          # 生成上限；包含可见输出 token 和 reasoning token。
+          # 小米文档中 mimo-v2.5-pro 默认值为 131072，范围 [1, 131072]。
+          max_completion_tokens: 131072
+          # nucleus sampling 概率阈值；值越高，生成越发散。
+          # 小米文档中 mimo-v2.5-pro 默认值为 0.95，范围 [0.01, 1.0]。
+          top_p: 0.95
+          # 频率惩罚；正值降低重复相同表达的概率，范围 [-2.0, 2.0]。
+          frequency_penalty: 0
+          # 存在惩罚；正值提高切换到新话题的倾向，范围 [-2.0, 2.0]。
+          presence_penalty: 0
+          extra_body:
+            # Xiaomi OpenAI 兼容接口支持 thinking 参数。
+            # type=disabled 表示关闭思维链输出，避免返回 reasoning_content。
+            thinking:
+              type: disabled # enabled | disabled
     
 
   # 轻量压缩模型配置（供 l3_compress / l4_compact 角色使用）
@@ -62,7 +86,7 @@ llm_configs:
         temperature: 0.3                   # 采样温度：压缩场景使用较低值以确保稳定性
 
       siliconflow:
-        model: deepseek-ai/DeepSeek-V3.2         # 使用更轻量/更便宜的模型以降低压缩成本
+        model: Pro/zai-org/GLM-5        # 使用更轻量/更便宜的模型以降低压缩成本
         base_url: https://api.siliconflow.cn/v1    # API 基础 URL（从环境变量读取）
         api_key: ${COMPRESS_API_KEY}       # API 密钥（从环境变量读取）
         temperature: 0.3                   # 采样温度：压缩场景使用较低值以确保稳定性

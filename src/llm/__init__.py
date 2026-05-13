@@ -23,6 +23,7 @@ from src.llm.exceptions import (
 from src.llm.factory import LLMFactory, create_from_role
 from src.llm.interface import LLMInterface
 from src.llm.providers import openai_compatible as _openai_compatible  # noqa: F401
+from src.llm.providers import xiaomi as _xiaomi  # noqa: F401
 
 __all__ = [
     "LLMAPIError",
