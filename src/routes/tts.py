@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from loguru import logger
 
 from src.models.tts import (
     TTSConfigResponse,
@@ -145,6 +146,14 @@ async def synthesize_text(
     service: TTSServiceDep,
 ) -> Response:
     """Synthesize text with the active or requested TTS provider."""
+
+    logger.info(
+        "TTS synth request received | provider={} | text_len={} | voice_id={} | options_keys={}",
+        payload.provider or "<active>",
+        len(payload.text.strip()),
+        payload.voice_id or "<default>",
+        sorted(payload.options.keys()) if payload.options else [],
+    )
 
     try:
         result = await service.synthesize(
