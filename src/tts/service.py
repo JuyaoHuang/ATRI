@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
+
+from loguru import logger
 
 from . import providers as _providers  # noqa: F401
 from .config import TTSConfigStore
@@ -119,12 +122,48 @@ class TTSService:
 
         config = self.config_store.read()
         provider_name = provider or self._active_provider(config)
+        logger.info(
+            "TTS synthesis started | provider={} | text_len={} | voice_id={}",
+            provider_name,
+            len(text),
+            voice_id or "<default>",
+        )
+
+        started_at = time.perf_counter()
         tts = self._create_provider(config, provider_name)
         health = tts.health()
         if not health.available:
+            logger.warning(
+                "TTS provider unavailable during synthesis | provider={} | reason={}",
+                provider_name,
+                health.reason or "unknown",
+            )
             raise TTSProviderUnavailableError(health.reason or f"{provider_name} is unavailable")
 
-        audio = await tts.synthesize(text, voice_id=voice_id, **(options or {}))
+        try:
+            audio = await tts.synthesize(text, voice_id=voice_id, **(options or {}))
+        except Exception:
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            logger.exception(
+                "TTS synthesis failed | provider={} | text_len={} | voice_id={} | duration_ms={}",
+                provider_name,
+                len(text),
+                voice_id or "<default>",
+                duration_ms,
+            )
+            raise
+
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(
+            "TTS synthesis completed | provider={} | text_len={} | voice_id={} "
+            "| duration_ms={} | audio_bytes={} | media_type={}",
+            provider_name,
+            len(text),
+            voice_id or "<default>",
+            duration_ms,
+            len(audio),
+            tts.media_type,
+        )
         return {
             "provider": provider_name,
             "audio": audio,
