@@ -1,4 +1,15 @@
-"""CosyVoice3 Gradio TTS provider."""
+"""CosyVoice3 Gradio TTS provider.
+
+CosyVoice3 Gradio 提供商。
+
+Wraps a local CosyVoice3 Gradio endpoint for complete-audio synthesis.
+Compatible with Open-LLM-VTuber's CosyVoice3 API layout.
+
+封装本地 CosyVoice3 Gradio 端点，用于完整音频合成。
+兼容 Open-LLM-VTuber 的 CosyVoice3 API 布局。
+
+Reference: docs/TTS模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -15,11 +26,19 @@ from src.tts.interface import TTSHealth, TTSInterface, TTSVoice
 DEFAULT_PROMPT_WAV_URL = (
     "https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav"
 )
-DEFAULT_MODE = "\u9884\u8bad\u7ec3\u97f3\u8272"
-DEFAULT_SFT_VOICE = "\u4e2d\u6587\u5973"
+DEFAULT_MODE = "预训练音色"
+DEFAULT_SFT_VOICE = "中文女"
 
 
 def _load_gradio_client() -> tuple[Any, Any]:
+    """Import and return ``gradio_client.Client`` and ``handle_file``.
+
+    导入并返回 ``gradio_client.Client`` 和 ``handle_file``。
+
+    Raises:
+        TTSProviderUnavailableError: If the ``gradio-client`` package is missing.
+                                     如果 ``gradio-client`` 包未安装。
+    """
     try:
         from gradio_client import Client, handle_file
     except ImportError as error:
@@ -41,7 +60,21 @@ def _load_gradio_client() -> tuple[Any, Any]:
     ),
 )
 class CosyVoice3TTSProvider(TTSInterface):
-    """Complete-audio CosyVoice3 provider through the Gradio client."""
+    """Complete-audio CosyVoice3 provider through the Gradio client.
+
+    通过 Gradio 客户端实现的完整音频
+    CosyVoice3 提供商。
+
+    Uses the ``gradio_client`` package to call a local CosyVoice3 Gradio
+    endpoint.  Audio synthesis is offloaded to a thread via
+    :func:`asyncio.to_thread` because the Gradio client is synchronous.
+
+    使用 ``gradio_client`` 包调用本地
+    CosyVoice3 Gradio 端点。
+    由于 Gradio 客户端是同步的，
+    音频合成通过 :func:`asyncio.to_thread`
+    卸载到线程中执行。
+    """
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -63,6 +96,10 @@ class CosyVoice3TTSProvider(TTSInterface):
         self.media_type = "audio/wav"
 
     def health(self) -> TTSHealth:
+        """Check whether the Gradio client package is installed and URL is set.
+
+        检查 Gradio 客户端包是否已安装以及 URL 是否已配置。
+        """
         if not self.client_url:
             return TTSHealth(False, "cosyvoice3_tts.client_url is not configured")
         if importlib.util.find_spec("gradio_client") is None:
@@ -76,6 +113,24 @@ class CosyVoice3TTSProvider(TTSInterface):
         voice_id: str | None = None,
         **kwargs: Any,
     ) -> bytes:
+        """Synthesize text via the CosyVoice3 Gradio endpoint.
+
+        通过 CosyVoice3 Gradio 端点合成文本。
+
+        Args:
+            text: The text to synthesize.
+                  要合成的文本。
+            voice_id: Optional SFT voice name override.
+                      可选的 SFT 语音名称覆盖。
+            **kwargs: Additional Gradio parameters (``mode_checkbox_group``,
+                      ``sft_dropdown``, ``prompt_text``, ``speed``, etc.).
+                      额外的 Gradio 参数（``mode_checkbox_group``、
+                      ``sft_dropdown``、``prompt_text``、``speed`` 等）。
+
+        Returns:
+            WAV audio bytes.
+            WAV 音频字节。
+        """
         health = self.health()
         if not health.available:
             raise TTSProviderUnavailableError(health.reason or "cosyvoice3_tts is unavailable")
@@ -83,6 +138,10 @@ class CosyVoice3TTSProvider(TTSInterface):
         return await asyncio.to_thread(self._synthesize_sync, text, voice_id, kwargs)
 
     async def get_voices(self) -> list[TTSVoice]:
+        """Return the configured SFT voice as a single-element list.
+
+        返回已配置的 SFT 语音（单元素列表）。
+        """
         return [
             TTSVoice(
                 id=self.sft_dropdown,
@@ -130,6 +189,16 @@ class CosyVoice3TTSProvider(TTSInterface):
         return audio
 
     def _read_audio_result(self, result: Any) -> bytes:
+        """Recursively extract raw audio bytes from a Gradio result.
+
+        从 Gradio 结果中递归提取原始音频字节。
+
+        Handles bytes, file paths, dicts with ``path``/``name``/``file`` keys,
+        and lists/tuples by recursing into each element.
+
+        支持 bytes、文件路径、包含 ``path``/``name``/``file`` 键的字典，
+        以及列表/元组（递归处理每个元素）。
+        """
         if isinstance(result, bytes | bytearray):
             return bytes(result)
         if isinstance(result, str | os.PathLike):

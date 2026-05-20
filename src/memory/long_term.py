@@ -446,7 +446,10 @@ class LongTermMemory:
         return results
 
     def invalidate_search_cache(self, user_id: str, agent_id: str) -> None:
-        """Drop cached search results for one user/agent scope."""
+        """Drop cached search results for one user/agent scope.
+
+        丢弃某个 user/agent 作用域的缓存搜索结果。
+        """
         if self._search_cache is not None:
             self._search_cache.invalidate_scope(user_id=user_id, agent_id=agent_id)
 
@@ -461,6 +464,11 @@ class LongTermMemory:
         Hosted mem0 may return an asynchronous "delete in progress" response;
         callers should surface that as a submitted cleanup operation instead
         of assuming immediate dashboard consistency.
+
+        删除指定 mem0 作用域的长期记忆。
+
+        托管版 mem0 可能返回异步的"删除中"响应；调用方应将其呈现为已提交的
+        清理操作，而非假设仪表盘会立即一致。
         """
 
         kwargs: dict[str, str] = {"user_id": user_id, "agent_id": agent_id}

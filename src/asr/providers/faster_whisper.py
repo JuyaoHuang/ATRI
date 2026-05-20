@@ -1,9 +1,17 @@
 """faster-whisper ASR provider.
 
+faster-whisper ASR 提供商模块。
+
 The numpy-array transcription path follows Open-LLM-VTuber's
 `faster_whisper_asr.py`: lazy-create `WhisperModel`, call `transcribe`
 with beam search, optional language and prompt, and concatenate segment
 text.
+
+numpy 数组转录路径遵循 Open-LLM-VTuber 的 `faster_whisper_asr.py`：
+延迟创建 `WhisperModel`，使用束搜索调用 `transcribe`，支持可选的语言和提示词，
+并拼接分段文本。
+
+Reference: docs/ASR模块设计文档.md
 """
 
 from __future__ import annotations
@@ -30,7 +38,17 @@ from src.asr.interface import ASRHealth, ASRInterface
     ),
 )
 class FasterWhisperASR(ASRInterface):
-    """Local faster-whisper provider with lazy optional dependency loading."""
+    """Local faster-whisper provider with lazy optional dependency loading.
+
+    本地 faster-whisper 提供商，延迟加载可选依赖。
+
+    The underlying ``WhisperModel`` is created on first use so that
+    importing this module does not require the ``faster_whisper``
+    package to be installed.
+
+    底层 ``WhisperModel`` 在首次使用时创建，因此导入此模块不要求安装
+    ``faster_whisper`` 包。
+    """
 
     BEAM_SEARCH = True
 
@@ -52,6 +70,15 @@ class FasterWhisperASR(ASRInterface):
         return ASRHealth(True)
 
     def transcribe_np(self, audio: Any) -> str:
+        """Transcribe a float32 numpy audio array using faster-whisper.
+
+        使用 faster-whisper 转录 float32 numpy 音频数组。
+
+        Uses beam search and optional language/prompt settings from the
+        provider config.  Segments are concatenated into a single string.
+
+        使用束搜索和提供商配置中的可选语言/提示词设置。分段结果拼接为单个字符串。
+        """
         model = self._get_model()
         kwargs: dict[str, Any] = {
             "beam_size": 5 if self.BEAM_SEARCH else 1,
@@ -73,10 +100,15 @@ class FasterWhisperASR(ASRInterface):
     ) -> str:
         """Transcribe uploaded audio.
 
+        转录上传的音频。
+
         WAV uploads use the OLV numpy-array path. Other browser formats are
         passed to faster-whisper through a temporary file, which keeps the
         provider usable with MediaRecorder while preserving `transcribe_np`
         as the core local-provider contract.
+
+        WAV 上传使用 OLV 数组路径。其他浏览器格式通过临时文件传递给 faster-whisper，
+        使提供商可与 MediaRecorder 配合使用，同时保留 `transcribe_np` 作为核心本地契约。
         """
 
         if self._looks_like_wav(audio, filename=filename, content_type=content_type):

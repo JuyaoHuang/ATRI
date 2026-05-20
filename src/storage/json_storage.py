@@ -1,4 +1,7 @@
-"""JSON file-based chat storage implementation."""
+"""JSON file-based chat storage implementation.
+
+基于 JSON 文件的聊天存储实现。
+"""
 
 import asyncio
 import json
@@ -12,12 +15,21 @@ from src.storage.interface import ChatStorageInterface
 
 
 class _ChatLocation(NamedTuple):
+    """Internal record pointing to a chat's location on disk.
+
+    内部记录，指向聊天在磁盘上的位置。
+    """
+
     user_id: str
     character_id: str
     chat: dict
 
 
 def _validate_path_component(label: str, value: str) -> str:
+    """Validate a string as a safe single-path component.
+
+    校验字符串是否为安全的单级路径分量。
+    """
     if not isinstance(value, str):
         raise ValueError(f"{label} must be a string")
     clean = value.strip()
@@ -35,28 +47,47 @@ def _validate_path_component(label: str, value: str) -> str:
 
 
 class JSONChatStorage(ChatStorageInterface):
-    """JSON file-based chat storage with file system persistence."""
+    """JSON file-based chat storage with file system persistence.
+
+    基于 JSON 文件的聊天存储，使用文件系统进行持久化。
+    """
 
     def __init__(self, base_path: str):
+        """Initialize the storage with a base directory path.
+
+        使用指定的根目录路径初始化存储。
+        """
         self.base_path = Path(base_path)
 
     def _get_user_dir(self, user_id: str, character_id: str) -> Path:
-        """Get user-character directory path."""
+        """Get user-character directory path.
+
+        获取用户-角色目录路径。
+        """
         safe_user_id = _validate_path_component("user_id", user_id)
         safe_character_id = _validate_path_component("character_id", character_id)
         return self.base_path / safe_user_id / safe_character_id
 
     def _get_index_path(self, user_id: str, character_id: str) -> Path:
-        """Get index.json path."""
+        """Get index.json path.
+
+        获取 index.json 文件路径。
+        """
         return self._get_user_dir(user_id, character_id) / "index.json"
 
     def _get_session_path(self, user_id: str, character_id: str, chat_id: str) -> Path:
-        """Get session file path."""
+        """Get session file path.
+
+        获取会话文件路径。
+        """
         safe_chat_id = _validate_path_component("chat_id", chat_id)
         return self._get_user_dir(user_id, character_id) / "sessions" / f"{safe_chat_id}.json"
 
     async def _read_json(self, path: Path) -> dict | list | None:
-        """Read JSON file asynchronously."""
+        """Read JSON file asynchronously.
+
+        异步读取 JSON 文件。
+        """
 
         def _read():
             if not path.exists():
@@ -67,7 +98,10 @@ class JSONChatStorage(ChatStorageInterface):
         return await asyncio.to_thread(_read)
 
     async def _write_json(self, path: Path, data: dict | list) -> None:
-        """Write JSON file atomically."""
+        """Write JSON file atomically.
+
+        原子写入 JSON 文件。
+        """
 
         def _write():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +113,10 @@ class JSONChatStorage(ChatStorageInterface):
         await asyncio.to_thread(_write)
 
     async def _load_index(self, user_id: str, character_id: str) -> dict:
-        """Load index.json or return empty structure."""
+        """Load index.json or return empty structure.
+
+        加载 index.json，若不存在则返回空结构。
+        """
         index_path = self._get_index_path(user_id, character_id)
         data = await self._read_json(index_path)
         if isinstance(data, dict):
@@ -87,12 +124,18 @@ class JSONChatStorage(ChatStorageInterface):
         return {"chats": []}
 
     async def _save_index(self, user_id: str, character_id: str, index: dict) -> None:
-        """Save index.json atomically."""
+        """Save index.json atomically.
+
+        原子保存 index.json。
+        """
         index_path = self._get_index_path(user_id, character_id)
         await self._write_json(index_path, index)
 
     def _generate_chat_id(self) -> str:
-        """Generate chat ID in format: YYYYMMDD_uuid8."""
+        """Generate chat ID in format: YYYYMMDD_uuid8.
+
+        生成聊天 ID，格式为 YYYYMMDD_uuid8。
+        """
         date_str = datetime.now(UTC).strftime("%Y%m%d")
         uuid_str = str(uuid.uuid4())[:8]
         return f"{date_str}_{uuid_str}"
@@ -103,7 +146,10 @@ class JSONChatStorage(ChatStorageInterface):
         user_id: str | None = None,
         character_id: str | None = None,
     ) -> _ChatLocation | None:
-        """Find a chat location, optionally scoped to one user/character."""
+        """Find a chat location, optionally scoped to one user/character.
+
+        查找聊天位置，可限定到特定用户/角色。
+        """
         safe_chat_id = _validate_path_component("chat_id", chat_id)
         safe_user_id = (
             _validate_path_component("user_id", user_id) if user_id is not None else None
@@ -139,7 +185,10 @@ class JSONChatStorage(ChatStorageInterface):
         return None
 
     async def create_chat(self, user_id: str, character_id: str, title: str) -> dict:
-        """Create a new chat session."""
+        """Create a new chat session.
+
+        创建新的聊天会话。
+        """
         chat_id = self._generate_chat_id()
         now = datetime.now(UTC).isoformat()
 
@@ -164,7 +213,10 @@ class JSONChatStorage(ChatStorageInterface):
         return chat_meta
 
     async def list_chats(self, user_id: str, character_id: str | None = None) -> list[dict]:
-        """List user's chat sessions, sorted by updated_at descending."""
+        """List user's chat sessions, sorted by updated_at descending.
+
+        列出用户的聊天会话，按 updated_at 降序排列。
+        """
         if character_id:
             index = await self._load_index(user_id, character_id)
             chats = index["chats"]
@@ -184,19 +236,28 @@ class JSONChatStorage(ChatStorageInterface):
         return chats
 
     async def get_chat(self, chat_id: str) -> dict | None:
-        """Get chat metadata by ID (requires scanning all user directories)."""
+        """Get chat metadata by ID (requires scanning all user directories).
+
+        根据 ID 获取聊天元数据（需要扫描所有用户目录）。
+        """
         location = await self._find_chat_location(chat_id)
         return location.chat if location else None
 
     async def get_chat_for_user(self, user_id: str, chat_id: str) -> dict | None:
-        """Get chat metadata by ID, scoped to a user."""
+        """Get chat metadata by ID, scoped to a user.
+
+        根据 ID 获取聊天元数据，限定到特定用户。
+        """
         location = await self._find_chat_location(chat_id, user_id=user_id)
         return location.chat if location else None
 
     async def get_chat_for_user_character(
         self, user_id: str, character_id: str, chat_id: str
     ) -> dict | None:
-        """Get chat metadata by ID, scoped to one user-character index."""
+        """Get chat metadata by ID, scoped to one user-character index.
+
+        根据 ID 获取聊天元数据，限定到特定用户-角色索引。
+        """
         location = await self._find_chat_location(
             chat_id,
             user_id=user_id,
@@ -205,14 +266,20 @@ class JSONChatStorage(ChatStorageInterface):
         return location.chat if location else None
 
     async def update_chat(self, chat_id: str, **kwargs: str) -> dict:
-        """Update chat metadata (title, etc.)."""
+        """Update chat metadata (title, etc.).
+
+        更新聊天元数据（如标题等）。
+        """
         location = await self._find_chat_location(chat_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
         return await self.update_chat_for_user(location.user_id, chat_id, **kwargs)
 
     async def update_chat_for_user(self, user_id: str, chat_id: str, **kwargs: str) -> dict:
-        """Update chat metadata for a specific user."""
+        """Update chat metadata for a specific user.
+
+        更新特定用户的聊天元数据。
+        """
         location = await self._find_chat_location(chat_id, user_id=user_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
@@ -227,14 +294,20 @@ class JSONChatStorage(ChatStorageInterface):
         raise ValueError(f"Chat {chat_id} not found")
 
     async def delete_chat(self, chat_id: str) -> None:
-        """Delete chat session."""
+        """Delete chat session.
+
+        删除聊天会话。
+        """
         location = await self._find_chat_location(chat_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
         await self.delete_chat_for_user(location.user_id, chat_id)
 
     async def delete_chat_for_user(self, user_id: str, chat_id: str) -> None:
-        """Delete chat session for a specific user."""
+        """Delete chat session for a specific user.
+
+        删除特定用户的聊天会话。
+        """
         location = await self._find_chat_location(chat_id, user_id=user_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
@@ -258,7 +331,10 @@ class JSONChatStorage(ChatStorageInterface):
     async def append_message(
         self, chat_id: str, role: str, content: str, name: str | None = None
     ) -> dict:
-        """Append message to chat session."""
+        """Append message to chat session.
+
+        向聊天会话追加消息。
+        """
         location = await self._find_chat_location(chat_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
@@ -273,7 +349,10 @@ class JSONChatStorage(ChatStorageInterface):
     async def append_message_for_user(
         self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
     ) -> dict:
-        """Append message to a user-scoped chat session."""
+        """Append message to a user-scoped chat session.
+
+        向用户范围的聊天会话追加消息。
+        """
         location = await self._find_chat_location(chat_id, user_id=user_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
@@ -312,7 +391,10 @@ class JSONChatStorage(ChatStorageInterface):
         limit: int | None = 50,
         offset: int = 0,
     ) -> list[dict]:
-        """Get chat message history with pagination."""
+        """Get chat message history with pagination.
+
+        分页获取聊天消息历史。
+        """
         location = await self._find_chat_location(chat_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")
@@ -330,7 +412,10 @@ class JSONChatStorage(ChatStorageInterface):
         limit: int | None = 50,
         offset: int = 0,
     ) -> list[dict]:
-        """Get user-scoped chat message history with pagination."""
+        """Get user-scoped chat message history with pagination.
+
+        分页获取用户范围的聊天消息历史。
+        """
         location = await self._find_chat_location(chat_id, user_id=user_id)
         if not location:
             raise ValueError(f"Chat {chat_id} not found")

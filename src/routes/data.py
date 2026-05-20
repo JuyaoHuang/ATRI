@@ -1,4 +1,7 @@
-"""Data maintenance REST API routes."""
+"""Data maintenance REST API routes.
+
+数据维护 REST API 路由。
+"""
 
 from __future__ import annotations
 
@@ -20,7 +23,10 @@ _SHORT_TERM_FILENAME = "short_term_memory.json"
 
 
 class DataCleanupResponse(BaseModel):
-    """Response for data cleanup operations."""
+    """Response for data cleanup operations.
+
+    数据清理操作的响应。
+    """
 
     character_id: str
     user_id: str
@@ -96,7 +102,10 @@ async def clear_short_term_memory(
     chat_id: str,
     request: Request,
 ) -> DataCleanupResponse:
-    """Clear short-term memory for current user, character, and chat."""
+    """Clear short-term memory for current user, character, and chat.
+
+    清除当前用户、角色和聊天的短期记忆。
+    """
 
     user_id = get_request_user_id(request)
     await _ensure_user_chat(request, user_id, character_id, chat_id)
@@ -157,7 +166,10 @@ async def clear_long_term_memory(
     character_id: str,
     request: Request,
 ) -> DataCleanupResponse:
-    """Submit long-term memory deletion for current user and character."""
+    """Submit long-term memory deletion for current user and character.
+
+    提交当前用户和角色的长期记忆删除请求。
+    """
 
     user_id = get_request_user_id(request)
     long_term = _get_long_term_memory(request, character_id, user_id)

@@ -1,4 +1,14 @@
-"""Microsoft Edge TTS provider."""
+"""Microsoft Edge TTS provider.
+
+Microsoft Edge TTS 提供商。
+
+Uses the ``edge-tts`` Python package to access free Microsoft Edge neural
+voices.  No API key is required.
+
+使用 ``edge-tts`` Python 包访问免费的 Microsoft Edge 神经语音。无需 API 密钥。
+
+Reference: docs/TTS模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -11,6 +21,18 @@ from src.tts.interface import TTSHealth, TTSInterface, TTSVoice
 
 
 def _media_type_from_format(audio_format: str) -> str:
+    """Map an audio format string to a MIME type.
+
+    将音频格式字符串映射为 MIME 类型。
+
+    Args:
+        audio_format: Format extension (e.g. ``"mp3"``, ``"wav"``).
+                      格式扩展名（如 ``"mp3"``、``"wav"``）。
+
+    Returns:
+        The corresponding MIME type string.
+        对应的 MIME 类型字符串。
+    """
     value = audio_format.lower().lstrip(".")
     if value == "mp3":
         return "audio/mpeg"
@@ -33,7 +55,16 @@ def _media_type_from_format(audio_format: str) -> str:
     ),
 )
 class EdgeTTSProvider(TTSInterface):
-    """Complete-audio Edge TTS provider."""
+    """Complete-audio Edge TTS provider.
+
+    完整音频 Edge TTS 提供商。
+
+    Collects all audio chunks from ``edge_tts.Communicate.stream()`` and
+    returns the concatenated result as a single ``bytes`` object.
+
+    从 ``edge_tts.Communicate.stream()`` 收集所有音频块，
+    并将拼接后的结果作为单个 ``bytes`` 对象返回。
+    """
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -45,6 +76,10 @@ class EdgeTTSProvider(TTSInterface):
         self.media_type = _media_type_from_format(self.output_format)
 
     def health(self) -> TTSHealth:
+        """Check whether the ``edge-tts`` package is installed and voice is set.
+
+        检查 ``edge-tts`` 包是否已安装以及语音是否已配置。
+        """
         if importlib.util.find_spec("edge_tts") is None:
             return TTSHealth(False, "Python package 'edge-tts' is not installed")
         if not self.voice:
@@ -58,6 +93,22 @@ class EdgeTTSProvider(TTSInterface):
         voice_id: str | None = None,
         **kwargs: Any,
     ) -> bytes:
+        """Synthesize text using the ``edge-tts`` package.
+
+        使用 ``edge-tts`` 包合成文本。
+
+        Args:
+            text: The text to synthesize.
+                  要合成的文本。
+            voice_id: Optional voice name (e.g. ``"zh-CN-XiaoxiaoNeural"``).
+                      可选的语音名称（如 ``"zh-CN-XiaoxiaoNeural"``）。
+            **kwargs: Optional overrides for ``rate``, ``pitch``, ``volume``.
+                      可选的 ``rate``、``pitch``、``volume`` 覆盖。
+
+        Returns:
+            MP3 (or configured format) audio bytes.
+            MP3（或配置的格式）音频字节。
+        """
         health = self.health()
         if not health.available:
             raise TTSProviderUnavailableError(health.reason or "edge_tts is unavailable")
@@ -91,6 +142,14 @@ class EdgeTTSProvider(TTSInterface):
         return bytes(audio)
 
     async def get_voices(self) -> list[TTSVoice]:
+        """Fetch all available Edge TTS voices from the service.
+
+        从服务端获取所有可用的 Edge TTS 语音。
+
+        Returns:
+            A list of :class:`TTSVoice` with locale and gender metadata.
+            包含语言和性别元数据的 :class:`TTSVoice` 列表。
+        """
         health = self.health()
         if not health.available:
             raise TTSProviderUnavailableError(health.reason or "edge_tts is unavailable")

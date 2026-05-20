@@ -1,4 +1,7 @@
-"""GitHub OAuth client."""
+"""GitHub OAuth client.
+
+GitHub OAuth 客户端。
+"""
 
 from __future__ import annotations
 
@@ -16,7 +19,10 @@ GITHUB_USER_URL = "https://api.github.com/user"
 
 @dataclass(frozen=True)
 class GitHubUser:
-    """Authenticated GitHub user profile."""
+    """Authenticated GitHub user profile.
+
+    已认证的 GitHub 用户资料。
+    """
 
     username: str
     avatar_url: str | None = None
@@ -24,7 +30,10 @@ class GitHubUser:
 
 
 class GitHubOAuth:
-    """Minimal GitHub OAuth web flow client."""
+    """Minimal GitHub OAuth web flow client.
+
+    最小化的 GitHub OAuth Web 流程客户端。
+    """
 
     def __init__(
         self,
@@ -46,6 +55,10 @@ class GitHubOAuth:
         self.scope = scope
 
     def get_authorization_url(self, state: str | None = None) -> str:
+        """Build the GitHub authorization redirect URL.
+
+        构建 GitHub 授权重定向 URL。
+        """
         query = {
             "client_id": self.client_id,
             "redirect_uri": self.callback_url,
@@ -56,6 +69,10 @@ class GitHubOAuth:
         return f"{GITHUB_AUTHORIZE_URL}?{urlencode(query)}"
 
     async def exchange_code_for_token(self, code: str) -> str:
+        """Exchange an OAuth authorization code for an access token.
+
+        将 OAuth 授权码交换为访问令牌。
+        """
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(
                 GITHUB_TOKEN_URL,
@@ -75,6 +92,10 @@ class GitHubOAuth:
         return access_token
 
     async def get_user_info(self, access_token: str) -> GitHubUser:
+        """Fetch the authenticated user's profile from GitHub.
+
+        从 GitHub 获取已认证用户的资料。
+        """
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(
                 GITHUB_USER_URL,

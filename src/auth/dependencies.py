@@ -1,4 +1,7 @@
-"""Authentication helpers shared by HTTP routes and WebSocket handlers."""
+"""Authentication helpers shared by HTTP routes and WebSocket handlers.
+
+HTTP 路由和 WebSocket 处理器共享的认证辅助函数。
+"""
 
 from __future__ import annotations
 
@@ -23,7 +26,10 @@ def get_auth_service(app: Any) -> AuthService:
 
 
 def get_request_user_id(request: Request) -> str:
-    """Return current user id for REST routes."""
+    """Return current user id for REST routes.
+
+    返回 REST 路由的当前用户 ID。
+    """
     if hasattr(request.state, "user_id"):
         return str(request.state.user_id)
     auth_service = get_auth_service(request.app)
@@ -44,7 +50,10 @@ def get_request_user_id(request: Request) -> str:
 
 
 def get_websocket_user_id(websocket: WebSocket) -> str:
-    """Return current user id for WebSocket routes."""
+    """Return current user id for WebSocket routes.
+
+    返回 WebSocket 路由的当前用户 ID。
+    """
     auth_service = get_auth_service(websocket.app)
     if not auth_service.enabled:
         return DEFAULT_USER_ID

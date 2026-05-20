@@ -3,6 +3,13 @@
 This module decides whether a chat turn should call ``mem0.search`` before
 building the LLM context. It is intentionally pure so quota-saving behavior can
 be tested without touching mem0.
+
+长期记忆检索策略。
+
+本模块决定某次聊天轮次是否应在组装 LLM 上下文前调用 ``mem0.search``。
+设计为纯函数，使配额节省行为可在不触及 mem0 的情况下进行测试。
+
+Reference: docs/记忆系统设计讨论.md §8.1–§8.4
 """
 
 from __future__ import annotations
@@ -34,12 +41,22 @@ def _parse_trigger_keywords(value: Any) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class RetrievalDecision:
+    """Result of a retrieval policy evaluation.
+
+    检索策略评估的结果。
+    """
+
     should_search: bool
     reason: str
 
 
 @dataclass(frozen=True)
 class LongTermRetrievalPolicy:
+    """Configuration-driven policy that decides when to call mem0.search.
+
+    由配置驱动的策略，决定何时调用 mem0.search。
+    """
+
     enabled: bool = True
     policy: str = "always"
     interval_turns: int = 10
@@ -48,6 +65,10 @@ class LongTermRetrievalPolicy:
 
     @classmethod
     def from_mem0_config(cls, mem0_config: dict[str, Any]) -> LongTermRetrievalPolicy:
+        """Build a policy instance from the ``mem0`` section of config yaml.
+
+        从配置 yaml 的 ``mem0`` 部分构建策略实例。
+        """
         retrieval_cfg = mem0_config.get("retrieval")
         if not isinstance(retrieval_cfg, dict):
             return cls()
@@ -73,6 +94,10 @@ class LongTermRetrievalPolicy:
         current_round: int,
         last_search_round: int | None,
     ) -> RetrievalDecision:
+        """Evaluate whether the current turn should trigger a long-term search.
+
+        评估当前轮次是否应触发长期记忆搜索。
+        """
         text = " ".join(query.strip().split())
         if not self.enabled:
             return RetrievalDecision(False, "disabled")

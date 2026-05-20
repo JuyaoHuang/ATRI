@@ -1,4 +1,7 @@
-"""Live2D model storage backed by extracted ZIP archives."""
+"""Live2D model storage backed by extracted ZIP archives.
+
+基于解压 ZIP 归档的 Live2D 模型存储。
+"""
 
 from __future__ import annotations
 
@@ -32,20 +35,32 @@ _DEFAULT_AIRI_HIYORI_ARCHIVE = (
 
 
 class Live2DStorageError(Exception):
-    """Base exception for Live2D storage operations."""
+    """Base exception for Live2D storage operations.
+
+    Live2D 存储操作的基异常。
+    """
 
 
 class Live2DModelNotFoundError(Live2DStorageError):
-    """Raised when a model directory or metadata file is missing."""
+    """Raised when a model directory or metadata file is missing.
+
+    当模型目录或元数据文件缺失时抛出。
+    """
 
 
 class Live2DArchiveValidationError(Live2DStorageError):
-    """Raised when an uploaded archive is invalid."""
+    """Raised when an uploaded archive is invalid.
+
+    当上传的归档无效时抛出。
+    """
 
 
 @dataclass(frozen=True)
 class Live2DModelRecord:
-    """Stored Live2D model metadata."""
+    """Stored Live2D model metadata.
+
+    存储的 Live2D 模型元数据。
+    """
 
     id: str
     name: str
@@ -57,13 +72,19 @@ class Live2DModelRecord:
 
 
 def get_default_live2d_root_dir() -> Path:
-    """Return the default Live2D root directory."""
+    """Return the default Live2D root directory.
+
+    返回默认的 Live2D 根目录。
+    """
 
     return _DEFAULT_LIVE2D_ROOT_DIR
 
 
 def get_default_live2d_models_dir() -> Path:
-    """Return the default Live2D models directory served as static assets."""
+    """Return the default Live2D models directory served as static assets.
+
+    返回默认的 Live2D 模型目录（用作静态资源）。
+    """
 
     return _DEFAULT_LIVE2D_MODELS_DIR
 
@@ -93,9 +114,16 @@ def _derive_model_name(filename: str) -> str:
 
 
 class Live2DStorage:
-    """Read and write Live2D models from extracted ZIP archives."""
+    """Read and write Live2D models from extracted ZIP archives.
+
+    从解压的 ZIP 归档中读写 Live2D 模型。
+    """
 
     def __init__(self, models_dir: Path | None = None, *, seed_default: bool | None = None) -> None:
+        """Initialize the Live2D storage with an optional models directory.
+
+        使用可选的模型目录初始化 Live2D 存储。
+        """
         self.models_dir = models_dir or get_default_live2d_models_dir()
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.seed_default = (
@@ -106,7 +134,10 @@ class Live2DStorage:
         self._default_seed_attempted = False
 
     def list_models(self) -> list[Live2DModelRecord]:
-        """List all available Live2D models."""
+        """List all available Live2D models.
+
+        列出所有可用的 Live2D 模型。
+        """
 
         self.ensure_default_model()
         records = [
@@ -117,7 +148,10 @@ class Live2DStorage:
         )
 
     def get_model(self, model_id: str) -> Live2DModelRecord:
-        """Load one Live2D model metadata record."""
+        """Load one Live2D model metadata record.
+
+        加载单个 Live2D 模型的元数据记录。
+        """
 
         model_dir = self._model_dir(model_id)
         metadata_path = model_dir / "metadata.json"
@@ -138,7 +172,10 @@ class Live2DStorage:
     async def save_model(
         self, archive: UploadFile, *, name: str | None = None
     ) -> Live2DModelRecord:
-        """Persist an uploaded Live2D ZIP archive."""
+        """Persist an uploaded Live2D ZIP archive.
+
+        持久化上传的 Live2D ZIP 归档。
+        """
 
         archive_name = archive.filename or "live2d-model.zip"
         if Path(archive_name).suffix.lower() != ".zip":
@@ -154,7 +191,10 @@ class Live2DStorage:
         return self._save_archive_bytes(payload, archive_name, name=name)
 
     def delete_model(self, model_id: str) -> None:
-        """Delete a stored Live2D model."""
+        """Delete a stored Live2D model.
+
+        删除已存储的 Live2D 模型。
+        """
 
         record = self.get_model(model_id)
         model_dir = self._model_dir(record.id)
@@ -177,7 +217,10 @@ class Live2DStorage:
                 )
 
     def update_model(self, model_id: str, *, name: str) -> Live2DModelRecord:
-        """Update mutable model metadata."""
+        """Update mutable model metadata.
+
+        更新可变的模型元数据。
+        """
 
         record = self.get_model(model_id)
         next_name = name.strip()
@@ -197,18 +240,27 @@ class Live2DStorage:
         return next_record
 
     def list_expressions(self, model_id: str) -> list[str]:
-        """Return the model's available expression names."""
+        """Return the model's available expression names.
+
+        返回模型可用的表情名称列表。
+        """
 
         return self.get_model(model_id).expressions
 
     def build_asset_url(self, relative_path: str, base_url: str) -> str:
-        """Build an absolute asset URL for a stored Live2D file."""
+        """Build an absolute asset URL for a stored Live2D file.
+
+        为存储的 Live2D 文件构建绝对资源 URL。
+        """
 
         clean_base = base_url.rstrip("/")
         return f"{clean_base}/api/assets/live2d/{quote(relative_path)}"
 
     def ensure_default_model(self) -> None:
-        """Best-effort seed of AIRI's cached Hiyori model for local development."""
+        """Best-effort seed of AIRI's cached Hiyori model for local development.
+
+        尽力从 AIRI 缓存中导入 Hiyori 模型，用于本地开发。
+        """
 
         if not self.seed_default or self._default_seed_attempted:
             return

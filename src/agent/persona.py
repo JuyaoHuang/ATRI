@@ -154,7 +154,10 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def parse_persona_text(character_id: str, text: str) -> Persona:
-    """Parse persona markdown content into a Persona instance."""
+    """Parse persona markdown content into a Persona instance.
+
+    将 persona markdown 内容解析为一个 :class:`Persona` 实例。
+    """
     meta, body = _split_frontmatter(text)
 
     name = meta.get("name", character_id)
@@ -179,7 +182,10 @@ def parse_persona_text(character_id: str, text: str) -> Persona:
 
 
 def load_persona_from_path(path: Path) -> Persona:
-    """Load persona markdown from an explicit file path."""
+    """Load persona markdown from an explicit file path.
+
+    从指定的文件路径加载 persona markdown 并返回 :class:`Persona`。
+    """
     if not path.is_file():
         raise FileNotFoundError(f"Persona file not found: {path}")
 

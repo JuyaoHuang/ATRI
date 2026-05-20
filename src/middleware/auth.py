@@ -1,4 +1,7 @@
-"""HTTP authentication middleware."""
+"""HTTP authentication middleware.
+
+HTTP 认证中间件。
+"""
 
 from __future__ import annotations
 
@@ -24,7 +27,10 @@ def _is_public_path(path: str) -> bool:
 
 
 async def auth_middleware(request: Request, call_next) -> Response:
-    """Protect HTTP routes when auth is enabled."""
+    """Protect HTTP routes when auth is enabled.
+
+    当认证开启时保护 HTTP 路由。
+    """
     auth_service = get_auth_service(request.app)
     if not auth_service.enabled or request.method == "OPTIONS" or _is_public_path(request.url.path):
         return await call_next(request)
