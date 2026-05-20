@@ -1,4 +1,7 @@
-"""Character storage backed by persona markdown files and managed avatars."""
+"""Character storage backed by persona markdown files and managed avatars.
+
+基于角色 markdown 文件和托管头像的角色存储。
+"""
 
 from __future__ import annotations
 
@@ -51,28 +54,46 @@ _DEFAULT_AVATAR_DIR = _PROJECT_ROOT / "data" / "avatars"
 
 
 class CharacterStorageError(Exception):
-    """Base exception for character storage operations."""
+    """Base exception for character storage operations.
+
+    角色存储操作的基异常。
+    """
 
 
 class CharacterNotFoundError(CharacterStorageError):
-    """Raised when a character file does not exist."""
+    """Raised when a character file does not exist.
+
+    当角色文件不存在时抛出。
+    """
 
 
 class CharacterNameConflictError(CharacterStorageError):
-    """Raised when a character name duplicates another character."""
+    """Raised when a character name duplicates another character.
+
+    当角色名称与已有角色重复时抛出。
+    """
 
 
 class CharacterSystemDeleteError(CharacterStorageError):
-    """Raised when attempting to delete a protected system character."""
+    """Raised when attempting to delete a protected system character.
+
+    当尝试删除受保护的系统角色时抛出。
+    """
 
 
 class AvatarValidationError(CharacterStorageError):
-    """Raised when avatar upload validation fails."""
+    """Raised when avatar upload validation fails.
+
+    当头像上传校验失败时抛出。
+    """
 
 
 @dataclass(frozen=True)
 class CharacterRecord:
-    """Character record loaded from persona markdown."""
+    """Character record loaded from persona markdown.
+
+    从角色 markdown 文件加载的角色记录。
+    """
 
     character_id: str
     name: str
@@ -86,17 +107,27 @@ class CharacterRecord:
 
     @property
     def is_system(self) -> bool:
+        """Return True if this character is a protected system character.
+
+        若该角色为受保护的系统角色则返回 True。
+        """
         return self.managed_by != MANAGED_BY_ATRI
 
 
 def get_default_character_persona_dir() -> Path:
-    """Return the default persona directory used by the backend."""
+    """Return the default persona directory used by the backend.
+
+    返回后端使用的默认角色文件目录。
+    """
 
     return _DEFAULT_PERSONA_DIR
 
 
 def get_default_character_avatar_dir() -> Path:
-    """Return the default managed avatar directory used by the backend."""
+    """Return the default managed avatar directory used by the backend.
+
+    返回后端使用的默认托管头像目录。
+    """
 
     return _DEFAULT_AVATAR_DIR
 
@@ -129,9 +160,16 @@ def _validate_custom_character_name(name: str) -> None:
 
 
 class CharacterStorage:
-    """Read and write characters using persona markdown files."""
+    """Read and write characters using persona markdown files.
+
+    使用角色 markdown 文件读写角色信息。
+    """
 
     def __init__(self, persona_dir: Path | None = None, avatar_dir: Path | None = None) -> None:
+        """Initialize the character storage with optional custom directories.
+
+        使用可选的自定义目录初始化角色存储。
+        """
         self.persona_dir = persona_dir or get_default_character_persona_dir()
         self.avatar_dir = avatar_dir or get_default_character_avatar_dir()
 
@@ -139,13 +177,19 @@ class CharacterStorage:
         self.avatar_dir.mkdir(parents=True, exist_ok=True)
 
     def list_characters(self) -> list[CharacterRecord]:
-        """List all character records sorted by name."""
+        """List all character records sorted by name.
+
+        列出所有角色记录，按名称排序。
+        """
 
         records = [self.get_character(path.stem) for path in sorted(self.persona_dir.glob("*.md"))]
         return sorted(records, key=lambda record: (record.name.casefold(), record.character_id))
 
     def get_character(self, character_id: str) -> CharacterRecord:
-        """Load a single character by its identifier."""
+        """Load a single character by its identifier.
+
+        根据标识符加载单个角色。
+        """
 
         path = self._character_path(character_id)
         if not path.is_file():
@@ -163,7 +207,10 @@ class CharacterStorage:
         description: str | None,
         system_prompt: str,
     ) -> CharacterRecord:
-        """Create a new managed character."""
+        """Create a new managed character.
+
+        创建新的托管角色。
+        """
 
         clean_name = name.strip()
         clean_system_prompt = system_prompt.strip()
@@ -203,7 +250,10 @@ class CharacterStorage:
         description: str | None = None,
         system_prompt: str | None = None,
     ) -> CharacterRecord:
-        """Update an existing character."""
+        """Update an existing character.
+
+        更新已有角色。
+        """
 
         current = self.get_character(character_id)
 
@@ -238,7 +288,10 @@ class CharacterStorage:
         return record
 
     def delete_character(self, character_id: str) -> None:
-        """Delete a managed character and its uploaded avatar, if any."""
+        """Delete a managed character and its uploaded avatar, if any.
+
+        删除托管角色及其已上传的头像（如有）。
+        """
 
         record = self.get_character(character_id)
         if record.is_system:
@@ -252,7 +305,10 @@ class CharacterStorage:
             avatar_path.unlink(missing_ok=True)
 
     async def save_avatar(self, character_id: str, file: UploadFile) -> CharacterRecord:
-        """Validate and store an uploaded avatar for a character."""
+        """Validate and store an uploaded avatar for a character.
+
+        校验并存储角色上传的头像。
+        """
 
         current = self.get_character(character_id)
         extension = self._resolve_avatar_extension(file)
@@ -286,7 +342,10 @@ class CharacterStorage:
         return record
 
     def build_avatar_url(self, avatar: str | None, base_url: str) -> str | None:
-        """Build an absolute backend avatar URL for managed avatars."""
+        """Build an absolute backend avatar URL for managed avatars.
+
+        为托管头像构建后端绝对 URL。
+        """
 
         managed_path = self._managed_avatar_path(avatar)
         if avatar is None or managed_path is None or not managed_path.is_file():

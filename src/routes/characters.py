@@ -1,4 +1,7 @@
-"""Character management REST API routes."""
+"""Character management REST API routes.
+
+角色管理 REST API 路由。
+"""
 
 from __future__ import annotations
 
@@ -26,7 +29,10 @@ router = APIRouter(prefix="/api/characters", tags=["characters"])
 
 
 def get_character_storage(request: Request) -> CharacterStorage:
-    """Return app-scoped character storage, creating a default one if needed."""
+    """Return app-scoped character storage, creating a default one if needed.
+
+    返回应用级角色存储，若不存在则创建默认实例。
+    """
 
     storage = getattr(request.app.state, "character_storage", None)
     if storage is None:
@@ -78,7 +84,10 @@ async def list_characters(
     request: Request,
     storage: CharacterStorageDep,
 ) -> list[CharacterSummary]:
-    """List all characters without changing the existing read API shape."""
+    """List all characters without changing the existing read API shape.
+
+    列出所有角色，不改变现有的读取 API 形态。
+    """
 
     records = storage.list_characters()
     return [
@@ -103,7 +112,10 @@ async def get_character(
     request: Request,
     storage: CharacterStorageDep,
 ) -> CharacterDetail:
-    """Get one character with its full system prompt."""
+    """Get one character with its full system prompt.
+
+    获取单个角色及其完整系统提示词。
+    """
 
     try:
         record = storage.get_character(character_id)
@@ -119,7 +131,10 @@ async def create_character(
     request: Request,
     storage: CharacterStorageDep,
 ) -> CharacterDetail:
-    """Create a new character."""
+    """Create a new character.
+
+    创建新角色。
+    """
 
     try:
         record = storage.create_character(
@@ -142,7 +157,10 @@ async def update_character(
     request: Request,
     storage: CharacterStorageDep,
 ) -> CharacterDetail:
-    """Update an existing character."""
+    """Update an existing character.
+
+    更新现有角色。
+    """
 
     try:
         record = storage.update_character(
@@ -163,7 +181,10 @@ async def delete_character(
     character_id: str,
     storage: CharacterStorageDep,
 ) -> Response:
-    """Delete a managed character."""
+    """Delete a managed character.
+
+    删除托管角色。
+    """
 
     try:
         storage.delete_character(character_id)
@@ -180,7 +201,10 @@ async def upload_character_avatar(
     avatar: AvatarFile,
     storage: CharacterStorageDep,
 ) -> AvatarUploadResponse:
-    """Upload or replace a character avatar."""
+    """Upload or replace a character avatar.
+
+    上传或替换角色头像。
+    """
 
     try:
         record = await storage.save_avatar(character_id, avatar)

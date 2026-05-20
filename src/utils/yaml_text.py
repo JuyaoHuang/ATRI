@@ -1,4 +1,7 @@
-"""Text-level YAML helpers for preserving comments and layout on write."""
+"""Text-level YAML helpers for preserving comments and layout on write.
+
+文本级 YAML 辅助工具，在写入时保留注释和格式布局。
+"""
 
 from __future__ import annotations
 
@@ -11,7 +14,10 @@ _YAML_KEY_RE = re.compile(r"^(?P<indent> *)(?P<key>[A-Za-z0-9_-]+):(?P<tail>.*)$
 
 
 def patch_yaml_values(path: Path, patch: Mapping[str, Any]) -> None:
-    """Patch only supplied mapping values in a YAML file without reformatting it."""
+    """Patch only supplied mapping values in a YAML file without reformatting it.
+
+    仅修补 YAML 文件中提供的映射值，不重新格式化文件。
+    """
 
     if not patch:
         return
@@ -25,7 +31,10 @@ def patch_yaml_values(path: Path, patch: Mapping[str, Any]) -> None:
 
 
 def render_yaml_mapping(mapping: Mapping[str, Any]) -> str:
-    """Render a small YAML mapping without using a YAML formatter."""
+    """Render a small YAML mapping without using a YAML formatter.
+
+    在不使用 YAML 格式化器的情况下渲染小型 YAML 映射。
+    """
 
     lines = _render_mapping_lines(mapping, 0, "\n")
     return "".join(lines).rstrip("\n")

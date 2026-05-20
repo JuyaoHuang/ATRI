@@ -1,4 +1,16 @@
-"""whisper.cpp ASR provider via pywhispercpp."""
+"""whisper.cpp ASR provider via pywhispercpp.
+
+通过 pywhispercpp 的 whisper.cpp ASR 提供商模块。
+
+Provides local transcription using the whisper.cpp engine wrapped by
+the ``pywhispercpp`` Python package.  The model is lazily loaded on
+first use.
+
+使用 ``pywhispercpp`` Python 包封装的 whisper.cpp 引擎提供本地转录。
+模型在首次使用时延迟加载。
+
+Reference: docs/ASR模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -24,7 +36,17 @@ from src.asr.interface import ASRHealth, ASRInterface
     ),
 )
 class WhisperCppASR(ASRInterface):
-    """Local whisper.cpp provider with lazy optional dependency loading."""
+    """Local whisper.cpp provider with lazy optional dependency loading.
+
+    本地 whisper.cpp 提供商，延迟加载可选依赖。
+
+    The underlying ``pywhispercpp.model.Model`` is created on first
+    transcription so that importing this module does not require the
+    ``pywhispercpp`` package to be installed.
+
+    底层 ``pywhispercpp.model.Model`` 在首次转录时创建，因此导入此模块不要求
+    安装 ``pywhispercpp`` 包。
+    """
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -44,6 +66,15 @@ class WhisperCppASR(ASRInterface):
         return ASRHealth(True)
 
     def transcribe_np(self, audio: Any) -> str:
+        """Transcribe a float32 numpy audio array using whisper.cpp.
+
+        使用 whisper.cpp 转录 float32 numpy 音频数组。
+
+        Segments are concatenated into a single string.  An optional
+        ``initial_prompt`` is passed to guide the model.
+
+        分段结果拼接为单个字符串。可选的 ``initial_prompt`` 用于引导模型。
+        """
         model = self._get_model()
         kwargs: dict[str, Any] = {"new_segment_callback": logger.info}
         if self.prompt:

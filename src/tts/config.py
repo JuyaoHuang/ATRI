@@ -1,4 +1,14 @@
-"""TTS configuration loading and persistence."""
+"""TTS configuration loading and persistence.
+
+TTS 配置加载与持久化模块。
+
+Provides a YAML-backed config store with deep-merge semantics, environment
+variable placeholder preservation, and safe secret handling.
+
+提供基于 YAML 的配置存储，支持深度合并语义、环境变量占位符保留和安全的密钥处理。
+
+Reference: docs/TTS模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -36,7 +46,26 @@ DEFAULT_TTS_CONFIG: dict[str, Any] = {
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge mappings without mutating inputs."""
+    """Recursively merge mappings without mutating inputs.
+
+    递归合并两个字典，不修改原始输入。
+
+    When both ``base`` and ``override`` contain a dict value for the same key,
+    the sub-dicts are merged recursively; otherwise the override value wins.
+
+    当 ``base`` 和 ``override`` 中同一键对应的值都是字典时，递归合并子字典；
+    否则以 override 的值为准。
+
+    Args:
+        base: The base mapping.
+              基础字典。
+        override: The mapping whose values take precedence.
+                  优先级更高的覆盖字典。
+
+    Returns:
+        A new merged dict. Returns a new merged dict (deep copy).
+        合并后的新字典（深拷贝）。
+    """
 
     result = deepcopy(base)
     for key, value in override.items():
@@ -48,7 +77,18 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 
 class TTSConfigStore:
-    """Small YAML-backed configuration store for TTS settings."""
+    """Small YAML-backed configuration store for TTS settings.
+
+    小型 YAML 配置存储，用于管理 TTS 设置。
+
+    Merges on-disk YAML with runtime defaults and optional initial overrides.
+    Sensitive keys (api_key, token, etc.) are preserved across disk refreshes
+    so that resolved environment-variable values are not lost.
+
+    将磁盘上的 YAML 与运行时默认值和可选的初始覆盖值合并。
+    敏感键（api_key、token 等）在磁盘刷新时会被保留，
+    以确保已解析的环境变量值不会丢失。
+    """
 
     def __init__(
         self,
@@ -65,12 +105,33 @@ class TTSConfigStore:
             self._config = deep_merge(self._config, initial_config)
 
     def read(self) -> dict[str, Any]:
-        """Return a defensive copy of the current TTS config."""
+        """Return a defensive copy of the current TTS config.
+
+        返回当前 TTS 配置的防御性拷贝。
+        """
 
         return deepcopy(self._config)
 
     def update(self, patch: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        """Merge a partial config update and persist it by default."""
+        """Merge a partial config update and persist it by default.
+
+        合并部分配置更新，默认会持久化到磁盘。
+
+        When ``persist`` is true the on-disk YAML is refreshed first to avoid
+        overwriting concurrent external edits.
+
+        当 ``persist`` 为 True 时，会先从磁盘刷新配置，以避免覆盖并发的外部修改。
+
+        Args:
+            patch: Partial config dict to merge in.
+                   要合并的部分配置字典。
+            persist: Whether to write changes to disk.
+                     是否将变更写入磁盘。
+
+        Returns:
+            The full config after the merge.
+            合并后的完整配置。
+        """
 
         had_file = self.path.is_file()
         if persist:
@@ -82,7 +143,26 @@ class TTSConfigStore:
         return self.read()
 
     def replace(self, config: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        """Replace the current config after applying runtime defaults."""
+        """Replace the current config after applying runtime defaults.
+
+        替换当前配置，并重新应用运行时默认值。
+
+        Unlike :meth:`update`, this discards the previous config entirely and
+        applies ``DEFAULT_TTS_CONFIG`` as the base.
+
+        与 :meth:`update` 不同，此方法会完全丢弃之前的配置，
+        并以 ``DEFAULT_TTS_CONFIG`` 作为基础。
+
+        Args:
+            config: New config dict to set.
+                    要设置的新配置字典。
+            persist: Whether to write changes to disk.
+                     是否将变更写入磁盘。
+
+        Returns:
+            The full config after replacement.
+            替换后的完整配置。
+        """
 
         self._config = deep_merge(DEFAULT_TTS_CONFIG, config)
         self._persist_config = deepcopy(config)
@@ -91,7 +171,10 @@ class TTSConfigStore:
         return self.read()
 
     def save(self) -> None:
-        """Persist explicit config values without reformatting the YAML document."""
+        """Persist explicit config values without reformatting the YAML document.
+
+        将显式配置值持久化到磁盘，不重新格式化 YAML 文档。
+        """
 
         self._save_patch(self._persist_config)
 

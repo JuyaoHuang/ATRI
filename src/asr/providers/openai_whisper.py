@@ -1,4 +1,16 @@
-"""OpenAI Whisper-compatible cloud ASR provider."""
+"""OpenAI Whisper-compatible cloud ASR provider.
+
+OpenAI Whisper 兼容的云端 ASR 提供商模块。
+
+Provides cloud-based audio transcription through the OpenAI-compatible
+SDK.  Audio bytes are written to a temporary file and sent via the
+``audio.transcriptions`` API.
+
+通过 OpenAI 兼容 SDK 提供基于云端的音频转录。音频字节写入临时文件后通过
+``audio.transcriptions`` API 发送。
+
+Reference: docs/ASR模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -24,7 +36,17 @@ from src.asr.interface import ASRHealth, ASRInterface
     ),
 )
 class OpenAIWhisperASR(ASRInterface):
-    """Cloud transcription provider with lazy OpenAI client creation."""
+    """Cloud transcription provider with lazy OpenAI client creation.
+
+    云端转录提供商，延迟创建 OpenAI 客户端。
+
+    This provider does **not** support numpy-array transcription; it
+    only accepts uploaded audio bytes.  The OpenAI client is created
+    per-request to avoid holding credentials in long-lived objects.
+
+    此提供商**不**支持 numpy 数组转录；仅接受上传的音频字节。OpenAI 客户端
+    每次请求时创建，避免在长生命周期对象中持有凭证。
+    """
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -44,6 +66,14 @@ class OpenAIWhisperASR(ASRInterface):
         return ASRHealth(True)
 
     def transcribe_np(self, audio: Any) -> str:
+        """Not supported — cloud providers do not accept numpy arrays.
+
+        不支持 — 云端提供商不接受 numpy 数组。
+
+        Always raises ``ASRProviderUnavailableError``.
+
+        始终抛出 ``ASRProviderUnavailableError``。
+        """
         raise ASRProviderUnavailableError(
             "openai_whisper accepts uploaded audio files, not numpy arrays"
         )
@@ -55,6 +85,15 @@ class OpenAIWhisperASR(ASRInterface):
         filename: str | None = None,
         content_type: str | None = None,
     ) -> str:
+        """Transcribe uploaded audio bytes via the OpenAI API.
+
+        通过 OpenAI API 转录上传的音频字节。
+
+        Audio is written to a temporary file (preserving the original
+        extension) and sent to the ``audio.transcriptions`` endpoint.
+
+        音频写入临时文件（保留原始扩展名）并发送到 ``audio.transcriptions`` 端点。
+        """
         health = self.health()
         if not health.available:
             raise ASRProviderUnavailableError(health.reason or "openai_whisper is unavailable")

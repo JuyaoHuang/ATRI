@@ -114,6 +114,13 @@ def resolve_user_character_dir(
     mem0's ``user_id`` / ``agent_id`` scope. On first access, copy legacy
     files into the current user's directory and keep the legacy files as a
     fallback backup.
+
+    返回某个角色的用户级本地记忆目录。
+
+    旧版部署将短期记忆存储在 ``{characters_dir}/{character}``。新路径为
+    ``{characters_dir}/{user_id}/{character}``，与聊天存储和 mem0 的
+    ``user_id`` / ``agent_id`` 作用域保持一致。首次访问时，将旧文件复制到
+    当前用户目录，并保留旧文件作为回退备份。
     """
 
     safe_user_id = _validate_path_component("user_id", user_id)
@@ -126,7 +133,10 @@ def resolve_user_character_dir(
 
 
 def legacy_character_dir(memory_config: dict[str, Any], character: str) -> Path:
-    """Return the pre-user-scope memory directory for ``character``."""
+    """Return the pre-user-scope memory directory for ``character``.
+
+    返回 ``character`` 在用户作用域之前的记忆目录。
+    """
 
     safe_character = _validate_path_component("character", character)
     chars_root = Path(memory_config.get("storage", {}).get("characters_dir", "./data/characters"))
@@ -182,7 +192,10 @@ def resolve_user_character_chat_dir(
     *,
     migrate_legacy: bool = True,
 ) -> Path:
-    """Return the chat-scoped local memory directory for a character chat."""
+    """Return the chat-scoped local memory directory for a character chat.
+
+    返回某次角色聊天的聊天级本地记忆目录。
+    """
 
     safe_chat_id = _validate_path_component("chat_id", chat_id)
     character_dir = resolve_user_character_dir(
@@ -484,6 +497,11 @@ class MemoryManager:
         The manager remains usable after this call: the active session id is
         preserved when present, and the next round starts with an empty
         ``short_term_memory`` skeleton instead of restoring old context.
+
+        热清除内存中的短期状态并删除其文件。
+
+        调用后管理器仍可继续使用：活动会话 ID（若存在）会被保留，下一轮
+        将以空的 ``short_term_memory`` 骨架开始，而非恢复旧上下文。
         """
 
         session_id = self._active_session_id or _new_session_id()

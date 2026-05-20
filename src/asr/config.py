@@ -1,4 +1,14 @@
-"""ASR configuration loading and persistence."""
+"""ASR configuration loading and persistence.
+
+ASR 配置加载与持久化模块。
+
+Provides a YAML-backed configuration store with deep-merge semantics,
+environment-variable placeholder handling, and sensitive-key protection.
+
+提供基于 YAML 的配置存储，支持深度合并语义、环境变量占位符处理和敏感字段保护。
+
+Reference: docs/ASR模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -46,7 +56,15 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge mapping values without mutating inputs."""
+    """Recursively merge mapping values without mutating inputs.
+
+    递归合并字典值，不修改原始输入。
+
+    Nested dicts are merged key-by-key; all other values are deep-copied
+    from *override*.  Neither *base* nor *override* is modified.
+
+    嵌套字典按键逐一合并；其余值从 override 深拷贝。base 和 override 均不会被修改。
+    """
 
     result = deepcopy(base)
     for key, value in override.items():
@@ -58,7 +76,20 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 
 class ASRConfigStore:
-    """Small YAML-backed configuration store for ASR settings."""
+    """Small YAML-backed configuration store for ASR settings.
+
+    轻量级 YAML 配置存储，用于管理 ASR 设置。
+
+    Reads the YAML file on construction, merges with built-in defaults,
+    and supports incremental ``update`` / full ``replace`` with optional
+    persistence.  Environment-variable placeholders (``${VAR}``) in
+    sensitive keys are preserved on disk while resolved values stay in
+    memory.
+
+    构造时读取 YAML 文件，与内置默认值合并，支持增量 update / 全量 replace
+    以及可选的持久化。敏感键中的环境变量占位符（``${VAR}``）在磁盘上保留，
+    而解析后的值保留在内存中。
+    """
 
     def __init__(
         self,
@@ -66,6 +97,17 @@ class ASRConfigStore:
         *,
         path: Path | None = None,
     ) -> None:
+        """Initialise the config store.
+
+        初始化配置存储。
+
+        Reads the YAML file at *path* (or the default location) and merges
+        it with ``DEFAULT_ASR_CONFIG``.  If *initial_config* is provided it
+        takes highest priority.
+
+        读取 path 指定的 YAML 文件（或默认位置），与 DEFAULT_ASR_CONFIG 合并。
+        若提供 initial_config，则其优先级最高。
+        """
         self.path = path or DEFAULT_ASR_CONFIG_PATH
         raw_config = self._read_raw_config()
         source_config = raw_config if raw_config is not None else initial_config or {}
@@ -75,12 +117,25 @@ class ASRConfigStore:
             self._config = deep_merge(self._config, initial_config)
 
     def read(self) -> dict[str, Any]:
-        """Return a defensive copy of the current ASR config."""
+        """Return a defensive copy of the current ASR config.
+
+        返回当前 ASR 配置的防御性副本。
+        """
 
         return deepcopy(self._config)
 
     def update(self, patch: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        """Merge a partial config update and persist it by default."""
+        """Merge a partial config update and persist it by default.
+
+        合并部分配置更新，默认持久化到磁盘。
+
+        Refreshes from disk first (when *persist* is ``True``) to avoid
+        overwriting concurrent edits, then deep-merges *patch* into both
+        the runtime and persisted config layers.
+
+        当 persist 为 True 时先从磁盘刷新以避免覆盖并发编辑，
+        然后将 patch 深度合并到运行时和持久化配置层。
+        """
 
         had_file = self.path.is_file()
         if persist:
@@ -92,7 +147,16 @@ class ASRConfigStore:
         return self.read()
 
     def replace(self, config: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        """Replace the current config after applying defaults."""
+        """Replace the current config after applying defaults.
+
+        应用默认值后替换当前配置。
+
+        Unlike ``update``, this discards all existing keys and starts
+        fresh from ``DEFAULT_ASR_CONFIG`` merged with *config*.
+
+        与 update 不同，此方法丢弃所有现有键，以 DEFAULT_ASR_CONFIG
+        与 config 合并后的结果作为全新配置。
+        """
 
         self._config = deep_merge(DEFAULT_ASR_CONFIG, config)
         self._persist_config = deepcopy(config)
@@ -101,7 +165,10 @@ class ASRConfigStore:
         return self.read()
 
     def save(self) -> None:
-        """Persist current values without reformatting the YAML document."""
+        """Persist current values without reformatting the YAML document.
+
+        持久化当前配置值，不重新格式化 YAML 文档。
+        """
 
         self._save_patch(self._persist_config)
 

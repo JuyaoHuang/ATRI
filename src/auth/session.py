@@ -1,4 +1,7 @@
-"""Shared session-cookie constants for authentication."""
+"""Shared session-cookie constants for authentication.
+
+认证共享的会话 Cookie 常量。
+"""
 
 from typing import Literal
 

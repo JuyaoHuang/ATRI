@@ -1,4 +1,7 @@
-"""Live2D management REST API routes."""
+"""Live2D management REST API routes.
+
+Live2D 管理 REST API 路由。
+"""
 
 from __future__ import annotations
 
@@ -32,7 +35,10 @@ router = APIRouter(prefix="/api/live2d/models", tags=["live2d"])
 
 
 def get_live2d_storage(request: Request) -> Live2DStorage:
-    """Return app-scoped Live2D storage, creating a default one if needed."""
+    """Return app-scoped Live2D storage, creating a default one if needed.
+
+    返回应用级 Live2D 存储，若不存在则创建默认实例。
+    """
 
     storage = getattr(request.app.state, "live2d_storage", None)
     if storage is None:
@@ -79,7 +85,10 @@ async def list_live2d_models(
     request: Request,
     storage: Live2DStorageDep,
 ) -> list[Live2DModelSummary]:
-    """List all stored Live2D models."""
+    """List all stored Live2D models.
+
+    列出所有存储的 Live2D 模型。
+    """
 
     return [_serialize_model(record, request, storage) for record in storage.list_models()]
 
@@ -91,7 +100,10 @@ async def upload_live2d_model(
     storage: Live2DStorageDep,
     name: str | None = Form(default=None),
 ) -> Live2DModelSummary:
-    """Upload and extract a Live2D ZIP archive."""
+    """Upload and extract a Live2D ZIP archive.
+
+    上传并解压 Live2D ZIP 压缩包。
+    """
 
     try:
         record = await storage.save_model(model, name=name)
@@ -106,7 +118,10 @@ async def get_live2d_expressions(
     model_id: str,
     storage: Live2DStorageDep,
 ) -> Live2DExpressionList:
-    """Return the expression list for one Live2D model."""
+    """Return the expression list for one Live2D model.
+
+    返回单个 Live2D 模型的表情列表。
+    """
 
     try:
         expressions = storage.list_expressions(model_id)
@@ -123,7 +138,10 @@ async def update_live2d_model(
     request: Request,
     storage: Live2DStorageDep,
 ) -> Live2DModelSummary:
-    """Update mutable Live2D model metadata."""
+    """Update mutable Live2D model metadata.
+
+    更新 Live2D 模型的可变元数据。
+    """
 
     try:
         record = storage.update_model(model_id, name=payload.name)
@@ -138,7 +156,10 @@ async def delete_live2d_model(
     model_id: str,
     storage: Live2DStorageDep,
 ) -> Response:
-    """Delete one Live2D model directory."""
+    """Delete one Live2D model directory.
+
+    删除单个 Live2D 模型目录。
+    """
 
     try:
         storage.delete_model(model_id)

@@ -1,4 +1,7 @@
-"""Application-level authentication service."""
+"""Application-level authentication service.
+
+应用级认证服务。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,10 @@ from src.auth.whitelist import Whitelist
 
 @dataclass(frozen=True)
 class AuthenticatedUser:
-    """Authenticated user identity exposed to routes."""
+    """Authenticated user identity exposed to routes.
+
+    暴露给路由的已认证用户身份。
+    """
 
     username: str
     avatar_url: str | None = None
@@ -22,7 +28,10 @@ class AuthenticatedUser:
 
 
 class AuthService:
-    """Auth facade used by routes, middleware, and WebSocket handlers."""
+    """Auth facade used by routes, middleware, and WebSocket handlers.
+
+    供路由、中间件和 WebSocket 处理器使用的认证门面。
+    """
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -58,15 +67,27 @@ class AuthService:
             )
 
     def create_token_for_github_user(self, user: GitHubUser) -> str:
+        """Create a JWT token for an authenticated GitHub user.
+
+        为已认证的 GitHub 用户创建 JWT 令牌。
+        """
         if not self.jwt_manager:
             raise AuthConfigError("JWT manager is not configured")
         return self.jwt_manager.create_token(user.username, avatar_url=user.avatar_url)
 
     def require_allowed_user(self, user: GitHubUser) -> None:
+        """Raise if the user is not on the whitelist.
+
+        若用户不在白名单中则抛出异常。
+        """
         if not self.whitelist.is_allowed(user.username):
             raise AuthUnauthorizedError(f"GitHub user '{user.username}' is not whitelisted")
 
     def authenticate_bearer_token(self, authorization: str | None) -> AuthenticatedUser:
+        """Authenticate a request via Bearer token.
+
+        通过 Bearer 令牌认证请求。
+        """
         if not self.enabled:
             return AuthenticatedUser(username="default")
         if not authorization or not authorization.startswith("Bearer "):
@@ -79,6 +100,10 @@ class AuthService:
         authorization: str | None,
         session_token: str | None,
     ) -> AuthenticatedUser:
+        """Authenticate via session cookie or Bearer token (cookie takes priority).
+
+        通过会话 Cookie 或 Bearer 令牌认证（Cookie 优先）。
+        """
         if not self.enabled:
             return AuthenticatedUser(username="default")
         if session_token:
@@ -88,6 +113,10 @@ class AuthService:
         raise AuthTokenError("Missing session cookie")
 
     def authenticate_token(self, token: str | None) -> AuthenticatedUser:
+        """Verify a JWT token and return the authenticated user.
+
+        验证 JWT 令牌并返回已认证的用户。
+        """
         if not self.enabled:
             return AuthenticatedUser(username="default")
         if not token:

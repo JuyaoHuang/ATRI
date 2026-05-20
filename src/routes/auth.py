@@ -1,4 +1,7 @@
-"""Authentication API routes."""
+"""Authentication API routes.
+
+认证 API 路由。
+"""
 
 from __future__ import annotations
 
@@ -132,6 +135,10 @@ def _has_valid_session_cookie(request: Request) -> bool:
 
 @router.get("/status", response_model=AuthStatusResponse)
 async def get_auth_status(request: Request) -> AuthStatusResponse:
+    """Return whether authentication is enabled.
+
+    返回认证是否启用。
+    """
     auth_service = get_auth_service(request.app)
     return AuthStatusResponse(enabled=auth_service.enabled)
 
@@ -142,6 +149,10 @@ async def get_login_url(
     response: Response,
     state: str | None = Query(None),  # Kept for backward-compatible clients; ignored.
 ) -> AuthLoginResponse:
+    """Return the GitHub OAuth authorization URL and set the state cookie.
+
+    返回 GitHub OAuth 授权 URL 并设置 state Cookie。
+    """
     auth_service = get_auth_service(request.app)
     if not auth_service.enabled:
         return AuthLoginResponse(enabled=False, authorization_url=None)
@@ -163,6 +174,10 @@ async def github_callback(
     state: str | None = Query(None),
     error: str | None = Query(None),
 ) -> RedirectResponse:
+    """Handle the GitHub OAuth callback, exchange code for token, and set session.
+
+    处理 GitHub OAuth 回调，将授权码交换为令牌，并设置会话。
+    """
     auth_service = get_auth_service(request.app)
     if not auth_service.enabled:
         return _redirect_with_cleared_oauth_state(
@@ -230,6 +245,10 @@ async def github_callback(
 
 @router.get("/me", response_model=AuthUserResponse)
 async def get_current_user(request: Request) -> AuthUserResponse:
+    """Return the currently authenticated user's profile.
+
+    返回当前已认证用户的资料。
+    """
     auth_service = get_auth_service(request.app)
     if not auth_service.enabled:
         return AuthUserResponse(username=DEFAULT_USER_ID, auth_enabled=False)
@@ -253,5 +272,9 @@ async def get_current_user(request: Request) -> AuthUserResponse:
 
 @router.post("/logout", response_model=AuthLogoutResponse)
 async def logout(request: Request, response: Response) -> AuthLogoutResponse:
+    """Clear the session cookie and log the user out.
+
+    清除会话 Cookie 并登出用户。
+    """
     _clear_session_cookie(request, response)
     return AuthLogoutResponse(success=True)

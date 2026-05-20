@@ -1,12 +1,22 @@
-"""Placeholder for DatabaseChatStorage (Phase 7)."""
+"""Placeholder for DatabaseChatStorage (Phase 7).
+
+DatabaseChatStorage 的占位实现（Phase 7）。
+"""
 
 from src.storage.interface import ChatStorageInterface
 
 
 class DatabaseChatStorage(ChatStorageInterface):
-    """Database-backed chat storage (reserved for Phase 7)."""
+    """Database-backed chat storage (reserved for Phase 7).
+
+    基于数据库的聊天存储（为 Phase 7 预留）。
+    """
 
     def __init__(self, database_url: str):
+        """Initialize the database storage with a connection URL.
+
+        使用数据库连接 URL 初始化存储。
+        """
         self.database_url = database_url
 
     async def create_chat(self, user_id: str, character_id: str, title: str) -> dict:

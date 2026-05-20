@@ -1,4 +1,15 @@
-"""SiliconFlow TTS provider."""
+"""SiliconFlow TTS provider.
+
+SiliconFlow TTS 提供商。
+
+Calls the SiliconFlow cloud audio/speech API for text-to-speech synthesis.
+Supports system voices and user-uploaded custom voices.
+
+调用 SiliconFlow 云端 audio/speech API 进行文本转语音合成。
+支持系统语音和用户上传的自定义语音。
+
+Reference: docs/TTS模块设计文档.md
+"""
 
 from __future__ import annotations
 
@@ -17,6 +28,18 @@ SYSTEM_VOICE_NAMES = ("alex", "benjamin", "charles", "david", "anna", "bella", "
 
 
 def _media_type_from_format(audio_format: str) -> str:
+    """Map an audio format string to a MIME type.
+
+    将音频格式字符串映射为 MIME 类型。
+
+    Args:
+        audio_format: Format extension (e.g. ``"mp3"``, ``"wav"``, ``"opus"``).
+                      格式扩展名（如 ``"mp3"``、``"wav"``、``"opus"``）。
+
+    Returns:
+        The corresponding MIME type string.
+        对应的 MIME 类型字符串。
+    """
     value = audio_format.lower().lstrip(".")
     if value == "mp3":
         return "audio/mpeg"
@@ -30,6 +53,10 @@ def _media_type_from_format(audio_format: str) -> str:
 
 
 def _secret_is_configured(value: str) -> bool:
+    """Check whether a secret value is a real credential (not an env placeholder).
+
+    检查密钥值是否为真实凭据（而非环境变量占位符）。
+    """
     return bool(value) and not (value.startswith("${") and value.endswith("}"))
 
 
@@ -45,7 +72,18 @@ def _secret_is_configured(value: str) -> bool:
     ),
 )
 class SiliconFlowTTSProvider(TTSInterface):
-    """Complete-audio SiliconFlow TTS provider."""
+    """Complete-audio SiliconFlow TTS provider.
+
+    完整音频 SiliconFlow TTS 提供商。
+
+    Sends synthesis requests to the SiliconFlow audio/speech REST API.
+    System voices are derived from the configured model; custom voices are
+    fetched from the ``/v1/audio/voice/list`` endpoint when an API key is set.
+
+    向 SiliconFlow audio/speech REST API 发送合成请求。
+    系统语音由配置的模型派生；当设置了 API 密钥时，
+    从 ``/v1/audio/voice/list`` 端点获取自定义语音。
+    """
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
@@ -64,6 +102,10 @@ class SiliconFlowTTSProvider(TTSInterface):
         self.media_type = _media_type_from_format(self.response_format)
 
     def health(self) -> TTSHealth:
+        """Check whether API URL and API key are configured.
+
+        检查 API URL 和 API 密钥是否已配置。
+        """
         if not self.api_url:
             return TTSHealth(False, "siliconflow_tts.api_url is not configured")
         if not _secret_is_configured(self.api_key):
@@ -77,6 +119,30 @@ class SiliconFlowTTSProvider(TTSInterface):
         voice_id: str | None = None,
         **kwargs: Any,
     ) -> bytes:
+        """Synthesize text via the SiliconFlow audio/speech API.
+
+        通过 SiliconFlow audio/speech API 合成文本。
+
+        Args:
+            text: The text to synthesize.
+                  要合成的文本。
+            voice_id: Optional voice identifier (e.g. ``"model:claire"``).
+                      可选的语音标识符（如 ``"model:claire"``）。
+            **kwargs: Optional overrides for ``model``, ``voice``,
+                      ``response_format``, ``sample_rate``, ``speed``, ``gain``.
+                      可选的 ``model``、``voice``、``response_format``、
+                      ``sample_rate``、``speed``、``gain`` 覆盖。
+
+        Returns:
+            Audio bytes in the configured format.
+            配置格式的音频字节。
+
+        Raises:
+            TTSAPIError: On HTTP errors or empty responses.
+                         HTTP 错误或空响应时抛出。
+            TTSRateLimitError: On HTTP 429 responses.
+                               HTTP 429 响应时抛出。
+        """
         health = self.health()
         if not health.available:
             raise TTSProviderUnavailableError(health.reason or "siliconflow_tts is unavailable")
@@ -116,6 +182,21 @@ class SiliconFlowTTSProvider(TTSInterface):
         return response.content
 
     async def get_voices(self) -> list[TTSVoice]:
+        """Return system voices for the configured model plus any custom voices.
+
+        返回已配置模型的系统语音及自定义语音。
+
+        System voices (alex, benjamin, etc.) are always included.
+        Custom voices are fetched from the API only when a valid API key
+        is configured.
+
+        系统语音（alex、benjamin 等）始终包含。
+        仅在配置了有效 API 密钥时才会从 API 获取自定义语音。
+
+        Returns:
+            A deduplicated list of :class:`TTSVoice`.
+            去重后的 :class:`TTSVoice` 列表。
+        """
         voices = self._system_voices_for_model(self.default_model)
         if _secret_is_configured(self.api_key):
             voices.extend(await self._fetch_custom_voices())

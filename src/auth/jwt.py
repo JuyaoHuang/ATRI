@@ -1,4 +1,7 @@
-"""Small HS256 JWT implementation using the Python standard library."""
+"""Small HS256 JWT implementation using the Python standard library.
+
+基于 Python 标准库的小型 HS256 JWT 实现。
+"""
 
 from __future__ import annotations
 
@@ -29,7 +32,10 @@ def _json_dumps(data: dict[str, Any]) -> bytes:
 
 
 class JWTManager:
-    """Create and verify HS256 JWT tokens."""
+    """Create and verify HS256 JWT tokens.
+
+    创建和验证 HS256 JWT 令牌。
+    """
 
     def __init__(
         self,
@@ -56,7 +62,10 @@ class JWTManager:
         avatar_url: str | None = None,
         now: datetime | None = None,
     ) -> str:
-        """Create a signed JWT token for a GitHub username."""
+        """Create a signed JWT token for a GitHub username.
+
+        为 GitHub 用户名创建签名的 JWT 令牌。
+        """
         issued_at = now or datetime.now(UTC)
         expires_at = issued_at + timedelta(days=self.expire_days)
         payload: dict[str, Any] = {
@@ -75,7 +84,10 @@ class JWTManager:
         return f"{signing_input}.{signature}"
 
     def verify_token(self, token: str, *, now: datetime | None = None) -> dict[str, Any]:
-        """Verify a token and return its payload."""
+        """Verify a token and return its payload.
+
+        验证令牌并返回其载荷。
+        """
         parts = token.split(".")
         if len(parts) != 3:
             raise AuthTokenError("Invalid token format")

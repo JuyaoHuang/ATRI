@@ -1,4 +1,7 @@
-"""TTS management and synthesis REST API routes."""
+"""TTS management and synthesis REST API routes.
+
+TTS 管理与合成 REST API 路由。
+"""
 
 from __future__ import annotations
 
@@ -28,7 +31,10 @@ router = APIRouter(prefix="/api/tts", tags=["tts"])
 
 
 def get_tts_service(request: Request) -> TTSService:
-    """Return app-scoped TTS service, creating a default one if needed."""
+    """Return app-scoped TTS service, creating a default one if needed.
+
+    返回应用级 TTS 服务，若不存在则创建默认实例。
+    """
 
     service = getattr(request.app.state, "tts_service", None)
     if service is None:
@@ -63,14 +69,20 @@ def _handle_tts_error(error: Exception) -> HTTPException:
 
 @router.get("/providers", response_model=list[TTSProviderStatus])
 async def list_tts_providers(service: TTSServiceDep) -> list[TTSProviderStatus]:
-    """List registered TTS providers with health and config state."""
+    """List registered TTS providers with health and config state.
+
+    列出已注册的 TTS 提供商及其健康状态与配置信息。
+    """
 
     return _provider_status_list(service.list_providers())
 
 
 @router.get("/config", response_model=TTSConfigResponse)
 async def get_tts_config(service: TTSServiceDep) -> TTSConfigResponse:
-    """Return current OLV-shaped TTS config and provider statuses."""
+    """Return current OLV-shaped TTS config and provider statuses.
+
+    返回当前 OLV 格式的 TTS 配置和提供商状态。
+    """
 
     return TTSConfigResponse(
         config=service.get_config(),
@@ -83,7 +95,10 @@ async def update_tts_config(
     payload: dict[str, Any],
     service: TTSServiceDep,
 ) -> TTSConfigResponse:
-    """Merge and persist a partial OLV-shaped TTS config update."""
+    """Merge and persist a partial OLV-shaped TTS config update.
+
+    合并并持久化部分 OLV 格式的 TTS 配置更新。
+    """
 
     try:
         service.update_config(payload)
@@ -101,7 +116,10 @@ async def switch_tts_provider(
     payload: TTSProviderSwitchRequest,
     service: TTSServiceDep,
 ) -> TTSConfigResponse:
-    """Switch active TTS provider."""
+    """Switch active TTS provider.
+
+    切换活跃的 TTS 提供商。
+    """
 
     try:
         service.switch_provider(payload.provider)
@@ -116,7 +134,10 @@ async def switch_tts_provider(
 
 @router.get("/health", response_model=TTSHealthResponse)
 async def get_tts_health(service: TTSServiceDep) -> TTSHealthResponse:
-    """Return active provider and all-provider health."""
+    """Return active provider and all-provider health.
+
+    返回活跃提供商及所有提供商的健康状态。
+    """
 
     health = service.health()
     return TTSHealthResponse(
@@ -131,7 +152,10 @@ async def get_tts_voices(
     service: TTSServiceDep,
     provider: str | None = None,
 ) -> TTSVoicesResponse:
-    """Return voices for active or requested TTS provider."""
+    """Return voices for active or requested TTS provider.
+
+    返回活跃或指定 TTS 提供商的语音列表。
+    """
 
     try:
         result = await service.get_voices(provider=provider)
@@ -145,7 +169,10 @@ async def synthesize_text(
     payload: TTSSynthesisRequest,
     service: TTSServiceDep,
 ) -> Response:
-    """Synthesize text with the active or requested TTS provider."""
+    """Synthesize text with the active or requested TTS provider.
+
+    使用活跃或指定的 TTS 提供商合成文本。
+    """
 
     logger.info(
         "TTS synth request received | provider={} | text_len={} | voice_id={} | options_keys={}",
