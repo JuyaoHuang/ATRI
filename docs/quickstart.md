@@ -476,7 +476,7 @@ enabled: false
 
 ## 11. 下一步
 
-- 阅读 `docs/configs/认证系统使用指南.md` 配置公网登录。
-- 阅读 `docs/configs/ASR配置说明.md` 和 `docs/configs/TTS配置说明.md` 启用语音链路。
-- 阅读 `docs/configs/角色创建指南.md` 添加自己的角色、头像和问候语。
+- 阅读 `docs/configs/CN/认证系统使用指南.md` 配置公网登录。
+- 阅读 `docs/configs/CN/ASR配置说明.md` 和 `docs/configs/CN/TTS配置说明.md` 启用语音链路。
+- 阅读 `docs/configs/CN/角色创建指南.md` 添加自己的角色、头像和问候语。
 - 通过 `http://localhost:8430/docs` 查看后端接口。

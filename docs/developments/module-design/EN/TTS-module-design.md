@@ -8,10 +8,10 @@
 
 ## Reference Documents
 
-- **Design Discussion**: `docs/总结_前端对话历史.md` (Round 6-9, Round 11-17)
-- **Full Conversation**: `docs/前端设计对话历史.md` (Round 6-8, Round 15-16)
-- **Backend Architecture**: `docs/后端设计.md`
-- **Project Architecture**: `docs/项目架构设计.md`
+- **Design Discussion**: `docs/developments/总结_前端对话历史.md` (Round 6-9, Round 11-17)
+- **Full Conversation**: `docs/developments/前端设计对话历史.md` (Round 6-8, Round 15-16)
+- **Backend Architecture**: `docs/developments/module-design/EN/backend-design.md`
+- **Project Architecture**: `docs/developments/project-architecture-design.en.md`
 
 ## Reference Projects
 

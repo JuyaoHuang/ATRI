@@ -691,7 +691,7 @@ curl http://localhost:8430/api/characters/my_character
 | `src/agent/persona.py` | Persona loader |
 | `src/routes/characters.py` | Character management API |
 | `prompts/prompt_loader.py` | Prompt file loader |
-| `docs/后端API接口文档.md` | Complete API documentation |
+| `docs/developments/module-design/EN/backend-API-documentation.md` | Complete API documentation |
 
 ### Related API
 

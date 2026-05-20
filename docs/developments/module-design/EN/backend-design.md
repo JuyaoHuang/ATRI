@@ -211,7 +211,7 @@ memory/manager.py
 ### 2.5 Core Data Flow (ChatAgent + LLM Calling + Memory System + Raw Input)
 
 > **Supplementary note (2026-04-19)**: This section clarifies the collaboration between the four parties after Phase 4 introduced `ChatAgent`.
-> Detailed step-by-step diagrams can be found in `docs/Memory System Design Discussion.md` section 6.1.
+> Detailed step-by-step diagrams can be found in `docs/developments/module-design/EN/memory-system-design.md` section 6.1.
 
 **Main response path**:
 

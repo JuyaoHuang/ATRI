@@ -1480,11 +1480,11 @@ atri/public/models/hiyori/expressions/new_expression.exp3.json
 
 ### 15.4 Related Design Documents
 
-- **Project Architecture Design**: docs/项目架构设计.md
-- **Frontend Design Document**: docs/前端设计文档.md
-- **Backend Design**: docs/后端设计.md
-- **TTS Module Design**: docs/TTS模块设计文档.md
-- **ASR Module Design**: docs/ASR模块设计文档.md
+- **Project Architecture Design**: docs/developments/project-architecture-design.en.md
+- **Frontend Design Document**: docs/developments/module-design/EN/frontend-design.md
+- **Backend Design**: docs/developments/module-design/EN/backend-design.md
+- **TTS Module Design**: docs/developments/module-design/EN/TTS-module-design.md
+- **ASR Module Design**: docs/developments/module-design/EN/ASR-module-design.md
 
 ---
 

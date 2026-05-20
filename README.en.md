@@ -122,7 +122,7 @@ After the backend starts, you can also access the auto-generated API documentati
 
 | Document | Description |
 |---|---|
-| [Architecture Document](docs/developments/module-design/EN/project-architecture-design.md) | ATRI's overall project architecture and development documentation entry point |
+| [Architecture Document](docs/developments/project-architecture-design.en.md) | ATRI's overall project architecture and development documentation entry point |
 | [Authentication System Guide](docs/configs/EN/authentication-system-guide.md) | GitHub OAuth configuration and whitelist management |
 | [ASR Configuration Guide](docs/configs/EN/ASR-configuration.md) | Speech recognition provider configuration |
 | [TTS Configuration Guide](docs/configs/EN/TTS-configuration.md) | Speech synthesis provider configuration |

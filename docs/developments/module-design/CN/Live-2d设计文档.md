@@ -1480,11 +1480,11 @@ atri/public/models/hiyori/expressions/new_expression.exp3.json
 
 ### 15.4 相关设计文档
 
-- **项目架构设计**: docs/项目架构设计.md
-- **前端设计文档**: docs/前端设计文档.md
-- **后端设计**: docs/后端设计.md
-- **TTS 模块设计**: docs/TTS 模块设计文档.md
-- **ASR 模块设计**: docs/ASR 模块设计文档.md
+- **项目架构设计**: docs/developments/项目架构设计.md
+- **前端设计文档**: docs/developments/module-design/CN/前端设计文档.md
+- **后端设计**: docs/developments/module-design/CN/后端设计.md
+- **TTS 模块设计**: docs/developments/module-design/CN/TTS 模块设计文档.md
+- **ASR 模块设计**: docs/developments/module-design/CN/ASR 模块设计文档.md
 
 ---
 

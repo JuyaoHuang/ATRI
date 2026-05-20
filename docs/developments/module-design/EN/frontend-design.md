@@ -13,10 +13,10 @@
 
 ## Reference Documents
 
-- **Design Discussion**: `docs/总结_前端对话历史.md` (Round 1-18)
-- **Full Conversation**: `docs/前端设计对话历史.md`
-- **Backend Architecture**: `docs/后端设计.md`
-- **Backend API**: `docs/后端API接口文档.md`
+- **Design Discussion**: `docs/developments/总结_前端对话历史.md` (Round 1-18)
+- **Full Conversation**: `docs/developments/前端设计对话历史.md`
+- **Backend Architecture**: `docs/developments/module-design/EN/backend-design.md`
+- **Backend API**: `docs/developments/module-design/EN/backend-API-documentation.md`
 - **Feature Comparison**: `docs/projects-docs/AIRI与atri功能对比分析.md`
 - **AIRI Feature List**: `docs/projects-docs/AIRI前端功能清单.md`
 
@@ -30,9 +30,9 @@
 
 ## Related Module Design Documents
 
-- **ASR Module**: `docs/ASR模块设计文档.md`
-- **TTS Module**: `docs/TTS模块设计文档.md`
-- **Live2D Module**: `docs/Live-2d设计文档.md`
+- **ASR Module**: `docs/developments/module-design/EN/ASR-module-design.md`
+- **TTS Module**: `docs/developments/module-design/EN/TTS-module-design.md`
+- **Live2D Module**: `docs/developments/module-design/EN/Live2D-design.md`
 
 
 
@@ -3959,10 +3959,10 @@ const importUserData = async (file: File) => {
 ### 15.4 Reference Documents
 
 **Design Documents**:
-- `docs/Phase_X划分讨论.md` (Round 13-17)
-- `docs/总结_前端对话历史.md`
-- `docs/前端设计对话历史.md`
-- `docs/Live-2d设计文档.md`
+- `docs/developments/Phase_X划分讨论.md` (Round 13-17)
+- `docs/developments/总结_前端对话历史.md`
+- `docs/developments/前端设计对话历史.md`
+- `docs/developments/module-design/EN/Live2D-design.md`
 
 **Reference Code**:
 - `atri-webui/src/` (current project)

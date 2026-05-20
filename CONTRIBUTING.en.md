@@ -48,7 +48,7 @@ The `docs/developments/` directory contains architecture design and module desig
 
 | Document | Description |
 |------|------|
-| [Architecture Design](docs/developments/module-design/EN/project-architecture-design.md) | Overall project architecture (frontend/backend layering, module division, data flow) |
+| [Architecture Design](docs/developments/project-architecture-design.en.md) | Overall project architecture (frontend/backend layering, module division, data flow) |
 | [Backend API Documentation](docs/developments/module-design/EN/backend-API-documentation.md) | Complete REST API + WebSocket protocol specification |
 
 ### Backend Developers
@@ -57,13 +57,13 @@ The `docs/developments/` directory contains architecture design and module desig
 
 | Document | Description | When to Read |
 |------|------|---------|
-| [执行准则.md](执行准则.md) | Backend code standards and self-check workflow | **Required** |
-| [后端设计.md](docs/developments/module-design/后端设计.md) | Backend architecture design (layering, data flow) | When understanding the overall backend architecture |
-| [记忆系统设计讨论.md](docs/developments/module-design/记忆系统设计讨论.md) | Memory system complete design (L1/L3/L4 compression + mem0) | When modifying the memory system |
-| [LLM调用层设计讨论.md](docs/developments/module-design/LLM调用层设计讨论.md) | LLM calling layer design (factory pattern, streaming interface) | When modifying the LLM module |
-| [TTS模块设计文档.md](docs/developments/module-design/TTS模块设计文档.md) | TTS module design (6 providers, factory pattern) | When developing TTS features |
-| [ASR模块设计文档.md](docs/developments/module-design/ASR模块设计文档.md) | ASR module design (5 providers, streaming support) | When developing ASR features |
-| [VAD语音唤醒模块设计.md](docs/developments/module-design/VAD语音唤醒模块设计.md) | VAD module design | When developing voice wake-up features |
+| [Backend Guidelines](执行准则.md) | Backend code standards and self-check workflow | **Required** |
+| [Backend Design](docs/developments/module-design/EN/backend-design.md) | Backend architecture design (layering, data flow) | When understanding the overall backend architecture |
+| [Memory System Design](docs/developments/module-design/EN/memory-system-design.md) | Memory system complete design (L1/L3/L4 compression + mem0) | When modifying the memory system |
+| [LLM Calling Layer Design](docs/developments/module-design/EN/LLM-calling-layer-design.md) | LLM calling layer design (factory pattern, streaming interface) | When modifying the LLM module |
+| [TTS Module Design](docs/developments/module-design/EN/TTS-module-design.md) | TTS module design (6 providers, factory pattern) | When developing TTS features |
+| [ASR Module Design](docs/developments/module-design/EN/ASR-module-design.md) | ASR module design (5 providers, streaming support) | When developing ASR features |
+| [VAD Voice Wake Module Design](docs/developments/module-design/EN/VAD-voice-wake-module-design.md) | VAD module design | When developing voice wake-up features |
 
 ### Frontend Developers
 
@@ -71,15 +71,15 @@ The `docs/developments/` directory contains architecture design and module desig
 
 | Document | Description | When to Read |
 |------|------|---------|
-| [前端设计文档.md](docs/developments/module-design/前端设计文档.md) | Frontend complete architecture design (components, Store, routing, UI) | **Required** |
-| [Live-2d设计文档.md](docs/developments/module-design/Live-2d设计文档.md) | Live2D integration plan (rendering, expression control) | When developing Live2D features |
+| [Frontend Design](docs/developments/module-design/EN/frontend-design.md) | Frontend complete architecture design (components, Store, routing, UI) | **Required** |
+| [Live2D Design](docs/developments/module-design/EN/Live2D-design.md) | Live2D integration plan (rendering, expression control) | When developing Live2D features |
 
 ### Other Reference Documents
 
 | Document | Description |
 |------|------|
-| [会话上下文备份_20260418.md](docs/developments/会话上下文备份_20260418.md) | Phase 1-5 implementation archive and current status |
-| [总结_前端对话历史.md](docs/developments/总结_前端对话历史.md) | Structured summary of frontend design decisions |
+| [Session Context Backup (20260418)](docs/developments/会话上下文备份_20260418.md) | Phase 1-5 implementation archive and current status |
+| [Frontend Design History Summary](docs/developments/总结_前端对话历史.md) | Structured summary of frontend design decisions |
 
 ---
 
@@ -89,12 +89,12 @@ The `docs/configs/` directory contains user-facing configuration and usage guide
 
 | Document | Description |
 |------|------|
-| [角色创建指南.md](docs/configs/角色创建指南.md) | How to create and manage character cards |
-| [TTS配置说明.md](docs/configs/TTS配置说明.md) | TTS module configuration |
-| [ASR配置说明.md](docs/configs/ASR配置说明.md) | ASR module configuration |
-| [CosyVoice3_TTS使用说明.md](docs/configs/CosyVoice3_TTS使用说明.md) | CosyVoice3 TTS usage guide |
-| [认证系统使用指南.md](docs/configs/认证系统使用指南.md) | Authentication system configuration |
-| [对话历史存储与批量删除说明.md](docs/configs/对话历史存储与批量删除说明.md) | Chat history storage management |
+| [Character Creation Guide](docs/configs/EN/character-creation-guide.md) | How to create and manage character cards |
+| [TTS Configuration](docs/configs/EN/TTS-configuration.md) | TTS module configuration |
+| [ASR Configuration](docs/configs/EN/ASR-configuration.md) | ASR module configuration |
+| [CosyVoice3 TTS Usage](docs/configs/EN/CosyVoice3-TTS-usage.md) | CosyVoice3 TTS usage guide |
+| [Authentication System Guide](docs/configs/EN/authentication-system-guide.md) | Authentication system configuration |
+| [Chat History Storage & Batch Deletion](docs/configs/EN/chat-history-storage-batch-deletion.md) | Chat history storage management |
 
 ---
 

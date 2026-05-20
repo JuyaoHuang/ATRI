@@ -165,14 +165,14 @@ The backend uses a **layered modular architecture**, with clear responsibilities
 +---------------------------------------------------------------+
 |                    Service Layer (FastAPI)                      |
 |  REST API + WebSocket + Routing + Lifecycle Management         |
-|  See: docs/后端API接口文档.md                                   |
+|  See: docs/developments/module-design/EN/backend-API-documentation.md                                   |
 +---------------------------------------------------------------+
                               |
                               v
 +---------------------------------------------------------------+
 |                      Agent Layer (ChatAgent)                    |
 |  Combines LLM + Memory + Persona, handles main chat logic      |
-|  See: docs/后端设计.md Section 2.5                              |
+|  See: docs/developments/module-design/EN/backend-design.md Section 2.5                              |
 +---------------------------------------------------------------+
                               |
                               v
@@ -814,14 +814,14 @@ Frontend interfaces mainly include **Component Interfaces**, **Store Interfaces*
 
 | Decision | Content | Document Link |
 |------|------|---------|
-| **Architecture Pattern** | Centralized architecture (backend manages configuration, API keys not exposed to frontend) | `docs/前端设计文档.md` Section 1.1 |
-| **Factory Pattern** | Decorator-based registration (unified pattern for LLM/ASR/TTS) | `docs/LLM调用层设计讨论.md` Section 2.1 |
-| **Memory System** | L1/L3/L4 three-layer compression + mem0 long-term memory | `docs/记忆系统设计讨论.md` |
-| **Session Recovery** | chat_history as source of truth, lightweight validation approach | `docs/记忆系统设计讨论.md` Section 8.5 |
-| **Streaming Interface** | Subclasses only implement streaming, non-streaming has default implementation | `docs/LLM调用层设计讨论.md` Section 2.2 |
-| **Error Handling** | Interface layer only raises exceptions, caller decides retry strategy | `docs/LLM调用层设计讨论.md` Section 2.6 |
-| **WebSocket Reconnection** | Exponential backoff, up to 5 retries | `docs/前端设计文档.md` Section 7.2 |
-| **Live2D Integration** | Fully reuses AIRI's pixi-live2d-display package | `docs/Live-2d设计文档.md` |
+| **Architecture Pattern** | Centralized architecture (backend manages configuration, API keys not exposed to frontend) | `docs/developments/module-design/EN/frontend-design.md` Section 1.1 |
+| **Factory Pattern** | Decorator-based registration (unified pattern for LLM/ASR/TTS) | `docs/developments/module-design/EN/LLM-calling-layer-design.md` Section 2.1 |
+| **Memory System** | L1/L3/L4 three-layer compression + mem0 long-term memory | `docs/developments/module-design/EN/memory-system-design.md` |
+| **Session Recovery** | chat_history as source of truth, lightweight validation approach | `docs/developments/module-design/EN/memory-system-design.md` Section 8.5 |
+| **Streaming Interface** | Subclasses only implement streaming, non-streaming has default implementation | `docs/developments/module-design/EN/LLM-calling-layer-design.md` Section 2.2 |
+| **Error Handling** | Interface layer only raises exceptions, caller decides retry strategy | `docs/developments/module-design/EN/LLM-calling-layer-design.md` Section 2.6 |
+| **WebSocket Reconnection** | Exponential backoff, up to 5 retries | `docs/developments/module-design/EN/frontend-design.md` Section 7.2 |
+| **Live2D Integration** | Fully reuses AIRI's pixi-live2d-display package | `docs/developments/module-design/EN/Live2D-design.md` |
 
 ### B. Reference Projects
 

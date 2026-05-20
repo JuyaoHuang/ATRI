@@ -8,10 +8,10 @@
 
 ## 参考文档
 
-- **设计讨论**: `docs/总结_前端对话历史.md` (Round 6-9, Round 11-17)
-- **完整对话**: `docs/前端设计对话历史.md` (Round 6-8, Round 15-16)
-- **后端架构**: `docs/后端设计.md`
-- **项目架构**: `docs/项目架构设计.md`
+- **设计讨论**: `docs/developments/总结_前端对话历史.md` (Round 6-9, Round 11-17)
+- **完整对话**: `docs/developments/前端设计对话历史.md` (Round 6-8, Round 15-16)
+- **后端架构**: `docs/developments/module-design/CN/后端设计.md`
+- **项目架构**: `docs/developments/项目架构设计.md`
 
 ## 参考项目
 

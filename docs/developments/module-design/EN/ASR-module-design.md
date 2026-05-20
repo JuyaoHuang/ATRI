@@ -2,8 +2,8 @@
 
 ## Reference Documents
 
-- **Design Discussion History**: `docs/总结_前端对话历史.md` - Round 10-16
-- **Detailed Conversation Log**: `docs/前端设计对话历史.md` - Round 10-16
+- **Design Discussion History**: `docs/developments/总结_前端对话历史.md` - Round 10-16
+- **Detailed Conversation Log**: `docs/developments/前端设计对话历史.md` - Round 10-16
 - **Reference Projects**:
   - OLV Architecture Document: `docs/projects-docs/OLV架构文档.md`
   - AIRI Project: `D:\Coding\GitHub_Resuorse\AIRI\`
@@ -277,7 +277,7 @@ Return switching result
 
 **File Path**: `src/asr/interface.py`
 
-**Reference Code**: `docs/前端设计对话历史.md` Round 16 (line 4996-5015)
+**Reference Code**: `docs/developments/前端设计对话历史.md` Round 16 (line 4996-5015)
 
 ```python
 from abc import ABC, abstractmethod
@@ -383,7 +383,7 @@ class ASRInterface(ABC):
 
 **File Path**: `src/asr/factory.py`
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2485-2510)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2485-2510)
 
 **Design Pattern**: Decorator factory pattern (reuses atri LLM calling layer architecture)
 
@@ -594,7 +594,7 @@ __all__ = [
 
 **File Path**: `src/asr/exceptions.py`
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2512-2530)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2512-2530)
 
 ```python
 class ASRError(Exception):
@@ -701,7 +701,7 @@ async def transcribe(audio: bytes):
 
 **File Path**: `config/asr_config.yaml`
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2532-2580)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2532-2580)
 
 ```yaml
 # ASR Configuration File
@@ -887,7 +887,7 @@ class ASRConfig:
 
 ### 8.1 Health Check Design
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2582-2610)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2582-2610)
 
 **Trigger Timing**:
 1. Service startup: Check default Provider availability
@@ -1686,7 +1686,7 @@ export class WebSpeechASR {
 
 **File Path**: `src/routes/asr.py`
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2612-2680)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2612-2680)
 
 #### 10.1.1 Get Provider List
 
@@ -1958,7 +1958,7 @@ async def check_health(provider_name: str, force: bool = False):
 
 **Endpoint**: `WebSocket /ws/asr`
 
-**Reference Code**: `docs/总结_前端对话历史.md` Round 10 (line 2682-2720)
+**Reference Code**: `docs/developments/总结_前端对话历史.md` Round 10 (line 2682-2720)
 
 **Implementation Code**:
 

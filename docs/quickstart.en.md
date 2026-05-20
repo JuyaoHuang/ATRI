@@ -476,7 +476,7 @@ Check:
 
 ## 11. Next Steps
 
-- Read `docs/configs/认证系统使用指南.md` to configure public network login.
-- Read `docs/configs/ASR配置说明.md` and `docs/configs/TTS配置说明.md` to enable the voice pipeline.
-- Read `docs/configs/角色创建指南.md` to add your own characters, avatars, and greetings.
+- Read `docs/configs/EN/authentication-system-guide.md` to configure public network login.
+- Read `docs/configs/EN/ASR-configuration.md` and `docs/configs/EN/TTS-configuration.md` to enable the voice pipeline.
+- Read `docs/configs/EN/character-creation-guide.md` to add your own characters, avatars, and greetings.
 - View the backend API documentation at `http://localhost:8430/docs`.
