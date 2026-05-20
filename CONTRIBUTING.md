@@ -48,8 +48,8 @@
 
 | 文档 | 说明 |
 |------|------|
-| [项目架构设计.md](docs/developments/项目架构设计.md) | 整体项目架构（前后端分层、模块划分、数据流） |
-| [后端API接口文档.md](docs/developments/module-design/后端API接口文档.md) | 完整的 REST API + WebSocket 协议规范 |
+| [项目架构设计.md](docs/developments/CN/项目架构设计.md) | 整体项目架构（前后端分层、模块划分、数据流） |
+| [后端API接口文档.md](docs/developments/module-design/CN/后端API接口文档.md) | 完整的 REST API + WebSocket 协议规范 |
 
 ### 后端开发者
 

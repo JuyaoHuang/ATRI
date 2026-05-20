@@ -122,11 +122,11 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 
 | 文档 | 说明 |
 |---|---|
-| [架构文档](docs/developments/项目架构设计.md) | ATRI 的项目整体架构和开发文档入口 |
-| [认证系统使用指南](docs/configs/认证系统使用指南.md) | GitHub OAuth 配置与白名单管理 |
-| [ASR 配置说明](docs/configs/ASR配置说明.md) | 语音识别提供商配置 |
-| [TTS 配置说明](docs/configs/TTS配置说明.md) | 语音合成提供商配置 |
-| [角色创建指南](docs/configs/角色创建指南.md) | 角色人设、头像与问候语 |
+| [架构文档](docs/developments/CN/项目架构设计.md) | ATRI 的项目整体架构和开发文档入口 |
+| [认证系统使用指南](docs/configs/CN/认证系统使用指南.md) | GitHub OAuth 配置与白名单管理 |
+| [ASR 配置说明](docs/configs/CN/ASR配置说明.md) | 语音识别提供商配置 |
+| [TTS 配置说明](docs/configs/CN/TTS配置说明.md) | 语音合成提供商配置 |
+| [角色创建指南](docs/configs/CN/角色创建指南.md) | 角色人设、头像与问候语 |
 
 ---
 
