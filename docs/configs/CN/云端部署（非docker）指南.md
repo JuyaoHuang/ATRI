@@ -205,6 +205,8 @@ VITE_API_BASE_URL=/ VITE_WS_URL=/ws npm run build
 $env:VITE_API_BASE_URL="/"
 $env:VITE_WS_URL="/ws"
 npm run build
+npx vite build 
+vue-tsc -b # Vue 版的 tsc（TypeScript 编译器），能理解 .vue 文件的 <template> 和 <script> 类型,不产出编译文件，只检查类型错误
 ```
 
 ## 7. 配置宿主机 Nginx

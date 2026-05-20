@@ -2,8 +2,8 @@
 
 ## 📚 参考文档
 
-- **设计讨论历史**：`docs/总结_前端对话历史.md` - Round 10-16
-- **详细对话记录**：`docs/前端设计对话历史.md` - Round 10-16
+- **设计讨论历史**：`docs/developments/总结_前端对话历史.md` - Round 10-16
+- **详细对话记录**：`docs/developments/前端设计对话历史.md` - Round 10-16
 - **参考项目**：
   - OLV 架构文档：`docs/projects-docs/OLV架构文档.md`
   - AIRI 项目：`D:\Coding\GitHub_Resuorse\AIRI\`
@@ -259,7 +259,7 @@ health_check() 检查新 Provider 可用性
 
 **文件路径**：`src/asr/interface.py`
 
-**参考代码**：`docs/前端设计对话历史.md` Round 16 (line 4996-5015)
+**参考代码**：`docs/developments/前端设计对话历史.md` Round 16 (line 4996-5015)
 
 ```python
 from abc import ABC, abstractmethod
@@ -365,7 +365,7 @@ class ASRInterface(ABC):
 
 **文件路径**：`src/asr/factory.py`
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2485-2510)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2485-2510)
 
 **设计模式**：装饰器工厂模式（复用 atri LLM 调用层架构）
 
@@ -576,7 +576,7 @@ __all__ = [
 
 **文件路径**：`src/asr/exceptions.py`
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2512-2530)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2512-2530)
 
 ```python
 class ASRError(Exception):
@@ -683,7 +683,7 @@ async def transcribe(audio: bytes):
 
 **文件路径**：`config/asr_config.yaml`
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2532-2580)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2532-2580)
 
 ```yaml
 # ASR 配置文件
@@ -869,7 +869,7 @@ class ASRConfig:
 
 ### 8.1 健康检查设计
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2582-2610)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2582-2610)
 
 **触发时机**：
 1. 服务启动时：检查默认 Provider 可用性
@@ -1668,7 +1668,7 @@ export class WebSpeechASR {
 
 **文件路径**：`src/routes/asr.py`
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2612-2680)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2612-2680)
 
 #### 10.1.1 获取 Provider 列表
 
@@ -1940,7 +1940,7 @@ async def check_health(provider_name: str, force: bool = False):
 
 **端点**：`WebSocket /ws/asr`
 
-**参考代码**：`docs/总结_前端对话历史.md` Round 10 (line 2682-2720)
+**参考代码**：`docs/developments/总结_前端对话历史.md` Round 10 (line 2682-2720)
 
 **实现代码**：
 
