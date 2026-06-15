@@ -63,6 +63,20 @@ def _make_app(config: dict, service_context: MagicMock, storage: AsyncMock):
         return app
 
 
+def _vad_enabled_config(base_config: dict) -> dict:
+    return {
+        **base_config,
+        "vad": {
+            "enabled": True,
+            "vad_model": "fake",
+            "sample_rate": 16000,
+            "required_hits": 2,
+            "required_misses": 2,
+            "fake": {"speech_threshold": 0.5},
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_websocket_text_input_streaming(
     mock_config: dict,
@@ -207,3 +221,175 @@ async def test_websocket_rejects_character_mismatch(
 
     mock_context.get_or_create_agent.assert_not_called()
     mock_storage.append_message_for_user.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_chunk_returns_disabled_listen_state(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(mock_config, mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.9, -0.4],
+                    "seq": 7,
+                },
+            }
+        )
+
+        response = websocket.receive_json()
+        assert response["type"] == "control:listen-state"
+        assert response["data"] == {
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "state": "silence",
+            "is_speech": False,
+            "seq": 7,
+            "disabled": True,
+        }
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_chunk_processes_fake_vad_speech_start(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(_vad_enabled_config(mock_config), mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.8],
+                    "seq": 1,
+                },
+            }
+        )
+        first = websocket.receive_json()
+
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.9],
+                    "seq": 2,
+                },
+            }
+        )
+        second = websocket.receive_json()
+
+        assert first["type"] == "control:listen-state"
+        assert first["data"]["state"] == "silence"
+        assert first["data"]["is_speech"] is True
+        assert first["data"]["seq"] == 1
+
+        assert second["type"] == "control:listen-state"
+        assert second["data"]["state"] == "speech_start"
+        assert second["data"]["is_speech"] is True
+        assert second["data"]["seq"] == 2
+        assert second["data"]["probability"] == 1.0
+        assert second["data"]["energy"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_end_resets_vad_session(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(_vad_enabled_config(mock_config), mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        for seq in (1, 2):
+            websocket.send_json(
+                {
+                    "type": "input:audio:chunk",
+                    "data": {
+                        "chat_id": "test_chat_123",
+                        "character_id": "atri",
+                        "audio": [0.9],
+                        "seq": seq,
+                    },
+                }
+            )
+            websocket.receive_json()
+
+        websocket.send_json(
+            {
+                "type": "input:audio:end",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            }
+        )
+        ended = websocket.receive_json()
+
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.9],
+                    "seq": 3,
+                },
+            }
+        )
+        after_reset = websocket.receive_json()
+
+        assert ended["type"] == "control:listen-state"
+        assert ended["data"]["state"] == "speech_end"
+        assert ended["data"]["is_speech"] is False
+
+        assert after_reset["type"] == "control:listen-state"
+        assert after_reset["data"]["state"] == "silence"
+        assert after_reset["data"]["is_speech"] is True
+        assert after_reset["data"]["seq"] == 3
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_chunk_rejects_invalid_audio(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(_vad_enabled_config(mock_config), mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [],
+                },
+            }
+        )
+
+        response = websocket.receive_json()
+        assert response["type"] == "error"
+        assert response["data"]["chat_id"] == "test_chat_123"
+        assert "Invalid 'audio' field" in response["data"]["message"]

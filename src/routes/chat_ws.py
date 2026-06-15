@@ -24,6 +24,8 @@ Reference: docs/Phase5_执行规格.md §US-SRV-006, docs/OLV架构文档.md
 """
 
 import json
+import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -32,6 +34,18 @@ from starlette.websockets import WebSocketState
 
 from src.auth import get_websocket_user_id
 from src.llm.exceptions import LLMError
+from src.vad import VADEvent, VADEventType, VADService, VADState
+
+
+@dataclass
+class WebSocketVADState:
+    """Per-connection VAD state reserved for realtime audio control."""
+
+    session_id: str
+    interrupt_sent: bool = False
+    current_chat_task: Any | None = None
+    last_chat_id: str | None = None
+    last_character_id: str | None = None
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -56,6 +70,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     # 访问 app state（ServiceContext + Storage）
     service_context = websocket.app.state.service_context
     storage = websocket.app.state.storage
+    vad_service = websocket.app.state.vad_service
+    vad_state = WebSocketVADState(session_id=f"ws:{uuid.uuid4().hex}")
 
     try:
         while True:
@@ -86,6 +102,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await _handle_ping(websocket)
             elif msg_type == "input:text":
                 await _handle_text_input(websocket, message, service_context, storage, user_id)
+            elif msg_type == "input:audio:chunk":
+                await _handle_audio_chunk(websocket, message, vad_service, vad_state)
+            elif msg_type == "input:audio:end":
+                await _handle_audio_end(websocket, message, vad_service, vad_state)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
                 await _send_error(
@@ -104,6 +124,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         except Exception:
             pass  # Connection already closed
     finally:
+        vad_service.reset_session(vad_state.session_id)
         logger.info("WebSocket connection cleanup complete")
 
 
@@ -205,9 +226,7 @@ async def _handle_text_input(
     chunks = []
     try:
         chat_stream = (
-            agent.chat(text, runtime_context=client_context)
-            if client_context
-            else agent.chat(text)
+            agent.chat(text, runtime_context=client_context) if client_context else agent.chat(text)
         )
         async for chunk in chat_stream:
             chunks.append(chunk)
@@ -281,6 +300,128 @@ async def _handle_text_input(
             f"Chat processing failed: {e}",
             chat_id=chat_id,
         )
+
+
+async def _handle_audio_chunk(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vad_service: VADService,
+    vad_state: WebSocketVADState,
+) -> None:
+    """Handle realtime microphone audio chunks for backend VAD."""
+
+    data = message.get("data", {})
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    chat_id = data.get("chat_id")
+    character_id = data.get("character_id")
+    if not chat_id:
+        await _send_error(websocket, "Missing 'chat_id' field", chat_id=None)
+        return
+    if not character_id:
+        await _send_error(websocket, "Missing 'character_id' field", chat_id=chat_id)
+        return
+
+    audio = data.get("audio")
+    if not _is_valid_audio_array(audio):
+        await _send_error(
+            websocket,
+            "Invalid 'audio' field; expected a non-empty number[]",
+            chat_id=chat_id,
+        )
+        return
+
+    vad_state.last_chat_id = str(chat_id)
+    vad_state.last_character_id = str(character_id)
+
+    event = await vad_service.process_audio(vad_state.session_id, audio)
+    if event.type is VADEventType.SPEECH_END:
+        vad_state.interrupt_sent = False
+    await _send_listen_state(
+        websocket,
+        event,
+        chat_id=str(chat_id),
+        character_id=str(character_id),
+        seq=data.get("seq"),
+    )
+
+
+async def _handle_audio_end(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vad_service: VADService,
+    vad_state: WebSocketVADState,
+) -> None:
+    """Handle the end of one realtime microphone input turn."""
+
+    data = message.get("data", {})
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    chat_id = data.get("chat_id") or vad_state.last_chat_id
+    character_id = data.get("character_id") or vad_state.last_character_id
+    if not chat_id:
+        await _send_error(websocket, "Missing 'chat_id' field", chat_id=None)
+        return
+    if not character_id:
+        await _send_error(websocket, "Missing 'character_id' field", chat_id=str(chat_id))
+        return
+
+    vad_service.reset_session(vad_state.session_id)
+    vad_state.interrupt_sent = False
+    vad_state.last_chat_id = str(chat_id)
+    vad_state.last_character_id = str(character_id)
+
+    await _send_listen_state(
+        websocket,
+        VADEvent(
+            type=VADEventType.SPEECH_END,
+            state=VADState.IDLE,
+            is_speech=False,
+        ),
+        chat_id=str(chat_id),
+        character_id=str(character_id),
+        seq=data.get("seq"),
+    )
+
+
+def _is_valid_audio_array(audio: Any) -> bool:
+    if not isinstance(audio, list) or not audio:
+        return False
+    return all(isinstance(sample, int | float) and not isinstance(sample, bool) for sample in audio)
+
+
+async def _send_listen_state(
+    websocket: WebSocket,
+    event: VADEvent,
+    *,
+    chat_id: str,
+    character_id: str,
+    seq: Any | None = None,
+) -> None:
+    """Send a control:listen-state message to the frontend."""
+
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "character_id": character_id,
+        "state": event.type.value,
+        "is_speech": event.is_speech,
+    }
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        data["seq"] = seq
+    if event.probability is not None:
+        data["probability"] = event.probability
+    if event.energy is not None:
+        data["energy"] = event.energy
+    if event.metadata.get("disabled") is True:
+        data["disabled"] = True
+    if event.type is VADEventType.ERROR and event.metadata.get("reason"):
+        data["reason"] = str(event.metadata["reason"])
+
+    await websocket.send_json({"type": "control:listen-state", "data": data})
 
 
 async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -> None:
