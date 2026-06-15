@@ -111,8 +111,9 @@ ATRI 不必第一步完全改成 OLV 的全 WebSocket TTS 架构。更稳妥的�
 
 1. 每个 WebSocket 会话保存当前 LLM 生成任务。
 2. 收到 VAD interrupt 后，取消当前生成任务。
-3. 被取消的回复不进入完整历史，或以“被用户打断”的方式进入历史。
-4. 新的 ASR 文本到来后，作为新一轮用户输入继续对话。
+3. 被取消的半截回复可以写入 `chat_history`，但必须标记 `interrupted=true`。
+4. 被取消的半截回复不作为普通完整 AI 回复进入短期记忆压缩或长期记忆写入。
+5. 新的 ASR 文本到来后，作为新一轮用户输入继续对话。
 
 这一层决定“角色是否真的被打断”，不是只有播放器被暂停。
 
@@ -164,6 +165,18 @@ VAD 不应直接写死在聊天 route、ASR service 或 TTS service 里。建议
 7. 后端到前端：聊天完成。
 8. 后端到前端：错误事件。
 
+ATRI 已确认采用以下 WebSocket 命名风格：
+
+1. `input:audio:chunk`：前端发送实时麦克风音频片段。
+2. `input:audio:end`：前端通知本轮音频输入结束。
+3. `control:interrupt`：后端通知前端立即停止当前播放和旧回复处理。
+4. `output:asr:transcript`：后端返回 ASR 转写文本。
+5. `control:listen-state`：后端返回监听状态，例如 `speech_start`、`speech_end`、`silence`、`error`。
+
+`control:interrupt` 的 `reason` 字段优先使用 `speech_start`。也就是说，只要后端 VAD 判断用户开始说话，就不等待 ASR 结果，立即触发打断。
+
+ATRI 不直接复用 OLV 的外部消息名，例如 `raw-audio-data`、`mic-audio-end`。这些名称能说明 OLV 的机制，但和 ATRI 当前 `input:*`、`output:*`、`control:*` 风格不一致。
+
 这样做的好处是同一个会话里可以统一管理：
 
 1. 当前用户是谁。
@@ -194,7 +207,9 @@ VAD 的打断不应简单等同于“用户说话了”。建议定义清楚三�
 
 1. 后端取消当前 LLM task。
 2. 停止继续向前端推送上一轮文本。
-3. 标记上一轮回复为 interrupted。
+3. 标记上一轮回复为 `interrupted=true`。
+4. 将半截回复写入 `chat_history` 时，必须保留 interrupted 元数据。
+5. 不把该半截回复当作完整 AI 回复进入短期记忆压缩或长期记忆写入。
 
 ### 8.3 输入接管
 
@@ -217,7 +232,68 @@ VAD 的打断不应简单等同于“用户说话了”。建议定义清楚三�
 5. VAD provider 可通过配置切换或关闭。
 6. VAD 关闭时，现有文字聊天、REST ASR、REST TTS 不受影响。
 
-## 10. 非目标
+## 10. OLV 经验复用边界
+
+OLV 的经验可以解决 ATRI M2 以后大部分链路问题，但不应直接搬运全部实现。
+
+可以复用的部分：
+
+1. 后端 VAD 状态机思路：`IDLE`、`ACTIVE`、`INACTIVE`。
+2. `required_hits` 防误触发机制。
+3. `required_misses` 判断说话结束机制。
+4. `pre_buffer` 保留用户开口前的短音频，避免吞掉句首。
+5. `speech_start` 立即触发 interrupt，不等待 ASR。
+6. `speech_end` 后把完整语音片段交给 ASR。
+7. WebSocket 会话保存当前 LLM task，并在 interrupt 时取消。
+
+不直接复用的部分：
+
+1. 不复用 OLV 的 WebSocket 消息名。
+2. 不把 `b"<|PAUSE|>"`、`b"<|RESUME|>"` 作为 VAD 模块外部协议。
+3. 不在第一版迁移 OLV 的 TTS task manager。
+4. 不搬运 OLV 的 `web_tool` 前端代码。
+5. 不把 Web Speech API 当成 VAD model。
+
+ATRI 应该复用 OLV 的机制，而不是复用 OLV 的协议外壳。
+
+## 11. M2 以后已确认决策
+
+### 11.1 音频输入格式
+
+实时 VAD 主路径使用 16 kHz、mono、PCM float 数组。前端优先通过 AudioContext 或 AudioWorklet 获取音频，并在发送前完成必要重采样。
+
+MediaRecorder 适合按钮式录音和 REST ASR，不作为实时 VAD 主路径。
+
+### 11.2 VAD 事件模型
+
+VADService 对外输出语义事件，而不是特殊 bytes。
+
+核心事件：
+
+1. `speech_start`：用户开始说话。
+2. `speech_end`：用户说话结束。
+3. `silence`：当前没有有效语音。
+4. `error`：VAD 处理失败。
+
+`speech_start` 在同一轮连续说话期间只触发一次 interrupt。防重复逻辑由 VADSession 状态机负责。
+
+### 11.3 打断历史策略
+
+被打断的半截 AI 回复可以写入 `chat_history`，但必须标记：
+
+```json
+{
+  "interrupted": true
+}
+```
+
+这条历史记录用于让用户理解“上一轮为什么断了”。它不能被当作普通完整 AI 回复参与记忆压缩和长期记忆写入。
+
+### 11.4 Web Speech API 定位
+
+Web Speech API 是浏览器侧 ASR 或降级事件源，不是 VAD model。ATRI 的实时打断主线以后端 VAD 为准。
+
+## 12. 非目标
 
 第一版不做以下内容：
 
@@ -227,12 +303,11 @@ VAD 的打断不应简单等同于“用户说话了”。建议定义清楚三�
 4. 不把模型参数硬编码到 route 或前端组件。
 5. 不强制废弃现有 stop button；手动停止仍应保留。
 
-## 11. 关键风险
+## 13. 关键风险
 
 1. 浏览器音频格式和后端 VAD 采样率不一致，需要明确转换策略。
 2. Silero 依赖可能增加安装体积，需要考虑可选依赖或懒加载。
 3. VAD 过敏会误打断，阈值、连续命中次数和静音时长必须可配置。
 4. VAD 不敏感会导致打断迟钝，需要保留可调参数。
-5. LLM 取消后历史如何记录会影响角色记忆，需要单独定义 interrupted 消息策略。
+5. LLM 取消后历史写入需要严格保留 `interrupted=true`，避免半截回复污染记忆。
 6. 移动端浏览器和 VPN 网络环境可能导致 WebSocket 音频 chunk 延迟，需要在前端显示清晰的连接状态。
-

@@ -2,7 +2,7 @@
 
 状态：待执行  
 日期：2026-06-15  
-前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-development.md`
+前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-implement.md`
 
 ## 1. 实施总原则
 
@@ -11,6 +11,11 @@
 3. VAD 模块按 provider/factory/service/session 形式设计，保持与 ASR、TTS 模块风格一致。
 4. 第一版保留现有 REST TTS，后续再选择是否增加 WebSocket TTS payload。
 5. 所有新增能力必须可配置、可关闭，关闭后不影响现有聊天、ASR、TTS。
+6. WebSocket 消息命名沿用 ATRI 当前 `input:*`、`output:*`、`control:*` 风格，不直接照搬 OLV 的消息名。
+7. 被 VAD 打断的 AI 半截回复可以写入 `chat_history`，但必须标记 `interrupted=true`。
+8. 被打断的 AI 半截回复不作为普通完整 AI 回复进入短期记忆压缩或长期记忆写入流程。
+9. Web Speech API 是浏览器侧 ASR 或降级事件源，不作为 VAD model。
+10. OLV 的状态机、防抖和任务取消机制可复用；OLV 的 WebSocket 消息名和 sentinel bytes 不直接复用。
 
 ## 2. 里程碑
 
@@ -63,6 +68,16 @@
 
 目标：让现有聊天 WebSocket 支持实时音频输入和控制事件。
 
+已确认协议方向：
+
+1. 前端发送实时音频 chunk：`input:audio:chunk`。
+2. 前端通知本轮音频输入结束：`input:audio:end`。
+3. 后端通知用户开口打断：`control:interrupt`，`reason` 为 `speech_start`。
+4. 后端通知 ASR 结果：`output:asr:transcript`。
+5. 后端通知监听状态：`control:listen-state`，`state` 可为 `speech_start`、`speech_end`、`silence`、`error`。
+6. 音频 chunk 优先采用 16 kHz、mono、PCM float 数组，和 OLV 的 VAD 输入方向一致。
+7. 不使用 OLV 的 `b"<|PAUSE|>"`、`b"<|RESUME|>"` sentinel bytes 作为模块外部协议。
+
 预计涉及位置：
 
 1. `src/routes/chat_ws.py`
@@ -71,19 +86,21 @@
 
 执行内容：
 
-1. 增加前端发送音频 chunk 的消息类型。
-2. 增加前端通知麦克风结束的消息类型。
-3. 增加后端发送 interrupt 控制事件的消息类型。
-4. 增加后端发送 ASR 转写结果的消息类型。
-5. 为每个 WebSocket 连接维护当前 VADSession 和音频缓存。
-6. 为每个 WebSocket 连接维护当前 LLM task 引用。
+1. 增加 `input:audio:chunk` 消息处理。
+2. 增加 `input:audio:end` 消息处理。
+3. 增加 `control:interrupt` 控制事件。
+4. 增加 `output:asr:transcript` ASR 转写结果事件。
+5. 增加 `control:listen-state` 监听状态事件。
+6. 为每个 WebSocket 连接维护当前 VADSession 和音频缓存。
+7. 为每个 WebSocket 连接维护当前 LLM task 引用。
 
 验收：
 
 1. 普通文字聊天 WebSocket 行为不变。
 2. 音频消息不会被误当成文字消息。
-3. VAD 检测到 speech_start 后，后端能向前端发送 interrupt。
+3. VAD 检测到 `speech_start` 后，后端能向前端发送 `control:interrupt`。
 4. WebSocket 断开时能释放 VADSession、音频缓存和未完成任务。
+5. 同一轮连续说话期间，`speech_start` 只触发一次 `control:interrupt`。
 
 ### M3：前端实时麦克风输入
 
@@ -100,11 +117,13 @@
 执行内容：
 
 1. 新增实时语音输入 composable。
-2. 使用浏览器 MediaRecorder 或 AudioWorklet 获取小片段音频。
-3. 将音频片段通过 WebSocket 发送到后端。
-4. 接收后端 interrupt 控制事件。
-5. 收到 interrupt 后调用现有 audio player stop 能力。
-6. 为实时语音模式增加连接、监听中、说话中、错误等状态。
+2. 优先使用 AudioContext/AudioWorklet 获取小片段音频。
+3. 将音频重采样为 16 kHz、mono、PCM float 数组。
+4. 将音频片段通过 WebSocket 的 `input:audio:chunk` 发送到后端。
+5. 接收后端 interrupt 控制事件。
+6. 收到 interrupt 后调用现有 audio player stop 能力。
+7. 为实时语音模式增加连接、监听中、说话中、错误等状态。
+8. 保留 MediaRecorder 作为非实时按钮式 ASR 或降级路径，不作为 VAD 主路径。
 
 验收：
 
@@ -152,16 +171,18 @@
 
 1. WebSocket 会话保存当前 LLM 生成 task。
 2. VAD speech_start 触发 interrupt 时，取消当前 task。
-3. 已经发送给前端的部分文本标记为 interrupted。
-4. 不完整回复不按普通完整回复写入长期记忆，或以 interrupted 元数据写入。
-5. 用户新语音完成 ASR 后进入新一轮对话。
+3. 已经发送给前端的部分文本标记为 `interrupted=true`。
+4. 被打断的半截 AI 回复可以写入 `chat_history`，但必须带 `interrupted=true` 元数据。
+5. 被打断的半截 AI 回复不按普通完整回复写入短期记忆压缩或长期记忆。
+6. 用户新语音完成 ASR 后进入新一轮对话。
 
 验收：
 
 1. LLM 正在输出文字时，用户开口能停止继续输出。
 2. 被打断的回复不会继续触发新的 TTS 合成。
-3. 对话历史不会把半截回复误当成完整角色回复。
+3. `chat_history` 能保留半截回复，并用 `interrupted=true` 区分普通完整回复。
 4. 用户下一句话能正常接续对话。
+5. 记忆系统不会把被打断的半截回复当作完整对话轮次。
 
 ### M6：配置、测试与文档补齐
 
@@ -296,4 +317,3 @@
 5. 用户开口能取消正在生成的 LLM 回复。
 6. 用户说完后能自动 ASR，并进入新一轮对话。
 7. 现有 REST TTS、按钮式 ASR、文字聊天不被破坏。
-
