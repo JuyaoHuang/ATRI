@@ -1,0 +1,23 @@
+# 语音活动检测（VAD）配置
+# 第一版默认关闭；开启后由后端 WebSocket 实时音频链路使用。
+enabled: false
+vad_model: fake # 可选：fake、silero_vad
+
+# 后端 VAD 目标音频格式：16 kHz、mono、PCM float array。
+sample_rate: 16000
+
+# 防抖参数：连续命中 required_hits 次才触发 speech_start；
+# 连续静音 required_misses 次才触发 speech_end。
+required_hits: 2
+required_misses: 3
+
+fake:
+  speech_threshold: 0.5 # 测试用振幅阈值，不依赖真实模型
+
+silero_vad:
+  sample_rate: 16000
+  prob_threshold: 0.5
+  db_threshold: 60
+  required_hits: 3
+  required_misses: 24
+  smoothing_window: 5
