@@ -1,6 +1,4 @@
-# 执行准则
-
-> 本文档定义 Claude Code 在本项目中编写代码时必须遵循的流程和规范。每次编写/修改代码后，按此清单执行。
+> 本文档定义 agents 在本项目中编写代码时必须遵循的流程和规范。每次编写/修改代码后，按此清单执行。
 
 ---
 
@@ -8,10 +6,15 @@
 
 - **项目名**: emotion-robot (atri)
 - **技术栈**: Python 3.11+ / FastAPI / uv / loguru
+- **Python 环境**: 当前工作目录存在 uv 创建的 `.venv`，执行 Python、测试、格式化、类型检查时优先使用 `uv run ...`
 - **设计文档位置**: `D:\Coding\GitHub_Resuorse\emotion-robot\docs\`
   - `记忆系统设计讨论.md` — 记忆系统的完整设计蓝本
   - `LLM调用层设计讨论.md` — LLM 调用层的接口、工厂、配置设计
   - `项目架构设计.md` — 目录结构、技术选型、日志方案
+- **当前 VAD 文档位置**: `D:\Coding\GitHub_Resuorse\emotion-robot\atri\docs\developments\wiki\VAD\`
+  - `vad-design.md` — VAD、ASR、TTS 链路设计
+  - `vad-development.md` — VAD 开发边界与架构说明
+  - `vad-implementation-plan.md` — VAD 分阶段实施计划
 - **实现前必读**: 修改某个模块前，先阅读对应的设计文档章节
 
 ---
@@ -96,7 +99,7 @@ module/
 
 ## 代码审查
 
-在提交 PR 前，启动内置 skill `/omc-code-review`，进行综合代码审查，按严重度分级反馈。
+在提交 PR 前，启动内置 skill `$omc-code-review`，进行综合代码审查，按严重度分级反馈。
 
 ## 提交规范
 
@@ -115,32 +118,56 @@ module/
 
 ## 实现顺序
 
-按 readme 中"记忆系统的实现"章节的 Step 顺序推进，但 LLM 调用层是前置依赖：
+1. 在开始实现前，执行`git checkout -b feat/...` 切换分支，在新分支上开发
+2. 每完成一个功能点一个 commit，不要把多个不相关的改动混在一起
+
+当前主线任务为 VAD 语音实时打断。按 `docs/developments/wiki/VAD/vad-implementation-plan.md` 的里程碑推进：
 
 ```
-Phase 1: 基础设施
-  ├── 项目初始化（uv init, pyproject.toml, 目录骨架）
-  ├── 配置加载器（config_loader.py）
-  └── 日志初始化（logger.py）
+M0: 文档与范围冻结
+  ├── 明确 ATRI 当前语音链路
+  ├── 明确 OLV 参考实现思路
+  └── 明确第一版保留 REST TTS，不先重写全部 TTS 链路
 
-Phase 2: LLM 调用层（Core Layer）
-  ├── LLMInterface + LLMFactory
-  └── OpenAICompatibleLLM provider
+M1: 后端 VAD 模块骨架
+  ├── 新增 src/vad/ 模块
+  ├── 建立 interface / factory / service / session / providers 结构
+  ├── 增加 fake provider 用于测试
+  └── 预留 Silero provider，避免硬编码到聊天、ASR、TTS 流程
 
-Phase 3: 记忆系统（Memory Layer）
-  ├── Step 1: L1 Snip
-  ├── Step 2: L3 Collapse
-  ├── Step 3: short_term_memory 读写
-  ├── Step 4: L4 Super-Compact
-  ├── Step 5: 触发调度
-  ├── Step 6: mem0 集成
-  ├── Step 7: 会话生命周期
-  ├── Step 8: 会话恢复校验
-  └── Step 9: LLM Context 构建
+M2: WebSocket 协议扩展
+  ├── 支持前端发送麦克风音频 chunk
+  ├── 支持后端发送 interrupt 控制事件
+  ├── 为每个连接维护 VADSession 与音频缓存
+  └── 为每个连接维护当前 LLM task 引用
 
-Phase 4: 聊天 Agent
-  └── ChatAgent（组合 LLM + Memory）
+M3: 前端实时麦克风输入
+  ├── 在 atri/frontend 中新增实时语音输入能力
+  ├── 将麦克风音频片段通过 WebSocket 发送给后端
+  ├── 接收 interrupt 后调用现有 audio player stop 能力
+  └── 保留原有按钮式 ASR 和 stop button
 
-Phase 5: FastAPI 服务
-  └── 路由 + WebSocket 端点
+M4: VAD 到 ASR 的衔接
+  ├── speech_start 后缓存有效音频
+  ├── speech_end 后提交现有 ASR service
+  ├── 将 ASR 转写文本返回前端展示
+  └── 将 ASR 文本接入现有聊天流程
+
+M5: LLM 生成打断
+  ├── VAD speech_start 触发当前 LLM task cancel
+  ├── 停止继续推送上一轮文本
+  ├── 阻止被打断回复继续触发 TTS
+  └── 明确 interrupted 回复的历史与记忆写入策略
+
+M6: 配置、测试与文档补齐
+  ├── 增加 VAD 配置文档
+  ├── 增加后端单元测试与 WebSocket 集成测试
+  ├── 增加前端构建或类型检查验证
+  └── 在对应测试目录编写 test-exe.md
+
+M7: 可选 TTS WebSocket 化
+  ├── LLM 文本按句子或短段切分
+  ├── 后端按段合成 TTS 音频
+  ├── 通过 WebSocket 下发音频 payload 与 sequence
+  └── interrupt 时取消后续 TTS 任务并清空前端播放队列
 ```
