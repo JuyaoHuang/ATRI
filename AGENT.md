@@ -16,7 +16,7 @@
   - `developments/module-design/CN/VAD语音唤醒模块设计.md` — VAD 模块参考设计
 - **当前 VAD 文档位置**: `docs/developments/wiki/VAD/`
   - `vad-design.md` — VAD、ASR、TTS 链路设计
-  - `vad-development.md` — VAD 开发边界与架构说明
+  - `vad-implement.md` — VAD 开发边界与架构说明
   - `vad-implementation-plan.md` — VAD 分阶段实施计划
 - **实现前必读**: 修改某个模块前，先阅读对应的设计文档章节
 
