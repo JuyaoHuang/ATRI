@@ -346,6 +346,14 @@ async def _handle_audio_chunk(
         character_id=str(character_id),
         seq=data.get("seq"),
     )
+    if event.type is VADEventType.SPEECH_START and not vad_state.interrupt_sent:
+        vad_state.interrupt_sent = True
+        await _send_interrupt(
+            websocket,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            reason="speech_start",
+        )
 
 
 async def _handle_audio_end(
@@ -422,6 +430,27 @@ async def _send_listen_state(
         data["reason"] = str(event.metadata["reason"])
 
     await websocket.send_json({"type": "control:listen-state", "data": data})
+
+
+async def _send_interrupt(
+    websocket: WebSocket,
+    *,
+    chat_id: str,
+    character_id: str,
+    reason: str,
+) -> None:
+    """Send a control:interrupt message to the frontend."""
+
+    await websocket.send_json(
+        {
+            "type": "control:interrupt",
+            "data": {
+                "chat_id": chat_id,
+                "character_id": character_id,
+                "reason": reason,
+            },
+        }
+    )
 
 
 async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -> None:

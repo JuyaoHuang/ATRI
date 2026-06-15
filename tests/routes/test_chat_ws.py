@@ -294,6 +294,7 @@ async def test_websocket_audio_chunk_processes_fake_vad_speech_start(
             }
         )
         second = websocket.receive_json()
+        interrupt = websocket.receive_json()
 
         assert first["type"] == "control:listen-state"
         assert first["data"]["state"] == "silence"
@@ -306,6 +307,58 @@ async def test_websocket_audio_chunk_processes_fake_vad_speech_start(
         assert second["data"]["seq"] == 2
         assert second["data"]["probability"] == 1.0
         assert second["data"]["energy"] == 0.9
+
+        assert interrupt["type"] == "control:interrupt"
+        assert interrupt["data"] == {
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "reason": "speech_start",
+        }
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_chunk_sends_interrupt_once_per_speech_turn(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(_vad_enabled_config(mock_config), mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        for seq in (1, 2, 3):
+            websocket.send_json(
+                {
+                    "type": "input:audio:chunk",
+                    "data": {
+                        "chat_id": "test_chat_123",
+                        "character_id": "atri",
+                        "audio": [0.9],
+                        "seq": seq,
+                    },
+                }
+            )
+            listen_state = websocket.receive_json()
+            assert listen_state["type"] == "control:listen-state"
+            assert listen_state["data"]["seq"] == seq
+            if seq == 2:
+                interrupt = websocket.receive_json()
+                assert interrupt["type"] == "control:interrupt"
+                assert interrupt["data"]["reason"] == "speech_start"
+
+        websocket.send_json(
+            {
+                "type": "input:audio:end",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            }
+        )
+        ended = websocket.receive_json()
+        assert ended["type"] == "control:listen-state"
+        assert ended["data"]["state"] == "speech_end"
 
 
 @pytest.mark.asyncio
@@ -331,7 +384,9 @@ async def test_websocket_audio_end_resets_vad_session(
                     },
                 }
             )
-            websocket.receive_json()
+            response = websocket.receive_json()
+            if response["data"]["state"] == "speech_start":
+                websocket.receive_json()
 
         websocket.send_json(
             {
