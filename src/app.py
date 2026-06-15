@@ -48,6 +48,7 @@ from src.storage.character_storage import CharacterStorage, get_default_characte
 from src.storage.factory import create_chat_storage
 from src.storage.live2d_storage import Live2DStorage, get_default_live2d_models_dir
 from src.tts import TTSConfigStore, TTSService
+from src.vad import VADConfigStore, VADService
 
 
 @asynccontextmanager
@@ -106,6 +107,7 @@ def create_app(config: dict) -> FastAPI:
     app.state.config = config
     app.state.asr_service = ASRService(ASRConfigStore(config.get("asr", {})))
     app.state.tts_service = TTSService(TTSConfigStore(config.get("tts", {})))
+    app.state.vad_service = VADService(VADConfigStore(config.get("vad", {})))
     app.state.auth_service = AuthService(config.get("auth", {}))
     app.state.character_storage = CharacterStorage()
     app.state.live2d_storage = Live2DStorage()
