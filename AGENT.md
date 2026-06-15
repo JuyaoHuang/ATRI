@@ -7,11 +7,14 @@
 - **项目名**: emotion-robot (atri)
 - **技术栈**: Python 3.11+ / FastAPI / uv / loguru
 - **Python 环境**: 当前工作目录存在 uv 创建的 `.venv`，执行 Python、测试、格式化、类型检查时优先使用 `uv run ...`
-- **设计文档位置**: `D:\Coding\GitHub_Resuorse\emotion-robot\docs\`
-  - `记忆系统设计讨论.md` — 记忆系统的完整设计蓝本
-  - `LLM调用层设计讨论.md` — LLM 调用层的接口、工厂、配置设计
-  - `项目架构设计.md` — 目录结构、技术选型、日志方案
-- **当前 VAD 文档位置**: `D:\Coding\GitHub_Resuorse\emotion-robot\atri\docs\developments\wiki\VAD\`
+- **正式设计文档位置**: `docs/`
+  - `developments/项目架构设计.md` — 目录结构、技术选型、日志方案
+  - `developments/module-design/CN/记忆系统设计讨论.md` — 记忆系统的完整设计蓝本
+  - `developments/module-design/CN/LLM调用层设计讨论.md` — LLM 调用层的接口、工厂、配置设计
+  - `developments/module-design/CN/ASR模块设计文档.md` — ASR 模块接口、工厂、配置设计
+  - `developments/module-design/CN/TTS模块设计文档.md` — TTS 模块接口、工厂、配置设计
+  - `developments/module-design/CN/VAD语音唤醒模块设计.md` — VAD 模块参考设计
+- **当前 VAD 文档位置**: `docs/developments/wiki/VAD/`
   - `vad-design.md` — VAD、ASR、TTS 链路设计
   - `vad-development.md` — VAD 开发边界与架构说明
   - `vad-implementation-plan.md` — VAD 分阶段实施计划
