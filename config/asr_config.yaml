@@ -1,7 +1,7 @@
 # 自动语音识别（ASR）配置
-# asr_model 可选：web_speech_api、faster_whisper、whisper_cpp、whisper、openai_whisper。
+# asr_model 可选：web_speech_api、faster_whisper、sherpa_onnx_asr、whisper_cpp、whisper、openai_whisper。
 # web_speech_api 在浏览器侧识别；其他 provider 用后端处理上传音频。
-asr_model: web_speech_api # 当前使用的语音识别模型
+asr_model: sherpa_onnx_asr # 当前使用的语音识别模型
 
 auto_send:
   enabled: false # 浏览器端识别到语音后是否自动发送到聊天
@@ -20,6 +20,16 @@ faster_whisper:
   download_root: models/whisper # 模型下载根目录
   device: auto # 设备，cpu、cuda 或 auto；faster-whisper 不支持 mps
   compute_type: int8 # 计算精度/量化类型，如 int8、float16、float32
+
+# Sherpa-ONNX SenseVoice 配置，兼容 OLV 默认 ASR 模型
+sherpa_onnx_asr:
+  model_type: sense_voice # 当前仅支持 OLV 默认 SenseVoice 模型
+  sense_voice: models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx
+  tokens: models/asr-models/sherpa-onnx-sense-voice/tokens.txt
+  num_threads: 4 # CPU 推理线程数；服务器测试可先用 2 或 4
+  use_itn: true # SenseVoice 文本规范化
+  provider: cpu # 本地和服务器验证先固定 CPU
+  debug: false
 
 whisper_cpp:
   # 可用模型参考：https://abdeladim-s.github.io/pywhispercpp/#pywhispercpp.constants.AVAILABLE_MODELS

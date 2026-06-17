@@ -13,7 +13,9 @@ def test_create_app_initializes_vad_service() -> None:
             "vad": {
                 "enabled": True,
                 "vad_model": "fake",
-                "required_hits": 2,
+                "fake": {
+                    "required_hits": 2,
+                },
             },
             "auth": {"enabled": False},
         }

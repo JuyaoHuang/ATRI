@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from src.app import create_app
 from src.asr import ASRConfigStore, ASRService
 from src.asr.providers import faster_whisper as faster_whisper_module
+from src.asr.providers import sherpa_onnx_asr as sherpa_onnx_module
 from src.utils.config_loader import load_config
 
 
@@ -45,7 +46,13 @@ async def test_list_asr_providers_returns_registered_statuses(client_and_config_
     assert response.status_code == 200
     providers = response.json()
     names = {provider["name"] for provider in providers}
-    assert {"web_speech_api", "faster_whisper", "whisper_cpp", "openai_whisper"} <= names
+    assert {
+        "web_speech_api",
+        "faster_whisper",
+        "sherpa_onnx_asr",
+        "whisper_cpp",
+        "openai_whisper",
+    } <= names
 
     web_speech = next(provider for provider in providers if provider["name"] == "web_speech_api")
     assert web_speech["active"] is True
@@ -354,3 +361,74 @@ async def test_missing_optional_faster_whisper_dependency_returns_503(
 
     assert response.status_code == 503
     assert "faster_whisper" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_missing_optional_sherpa_onnx_dependency_returns_503(
+    client_and_config_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client, _config_path = client_and_config_path
+    original_find_spec = sherpa_onnx_module.importlib.util.find_spec
+
+    def fake_find_spec(name: str, *args, **kwargs):
+        if name == "sherpa_onnx":
+            return None
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(sherpa_onnx_module.importlib.util, "find_spec", fake_find_spec)
+
+    switch_response = await client.post("/api/asr/switch", json={"provider": "sherpa_onnx_asr"})
+    assert switch_response.status_code == 200
+
+    response = await client.post(
+        "/api/asr/transcribe",
+        files={"audio": ("recording.wav", b"not-used", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert "sherpa_onnx" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_missing_sherpa_onnx_model_returns_503(
+    client_and_config_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client, config_path = client_and_config_path
+    original_find_spec = sherpa_onnx_module.importlib.util.find_spec
+    config_path.write_text(
+        "\n".join(
+            [
+                "asr_model: web_speech_api",
+                "sherpa_onnx_asr:",
+                "  model_type: sense_voice",
+                "  sense_voice: models/missing-sense-voice/model.int8.onnx",
+                "  tokens: models/missing-sense-voice/tokens.txt",
+                "  num_threads: 4",
+                "  use_itn: true",
+                "  provider: cpu",
+                "  debug: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_find_spec(name: str, *args, **kwargs):
+        if name == "sherpa_onnx":
+            return object()
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(sherpa_onnx_module.importlib.util, "find_spec", fake_find_spec)
+
+    switch_response = await client.post("/api/asr/switch", json={"provider": "sherpa_onnx_asr"})
+    assert switch_response.status_code == 200
+
+    response = await client.post(
+        "/api/asr/transcribe",
+        files={"audio": ("recording.wav", b"not-used", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert "SenseVoice model not found" in response.json()["detail"]

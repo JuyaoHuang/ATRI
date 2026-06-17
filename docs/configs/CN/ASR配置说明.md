@@ -82,6 +82,15 @@ faster_whisper:
   compute_type: int8
   prompt: ''
 
+sherpa_onnx_asr:
+  model_type: sense_voice
+  sense_voice: models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx
+  tokens: models/asr-models/sherpa-onnx-sense-voice/tokens.txt
+  num_threads: 4
+  use_itn: true
+  provider: cpu
+  debug: false
+
 whisper_cpp:
   model_name: small
   model_dir: models/whisper
@@ -112,6 +121,7 @@ openai_whisper:
 | --- | --- | --- | --- | --- |
 | `web_speech_api` | 浏览器 | 否 | 是 | 使用浏览器 SpeechRecognition。默认推荐。 |
 | `faster_whisper` | 本地 | 是 | 否 | 本地 faster-whisper，参考 OLV 链路。 |
+| `sherpa_onnx_asr` | 本地 | 是 | 否 | 本地 Sherpa-ONNX SenseVoice，参考 OLV 默认链路。 |
 | `whisper_cpp` | 本地 | 是 | 否 | 本地 pywhispercpp，参考 OLV 链路。 |
 | `openai_whisper` | 云服务 | 是 | 否 | OpenAI-compatible 音频转写。 |
 
@@ -180,7 +190,41 @@ uv add faster-whisper
 
 如果依赖或模型不可用，Provider 会显示为 unavailable，不会阻止后端启动。
 
-### 4.3 `whisper_cpp`
+### 4.3 `sherpa_onnx_asr`
+
+本地 Sherpa-ONNX SenseVoice Provider。当前实现按 OLV 默认 ASR 模型收敛，只支持 `sense_voice` 模型类型。
+
+```yaml
+asr_model: sherpa_onnx_asr
+sherpa_onnx_asr:
+  model_type: sense_voice
+  sense_voice: models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx
+  tokens: models/asr-models/sherpa-onnx-sense-voice/tokens.txt
+  num_threads: 4
+  use_itn: true
+  provider: cpu
+  debug: false
+```
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `model_type` | string | `sense_voice` | 当前仅支持 `sense_voice`。 |
+| `sense_voice` | string | `models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx` | SenseVoice ONNX 模型路径。 |
+| `tokens` | string | `models/asr-models/sherpa-onnx-sense-voice/tokens.txt` | tokens 文件路径。 |
+| `num_threads` | number | `4` | CPU 推理线程数。服务器验证可先用 `2` 或 `4`。 |
+| `use_itn` | boolean | `true` | 启用 SenseVoice 文本规范化。 |
+| `provider` | string | `cpu` | 推理后端。当前建议固定 `cpu`。 |
+| `debug` | boolean | `false` | 是否启用 sherpa-onnx 调试日志。 |
+
+依赖说明：
+
+```powershell
+uv add sherpa-onnx onnxruntime
+```
+
+模型下载后应位于 `models/asr-models/sherpa-onnx-sense-voice/`。
+
+### 4.4 `whisper_cpp`
 
 本地 whisper.cpp Provider，使用 `pywhispercpp`。
 
@@ -211,7 +255,7 @@ cd D:\Coding\GitHub_Resuorse\emotion-robot\atri
 uv add pywhispercpp
 ```
 
-### 4.4 `openai_whisper`
+### 4.5 `openai_whisper`
 
 OpenAI-compatible 云端转写 Provider。
 
@@ -298,6 +342,7 @@ openai_whisper:
 | Providers | `asr_model` | 切换当前 Provider。 |
 | Web Speech API 设置 | `web_speech_api` | 配置浏览器识别语言和临时结果。 |
 | Faster Whisper 设置 | `faster_whisper` | 配置模型、语言和下载目录。 |
+| Sherpa-ONNX 设置 | `sherpa_onnx_asr` | 配置 SenseVoice 模型路径和 CPU 线程数。 |
 | Whisper.cpp 设置 | `whisper_cpp` | 配置模型名和模型目录。 |
 | OpenAI Whisper 设置 | `openai_whisper` | 配置模型和 base URL。 |
 | Auto-send Settings | `auto_send` | 控制转写后是否自动发送。 |
@@ -322,7 +367,7 @@ openai_whisper:
 
 ### 后端 Provider
 
-适用于 `faster_whisper`、`whisper_cpp`、`openai_whisper`。
+适用于 `faster_whisper`、`sherpa_onnx_asr`、`whisper_cpp`、`openai_whisper`。
 
 ```text
 浏览器麦克风
@@ -392,7 +437,23 @@ faster_whisper:
 
 适合离线英文转写。
 
-### 示例 C：本地 whisper.cpp 自动语言识别
+### 示例 C：本地 Sherpa-ONNX SenseVoice 中文识别
+
+```yaml
+asr_model: sherpa_onnx_asr
+sherpa_onnx_asr:
+  model_type: sense_voice
+  sense_voice: models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx
+  tokens: models/asr-models/sherpa-onnx-sense-voice/tokens.txt
+  num_threads: 4
+  use_itn: true
+  provider: cpu
+  debug: false
+```
+
+适合验证 OLV 默认 ASR 链路，服务器部署前建议先固定 CPU。
+
+### 示例 D：本地 whisper.cpp 自动语言识别
 
 ```yaml
 asr_model: whisper_cpp
@@ -407,7 +468,7 @@ whisper_cpp:
 
 适合轻量本地转写。
 
-### 示例 D：云端 OpenAI-compatible 转写
+### 示例 E：云端 OpenAI-compatible 转写
 
 ```yaml
 asr_model: openai_whisper

@@ -33,9 +33,11 @@ async def test_vad_service_debounces_fake_provider_events(tmp_path: Path) -> Non
                 "enabled": True,
                 "vad_model": "fake",
                 "sample_rate": 16000,
-                "required_hits": 2,
-                "required_misses": 2,
-                "fake": {"speech_threshold": 0.5},
+                "fake": {
+                    "speech_threshold": 0.5,
+                    "required_hits": 2,
+                    "required_misses": 2,
+                },
             },
             path=tmp_path / "vad_config.yaml",
         )
@@ -93,18 +95,19 @@ def test_vad_config_store_patches_values_without_backfilling_defaults(tmp_path: 
     config_path = tmp_path / "vad_config.yaml"
     store = VADConfigStore({"enabled": False, "vad_model": "fake"}, path=config_path)
 
-    store.update({"enabled": True, "required_hits": 3})
+    store.update({"enabled": True, "fake": {"required_hits": 3}})
 
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert persisted == {
         "enabled": True,
         "vad_model": "fake",
-        "required_hits": 3,
+        "fake": {"required_hits": 3},
     }
 
 
 def test_root_config_loads_vad_sub_config() -> None:
     config = load_config("config.yaml")
 
-    assert config["vad"]["enabled"] is False
+    assert config["vad"]["enabled"] is True
     assert config["vad"]["vad_model"] == "fake"
+    assert config["vad"]["fake"]["required_misses"] == 10

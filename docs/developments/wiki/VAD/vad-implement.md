@@ -260,6 +260,8 @@ OLV 的经验可以解决 ATRI M2 以后大部分链路问题，但不应直接�
 
 ATRI 应该复用 OLV 的机制，而不是复用 OLV 的协议外壳。
 
+配置归属上，`required_hits` / `required_misses` 不能再视为全局 VAD 参数。fake 是开发联调用的能量阈值 provider，它的 `speech_threshold`、`required_hits`、`required_misses` 只描述 fake provider。Silero 是真实模型 provider，它的 `prob_threshold`、`db_threshold`、`required_hits`、`required_misses`、`smoothing_window` 按 OLV 的 512-sample 小窗口状态机理解。
+
 ## 11. M2 以后已确认决策
 
 ### 11.1 音频输入格式

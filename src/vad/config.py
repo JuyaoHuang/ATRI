@@ -17,14 +17,14 @@ DEFAULT_VAD_CONFIG: dict[str, Any] = {
     "enabled": False,
     "vad_model": "fake",
     "sample_rate": 16000,
-    "required_hits": 2,
-    "required_misses": 3,
     "fake": {
-        "speech_threshold": 0.5,
+        "speech_threshold": 0.05,
+        "required_hits": 2,
+        "required_misses": 10,
     },
     "silero_vad": {
         "sample_rate": 16000,
-        "prob_threshold": 0.5,
+        "prob_threshold": 0.4,
         "db_threshold": 60,
         "required_hits": 3,
         "required_misses": 24,

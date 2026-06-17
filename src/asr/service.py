@@ -25,6 +25,7 @@ SENSITIVE_CONFIG_MASK = "********"
 PROVIDER_WRITE_ALLOWLISTS: dict[str, set[str]] = {
     "web_speech_api": {"language", "continuous", "interim_results", "max_alternatives"},
     "faster_whisper": {"language"},
+    "sherpa_onnx_asr": {"num_threads", "use_itn", "provider", "debug"},
     "whisper_cpp": set(),
     "openai_whisper": set(),
 }
@@ -262,9 +263,7 @@ class ASRService:
                 provider_config = dict(value)
             else:
                 provider_config = {
-                    field: field_value
-                    for field, field_value in value.items()
-                    if field in allowed
+                    field: field_value for field, field_value in value.items() if field in allowed
                 }
 
             if provider_config:

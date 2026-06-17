@@ -128,12 +128,33 @@ class VADService:
             provider,
             config=VADSessionConfig(
                 sample_rate=int(config.get("sample_rate") or 16000),
-                required_hits=max(1, int(config.get("required_hits") or 1)),
-                required_misses=max(1, int(config.get("required_misses") or 1)),
+                required_hits=self._session_debounce_value(
+                    provider_config,
+                    config,
+                    "required_hits",
+                    default=1,
+                ),
+                required_misses=self._session_debounce_value(
+                    provider_config,
+                    config,
+                    "required_misses",
+                    default=1,
+                ),
             ),
         )
         self._sessions[session_id] = session
         return session
+
+    def _session_debounce_value(
+        self,
+        provider_config: dict[str, Any],
+        root_config: dict[str, Any],
+        key: str,
+        *,
+        default: int,
+    ) -> int:
+        value = provider_config.get(key, root_config.get(key, default))
+        return max(1, int(value or default))
 
     def _provider_health(self, name: str, provider_config: dict[str, Any]) -> dict[str, Any]:
         try:

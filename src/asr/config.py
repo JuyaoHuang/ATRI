@@ -38,11 +38,20 @@ DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "faster_whisper": {
         "language": "auto",
     },
+    "sherpa_onnx_asr": {
+        "model_type": "sense_voice",
+        "sense_voice": "models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx",
+        "tokens": "models/asr-models/sherpa-onnx-sense-voice/tokens.txt",
+        "num_threads": 4,
+        "use_itn": True,
+        "provider": "cpu",
+        "debug": False,
+    },
     "whisper_cpp": {
         "model_name": "small",
-        "print_realtime": False, # 是否实时打印
+        "print_realtime": False,  # 是否实时打印
         "print_progress": False,  # 是否打印进度
-        "language": "auto", # 语言，en、zh、auto
+        "language": "auto",  # 语言，en、zh、auto
     },
     "whisper": {
         "name": "medium",

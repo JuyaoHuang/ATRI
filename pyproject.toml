@@ -17,6 +17,8 @@ dependencies = [
     "uvicorn>=0.44.0",
     "websockets>=16.0",
     "psycopg[pool]>=3.2.8",
+    "sherpa-onnx>=1.13.3",
+    "onnxruntime>=1.27.0",
 ]
 
 [dependency-groups]

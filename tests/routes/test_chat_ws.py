@@ -120,9 +120,11 @@ def _vad_enabled_config(base_config: dict) -> dict:
             "enabled": True,
             "vad_model": "fake",
             "sample_rate": 16000,
-            "required_hits": 2,
-            "required_misses": 2,
-            "fake": {"speech_threshold": 0.5},
+            "fake": {
+                "speech_threshold": 0.5,
+                "required_hits": 2,
+                "required_misses": 2,
+            },
         },
     }
 
