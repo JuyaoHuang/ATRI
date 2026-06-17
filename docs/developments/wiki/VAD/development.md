@@ -1,10 +1,12 @@
 # VAD 开发记录
 
+本文是开发 blog，用于记录阶段性讨论、协议草案和实现进度；M0-M7 的职责划分与验收以 `docs/developments/wiki/VAD/vad-implementation-plan.md` 为准。
+
 ## 2026-06-15
 
 ### 1. WebSocket 协议扩展（M2）
 
-M2 的目标是让后端聊天 WebSocket 认识实时语音输入消息，并能把音频 chunk 交给 `VADService`。M2 不实现前端麦克风采集，也不把语音交给 ASR。
+M2 的目标是让后端聊天 WebSocket 认识实时语音输入消息，并能把音频 chunk 交给 `VADService`。M2 不实现前端麦克风采集，也不把语音交给真实 ASR；`output:asr:transcript` 在 M2 只定义和预留协议形态。
 
 当前后端 WebSocket 已有统一消息结构：
 
@@ -32,6 +34,7 @@ VAD 相关消息继续沿用这个结构。
 | --- | --- | --- |
 | `control:listen-state` | 返回 VAD 监听状态 | 每次处理音频 chunk 或输入结束 |
 | `control:interrupt` | 通知前端立即打断播放/旧回复 | VAD 事件为 `speech_start` 时 |
+| `output:asr:transcript` | 返回 ASR 转写文本 | M2 只定义和预留，真实触发属于 M4 |
 
 #### 1.2 `input:audio:chunk`
 
@@ -87,7 +90,7 @@ VAD 相关消息继续沿用这个结构。
 | `chat_id` | `string` | 是 | 当前聊天 ID。 |
 | `character_id` | `string` | 是 | 当前角色 ID。 |
 
-M2 中该消息只表示“实时输入结束”。后端可以返回监听状态并重置当前 VAD session，但不提交 ASR。ASR 衔接属于 M4。
+M2 中该消息只表示“实时输入结束”。后端可以返回监听状态并重置当前 VAD session，但不提交真实 ASR。ASR 衔接属于 M4。
 
 #### 1.4 `control:listen-state`
 
@@ -156,6 +159,25 @@ M2 中该消息只表示“实时输入结束”。后端可以返回监听状�
 
 `control:interrupt` 不等待 ASR 文本。只要后端 VAD 判断用户开始说话，就可以发送该控制事件。
 
+#### 1.5.1 `output:asr:transcript`（M2 预留）
+
+M2 预留 ASR 转写结果事件，便于 M4 接入真实 ASR 后沿用同一 WebSocket 协议。
+
+```json
+{
+  "type": "output:asr:transcript",
+  "data": {
+    "chat_id": "chat_xxx",
+    "character_id": "atri",
+    "text": "你好",
+    "is_final": true,
+    "seq": 1
+  }
+}
+```
+
+M2 不要求由真实 ASR 触发该事件；实现上可以先提供消息结构、发送辅助函数或协议测试。
+
 #### 1.6 打断触发规则
 
 M2 采用以下规则：
@@ -173,12 +195,13 @@ M2 需要为每个 WebSocket 连接维护轻量状态：
 | 状态 | 作用 |
 | --- | --- |
 | `vad_session_id` | 标识当前连接的 VAD session。 |
+| `audio_buffer` | 预留当前连接的音频缓存结构和清理路径，M2 不把它提交给 ASR。 |
 | `current_chat_task` | 预留当前聊天生成任务引用。M2 可以先建立结构，M5 再真正取消。 |
 | `interrupt_sent` | 防止同一轮连续说话重复发送 `control:interrupt`。 |
 | `last_chat_id` | 记录最近一次语音消息关联的 chat。 |
 | `last_character_id` | 记录最近一次语音消息关联的 character。 |
 
-M2 不需要保存完整语音缓存。完整语音缓存和提交 ASR 属于 M4。
+M2 需要有连接级音频缓存结构和断开清理路径，但不负责把完整语音缓存提交给 ASR。完整语音片段裁剪、有效音频判断和 ASR 提交属于 M4。
 
 #### 1.8 M2 不做的事
 
@@ -187,7 +210,7 @@ M2 明确不做以下内容：
 1. 不实现前端麦克风采集。
 2. 不实现 AudioContext 或 AudioWorklet。
 3. 不提交 ASR。
-4. 不返回 `output:asr:transcript`。
+4. 不由真实 ASR 触发 `output:asr:transcript`。
 5. 不真正取消 LLM task。
 6. 不写入 `chat_history interrupted=true`。
 7. 不修改 TTS 播放链路。
@@ -206,4 +229,4 @@ M2 后端测试需要覆盖：
 5. 同一轮连续说话只发送一次 `control:interrupt`。
 6. `input:audio:end` 可以重置当前监听状态。
 7. 非法 `audio` 字段返回 `error` 消息或 `control:listen-state` 的 `error` 状态。
-
+8. `output:asr:transcript` 协议结构或发送辅助能力已预留，但不依赖真实 ASR。

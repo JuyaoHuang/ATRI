@@ -4,6 +4,8 @@
 日期：2026-06-15  
 适用范围：`atri/` 后端与 `atri/frontend` 前端子模块
 
+文档职责：本文件记录具体开发说明、协议解释和模块边界；M0-M7 的职责划分与验收以 `docs/developments/wiki/VAD/vad-implementation-plan.md` 为准，开发过程流水记录写入 `docs/developments/wiki/VAD/development.md`。
+
 ## 1. 当前没有阻塞性疑惑
 
 本阶段可以先进入开发文档与计划书准备。以下是后续实现时采用的工作假设，不影响先行设计：
@@ -172,6 +174,8 @@ ATRI 已确认采用以下 WebSocket 命名风格：
 3. `control:interrupt`：后端通知前端立即停止当前播放和旧回复处理。
 4. `output:asr:transcript`：后端返回 ASR 转写文本。
 5. `control:listen-state`：后端返回监听状态，例如 `speech_start`、`speech_end`、`silence`、`error`。
+
+其中 `output:asr:transcript` 在 M2 只定义和预留协议形态，真实 ASR 转写与触发在 M4 接入。
 
 `control:interrupt` 的 `reason` 字段优先使用 `speech_start`。也就是说，只要后端 VAD 判断用户开始说话，就不等待 ASR 结果，立即触发打断。
 

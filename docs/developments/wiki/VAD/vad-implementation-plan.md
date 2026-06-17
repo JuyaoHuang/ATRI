@@ -4,6 +4,8 @@
 日期：2026-06-15  
 前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-implement.md`
 
+文档职责：本文件是 VAD M0-M7 的唯一实施步骤与验收来源；`vad-implement.md` 用于记录具体开发说明，`development.md` 仅作为开发 blog。
+
 ## 1. 实施总原则
 
 1. 先实现 VAD 实时打断，不先重写全部 TTS 架构。
@@ -16,6 +18,7 @@
 8. 被打断的 AI 半截回复不作为普通完整 AI 回复进入短期记忆压缩或长期记忆写入流程。
 9. Web Speech API 是浏览器侧 ASR 或降级事件源，不作为 VAD model。
 10. OLV 的状态机、防抖和任务取消机制可复用；OLV 的 WebSocket 消息名和 sentinel bytes 不直接复用。
+11. VAD 开发每完成一个独立小点单独提交，提交信息统一使用 `feat: M<X>/:<summary>` 格式，例如 `feat: M2/:emit VAD interrupt events`。
 
 ## 2. 里程碑
 
@@ -73,7 +76,7 @@
 1. 前端发送实时音频 chunk：`input:audio:chunk`。
 2. 前端通知本轮音频输入结束：`input:audio:end`。
 3. 后端通知用户开口打断：`control:interrupt`，`reason` 为 `speech_start`。
-4. 后端通知 ASR 结果：`output:asr:transcript`。
+4. 后端通知 ASR 结果：`output:asr:transcript`。M2 只定义和预留该事件，真实 ASR 转写与触发属于 M4。
 5. 后端通知监听状态：`control:listen-state`，`state` 可为 `speech_start`、`speech_end`、`silence`、`error`。
 6. 音频 chunk 优先采用 16 kHz、mono、PCM float 数组，和 OLV 的 VAD 输入方向一致。
 7. 不使用 OLV 的 `b"<|PAUSE|>"`、`b"<|RESUME|>"` sentinel bytes 作为模块外部协议。
@@ -89,18 +92,20 @@
 1. 增加 `input:audio:chunk` 消息处理。
 2. 增加 `input:audio:end` 消息处理。
 3. 增加 `control:interrupt` 控制事件。
-4. 增加 `output:asr:transcript` ASR 转写结果事件。
+4. 增加 `output:asr:transcript` ASR 转写结果事件定义或发送辅助能力，M2 不调用真实 ASR。
 5. 增加 `control:listen-state` 监听状态事件。
-6. 为每个 WebSocket 连接维护当前 VADSession 和音频缓存。
-7. 为每个 WebSocket 连接维护当前 LLM task 引用。
+6. 为每个 WebSocket 连接维护当前 VADSession 和音频缓存结构，M2 不把缓存提交给 ASR。
+7. 为每个 WebSocket 连接维护当前 LLM task 引用结构，M2 不真正取消 LLM task。
 
 验收：
 
 1. 普通文字聊天 WebSocket 行为不变。
 2. 音频消息不会被误当成文字消息。
 3. VAD 检测到 `speech_start` 后，后端能向前端发送 `control:interrupt`。
-4. WebSocket 断开时能释放 VADSession、音频缓存和未完成任务。
+4. WebSocket 断开时能释放 VADSession、音频缓存和当前任务引用。
 5. 同一轮连续说话期间，`speech_start` 只触发一次 `control:interrupt`。
+
+M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消、`chat_history interrupted=true` 写入、TTS 链路修改或真实 Silero 推理接入。
 
 ### M3：前端实时麦克风输入
 
@@ -233,6 +238,8 @@
 7. M7 不进入第一版必做范围。
 
 这个顺序能保证每一步都有独立可验收结果，避免一开始同时改 VAD、ASR、TTS、LLM 和前端播放器。
+
+提交时按当前所属里程碑填写 `M<X>`，不把不同里程碑或无关仓库变更混入同一个提交。
 
 ## 4. 配置计划
 
