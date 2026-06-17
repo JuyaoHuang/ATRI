@@ -340,6 +340,52 @@ async def test_audio_speech_start_invalidates_current_generation(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_audio_speech_start_cancels_current_chat_task(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+    cancelled = asyncio.Event()
+
+    async def chat_handler() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    assert _start_tracked_chat_task(vad_state, "gen-old", chat_handler()) is True
+    task = vad_state.current_chat_task
+    assert task is not None
+
+    for seq in (1, 2):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.9],
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+        )
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert vad_state.current_chat_task is None
+    assert vad_state.current_generation_id is None
+    assert websocket.messages[-1]["type"] == "control:interrupt"
+
+
+@pytest.mark.asyncio
 async def test_websocket_text_input_streaming(
     mock_config: dict,
     mock_service_context: tuple[MagicMock, MagicMock],

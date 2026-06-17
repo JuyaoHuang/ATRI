@@ -71,6 +71,15 @@ class WebSocketVADState:
         self.current_generation_id = None
         return generation_id
 
+    def cancel_current_chat_task(self) -> bool:
+        """Cancel the active chat task if it is still running."""
+
+        task = self.current_chat_task
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
     def append_audio(self, audio: list[float]) -> None:
         """Append a valid speech-like audio chunk to this connection buffer."""
 
@@ -503,6 +512,8 @@ async def _handle_audio_chunk(
                 chat_id,
                 stale_generation_id,
             )
+        if vad_state.cancel_current_chat_task():
+            logger.info("Cancelled chat task on speech_start | chat_id={}", chat_id)
         await _send_interrupt(
             websocket,
             chat_id=str(chat_id),
