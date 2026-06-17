@@ -475,6 +475,71 @@ async def test_speech_end_asr_reports_backend_unavailable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_speech_end_asr_skips_short_audio() -> None:
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "你好"})
+
+    asr_result = await _handle_speech_end_asr(
+        websocket,
+        asr_service,
+        [0.8, 0.9],
+        chat_id="test_chat_123",
+        character_id="atri",
+        sample_rate=16000,
+        min_speech_ms=100,
+        seq=6,
+    )
+
+    assert asr_result is None
+    asr_service.transcribe_audio.assert_not_called()
+    assert websocket.messages == [
+        {
+            "type": "control:listen-state",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "state": "error",
+                "code": "speech_too_short",
+                "message": "Realtime VAD speech segment is too short for ASR auto-submit.",
+                "seq": 6,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_speech_end_asr_skips_invalid_transcript() -> None:
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "..."})
+
+    asr_result = await _handle_speech_end_asr(
+        websocket,
+        asr_service,
+        [0.8, 0.9],
+        chat_id="test_chat_123",
+        character_id="atri",
+        seq=7,
+    )
+
+    assert asr_result is None
+    assert websocket.messages == [
+        {
+            "type": "control:listen-state",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "state": "error",
+                "code": "empty_asr_transcript",
+                "message": "Realtime VAD ASR returned empty transcript.",
+                "seq": 7,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_audio_speech_end_calls_asr_and_clears_buffer(tmp_path) -> None:
     vad_service = VADService(
         VADConfigStore(

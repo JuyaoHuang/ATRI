@@ -552,6 +552,8 @@ async def _handle_audio_chunk(
             speech_audio,
             chat_id=str(chat_id),
             character_id=str(character_id),
+            sample_rate=_get_vad_sample_rate(vad_service),
+            min_speech_ms=_get_min_speech_ms(vad_service),
             seq=data.get("seq"),
         )
         if asr_result is not None:
@@ -638,6 +640,41 @@ def _float_audio_to_wav_bytes(audio: list[float], *, sample_rate: int = 16000) -
     return buffer.getvalue()
 
 
+def _get_vad_sample_rate(vad_service: VADService) -> int:
+    try:
+        return int(vad_service.get_config().get("sample_rate") or 16000)
+    except Exception:
+        return 16000
+
+
+def _get_min_speech_ms(vad_service: VADService) -> int:
+    try:
+        return max(0, int(vad_service.get_config().get("min_speech_ms") or 0))
+    except Exception:
+        return 0
+
+
+def _is_speech_audio_too_short(
+    audio: list[float],
+    *,
+    sample_rate: int,
+    min_speech_ms: int,
+) -> bool:
+    if min_speech_ms <= 0:
+        return False
+    min_samples = int(sample_rate * min_speech_ms / 1000)
+    return len(audio) < max(1, min_samples)
+
+
+def _normalize_asr_transcript(value: Any) -> str | None:
+    transcript = str(value or "").strip()
+    if not transcript:
+        return None
+    if not any(character.isalnum() for character in transcript):
+        return None
+    return transcript
+
+
 async def _handle_speech_end_asr(
     websocket: WebSocket,
     asr_service: Any | None,
@@ -645,6 +682,8 @@ async def _handle_speech_end_asr(
     *,
     chat_id: str,
     character_id: str,
+    sample_rate: int = 16000,
+    min_speech_ms: int = 0,
     seq: Any | None = None,
 ) -> dict[str, str] | None:
     """Transcribe a completed VAD speech segment and notify the frontend."""
@@ -669,11 +708,21 @@ async def _handle_speech_end_asr(
             seq=seq,
         )
         return None
+    if _is_speech_audio_too_short(audio, sample_rate=sample_rate, min_speech_ms=min_speech_ms):
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="speech_too_short",
+            message="Realtime VAD speech segment is too short for ASR auto-submit.",
+            seq=seq,
+        )
+        return None
 
     generation_id = uuid.uuid4().hex
     try:
         result = await asr_service.transcribe_audio(
-            _float_audio_to_wav_bytes(audio),
+            _float_audio_to_wav_bytes(audio, sample_rate=sample_rate),
             filename="realtime-vad.wav",
             content_type="audio/wav",
         )
@@ -709,8 +758,8 @@ async def _handle_speech_end_asr(
         )
         return None
 
-    transcript = str(result.get("text") or "").strip() if isinstance(result, dict) else ""
-    if not transcript:
+    transcript = _normalize_asr_transcript(result.get("text")) if isinstance(result, dict) else None
+    if transcript is None:
         await _send_listen_error(
             websocket,
             chat_id=chat_id,
