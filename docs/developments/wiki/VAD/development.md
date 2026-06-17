@@ -433,7 +433,23 @@ M3 不新增后端协议。前端实现并消费 M2 已定义的协议：
 
 #### 测试结果
 
-本阶段没有新增前端自动化单元测试。验证以类型检查、lint、生产构建和代码路径检查为主。
+本阶段没有新增前端自动化单元测试。验证以类型检查、lint、生产构建、代码路径检查和浏览器手动联调为主。
+
+浏览器手动联调结果：
+
+1. 实时 VAD button 可用，`disabled=false`，初始 `aria-pressed=false`。
+2. 点击开启实时 VAD 后，浏览器控制台出现 `ScriptProcessorNode is deprecated` 警告。该警告说明当前实现已经进入 `AudioContext` 采集路径，不阻塞 M3 验证。
+3. 通过临时 hook `WebSocket.prototype.send`，确认开启后前端持续发送 `input:audio:chunk`。
+4. 再次点击关闭实时 VAD 后，确认前端发送 `input:audio:end`。
+
+手动验证时捕获到的关键消息：
+
+```text
+[WS SEND] {"type":"input:audio:chunk","data":{"chat_id":...}}
+[WS SEND] {"type":"input:audio:end","data":{"chat_id":"20260617_9f2b0f00","character_id":"atri"}}
+```
+
+这说明 M3 的核心前端链路已经打通：实时 VAD button 可以启动麦克风采集，前端能通过 WebSocket 发送实时音频 chunk，并能在手动关闭时发送结束消息。
 
 #### 代码检查
 
@@ -467,8 +483,9 @@ http://127.0.0.1:5173/ started
 
 #### 已知问题
 
-- 尚未记录真实浏览器麦克风权限和真实后端联调的手动验收结果。
 - 当前实时采集使用 `AudioContext` 配合 `ScriptProcessorNode`。它能满足 M3 范围，但后续可评估迁移到 `AudioWorklet`。
+- 浏览器 DevTools 的 `Network -> WS` 面板未稳定显示消息；临时 hook `WebSocket.prototype.send` 已确认发送路径有效。
+- 后端返回 `control:listen-state`、后端返回 `control:interrupt`、interrupt 时 TTS 实际停止、WebSocket 断线时自动停止监听，仍需在 M4/M5 联调时继续回归。
 - M3 只负责前端发送音频和停止播放，不负责 speech_end 后自动 ASR。
 - M3 不负责取消后端 LLM task，也不写入 `chat_history interrupted=true`。
 

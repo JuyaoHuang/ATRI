@@ -160,21 +160,84 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 
 ### M4：VAD 到 ASR 的衔接
 
-目标：用户说完后，后端把本轮音频交给现有 ASR service，并把转写结果接入聊天流程。
+目标：完成“实时语音接管闭环”。用户开口时先打断旧输出；用户说完后，后端把本轮音频交给现有 ASR service，得到转写文本后由后端自动进入新一轮聊天流程。
+
+已确认决策：
+
+1. M4 不只是 `speech_end -> ASR`，还要补齐实时语音接管所需的最小后端控制能力。
+2. `speech_start` 到来时，后端发送 `control:interrupt`，前端按 M3 已完成逻辑停止当前 TTS 播放和播放队列。
+3. `speech_start` 到来时，后端对当前聊天生成执行机械取消：取消当前 `current_chat_task`，停止继续向前端发送旧回复。
+4. 当前 ATRI 聊天协议没有能区分“一次生成”的 id；M4 需要新增 `generation_id`，用于判断旧 LLM 输出是否已经失效。
+5. `chat_id` 只表示聊天窗口或会话，不能用于判断某一轮 LLM 生成是否仍有效。
+6. `generation_id` 由后端生成。每次文字输入或 ASR 自动提交触发新一轮聊天时，都创建新的 `generation_id`。
+7. `output:chat:chunk`、`output:chat:complete`、`output:asr:transcript` 都应携带 `generation_id`。
+8. 后端发送 chunk、发送 complete、持久化本轮消息前，都必须检查当前任务的 `generation_id` 是否仍是有效 generation；如果已经失效，直接丢弃旧结果。
+9. `output:asr:transcript` 是展示事件，不是前端再次调用 `sendMessage()` 的触发器；否则会重复提交。
+10. M4 采用后端自动提交：`speech_end -> ASR -> output:asr:transcript -> 后端启动聊天`。
+11. 如果当前 ASR provider 是 `web_speech_api`，后端不能执行自动 ASR，因为它是浏览器侧能力，不是后端可调用的 ASR provider。
+12. `web_speech_api` 场景下，VAD 打断仍可用，但 `speech_end` 后端自动 ASR 和自动聊天必须跳过，并返回明确错误状态。
 
 预计涉及位置：
 
 1. `src/asr/`
 2. `src/routes/chat_ws.py`
 3. WebSocket 会话状态管理逻辑
+4. 前端 WebSocket 消息类型与 ASR transcript 展示逻辑
+5. 后端 WebSocket 测试
 
 执行内容：
 
-1. VADSession 在 speech_start 后开始缓存有效音频。
-2. VADSession 在 speech_end 后输出完整语音段。
-3. 后端把完整语音段交给 ASR service。
-4. 后端把 ASR 文本推送给前端展示。
-5. 后端将 ASR 文本作为用户输入进入现有聊天处理流程。
+1. 扩展 WebSocket 会话状态，记录当前有效 `generation_id`。
+2. 每次启动文本聊天或 ASR 自动提交聊天时，生成新的 `generation_id`。
+3. 在 `speech_start` 时标记旧 `generation_id` 失效。
+4. 在 `speech_start` 时取消当前 `current_chat_task`，实现机械取消。
+5. 在聊天 chunk 发送前检查 `generation_id`，旧 generation 的 chunk 不再发送。
+6. 在聊天 complete 发送前检查 `generation_id`，旧 generation 的 complete 不再发送。
+7. 在消息持久化前检查 `generation_id`，旧 generation 的普通完整消息不再写入。
+8. 修改 `output:chat:chunk` 和 `output:chat:complete`，在 data 中带上 `generation_id`。
+9. VADSession 在 `speech_start` 后开始缓存有效音频，保留必要的 pre-buffer，避免吞掉句首。
+10. VADSession 在 `speech_end` 后输出完整语音段，而不是直接清空 `audio_buffer`。
+11. 把完整语音段转换为现有 ASR service 可接受的音频输入。
+12. 调用现有 ASR service 执行后端转写。
+13. 如果 ASR provider 是 `web_speech_api` 或其它 browser-only provider，返回 `control:listen-state` 错误，不触发自动聊天。
+14. ASR 成功后发送 `output:asr:transcript`，包含 `text`、`chat_id`、`character_id`、`generation_id`、`is_final`。
+15. ASR 文本为空、全空白、过短或明显无效时，不启动新一轮聊天。
+16. ASR 成功且文本有效时，后端直接把该文本作为用户输入进入现有聊天处理流程。
+17. 前端收到 `output:asr:transcript` 后只负责展示用户刚说的话，不调用 `sendMessage()`。
+18. ASR 失败时返回明确错误，不断开 WebSocket。
+19. 保持普通文字聊天、按钮式 ASR 和 REST TTS 既有行为不变。
+
+建议协议字段：
+
+`output:asr:transcript`：
+
+```json
+{
+  "type": "output:asr:transcript",
+  "data": {
+    "text": "用户刚说的话",
+    "chat_id": "chat id",
+    "character_id": "character id",
+    "generation_id": "本轮生成 id",
+    "is_final": true
+  }
+}
+```
+
+`control:listen-state` 在后端 ASR 不可用时：
+
+```json
+{
+  "type": "control:listen-state",
+  "data": {
+    "state": "error",
+    "code": "backend_asr_unavailable",
+    "message": "Realtime VAD auto-submit requires a backend ASR provider; current provider is browser-only.",
+    "chat_id": "chat id",
+    "character_id": "character id"
+  }
+}
+```
 
 验收：
 
@@ -182,33 +245,138 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 2. 前端能显示 ASR 转写文本。
 3. ASR 失败时能返回明确错误，不破坏 WebSocket 连接。
 4. 过短音频或纯噪声不会触发一轮新对话。
+5. LLM 正在输出文字时，用户开口后旧回复停止继续输出。
+6. 用户开口后，旧 `generation_id` 的 chunk、complete 和普通持久化结果会被丢弃。
+7. ASR 自动提交触发的新一轮聊天使用新的 `generation_id`。
+8. 当前 ASR provider 为 `web_speech_api` 时，VAD 打断仍可用，但 `speech_end` 后不会自动提交聊天，并返回明确错误状态。
+9. 前端不会因为 `output:asr:transcript` 再次调用 `sendMessage()` 导致重复提交。
+10. 普通文字聊天、按钮式 ASR、REST TTS 不受影响。
 
-### M5：LLM 生成打断
+M4 不做：
 
-目标：让用户开口不仅停止播放，还能取消后端正在生成的上一轮回复。
+1. 不写入 `chat_history interrupted=true`。
+2. 不保存被打断的半截 AI 回复。
+3. 不处理被打断回复是否进入短期记忆压缩或长期记忆。
+4. 不重构 TTS 为 WebSocket payload。
+5. 不保证取消已经发出的 REST TTS API 请求。
+6. 不做完整 TTS 队列治理。
+
+### M5：打断语义与副作用治理
+
+目标：让“被打断”成为一等语义。M4 负责让旧输出停止、让新语音接管；M5 负责处理旧输出已经产生的半截文本、历史记录、记忆系统、前端 streaming 状态和 REST TTS 请求结果。
+
+已确认决策：
+
+1. M5 不再负责基础 LLM task 取消；机械取消和旧 `generation_id` 丢弃规则属于 M4。
+2. M5 采用后端已发送 chunk 的累积文本作为 `partial_reply` 的唯一来源。
+3. M5 第一版不引入 OLV 的前端 `heard_response` 回传。
+4. `partial_reply` 表示“后端已经发送给前端的文本”，不强行等同于“用户实际听到的 TTS 文本”。
+5. 被打断的半截 AI 回复可以展示和审计保存，但必须标记 `interrupted=true`。
+6. 被打断的半截 AI 回复不作为普通完整轮次进入记忆系统。
+7. 被打断的半截 AI 回复不进入 `recent_messages`，不增加 `total_rounds`，不触发短期记忆压缩，不写入长期记忆。
+8. 从 `chat_history` rebuild 短期记忆时，也必须跳过 `interrupted=true` 的 AI 消息。
+9. 被打断 generation 不触发新的自动 TTS。
+10. 已经发出的 REST TTS 请求不要求 provider 级取消；请求返回后如果 `generation_id` 已失效，前端直接丢弃结果。
+
+M5 与 M4 的边界：
+
+1. M4 解决“旧任务如何停下”和“新语音如何接管”。
+2. M5 解决“已经输出的旧内容如何被记录、展示和排除副作用”。
+3. M5 的核心输入是旧 `generation_id`、后端累积的 `partial_reply` 和 VAD interrupt reason；核心输出是 `output:chat:interrupted`、带 metadata 的历史消息，以及对记忆和 TTS 队列的跳过规则。
 
 预计涉及位置：
 
 1. `src/routes/chat_ws.py`
-2. Agent/聊天生成任务封装位置
-3. 记忆写入或对话历史更新位置
+2. `src/agent/chat_agent.py`
+3. `src/memory/chat_history.py`
+4. `src/memory/manager.py`
+5. `src/storage/`
+6. `frontend/src/utils/websocket.ts`
+7. `frontend/src/composables/useWebSocket.ts`
+8. `frontend/src/composables/useAudioPlayer.ts`
+9. `frontend/src/stores/chat.ts`
+10. 前后端消息类型定义
 
 执行内容：
 
-1. WebSocket 会话保存当前 LLM 生成 task。
-2. VAD speech_start 触发 interrupt 时，取消当前 task。
-3. 已经发送给前端的部分文本标记为 `interrupted=true`。
-4. 被打断的半截 AI 回复可以写入 `chat_history`，但必须带 `interrupted=true` 元数据。
-5. 被打断的半截 AI 回复不按普通完整回复写入短期记忆压缩或长期记忆。
-6. 用户新语音完成 ASR 后进入新一轮对话。
+1. 在 WebSocket 会话状态中为当前 generation 维护 `partial_reply`。
+2. 每次发送 `output:chat:chunk` 后，把已发送 chunk 追加到当前 generation 的 `partial_reply`。
+3. VAD `speech_start` 使旧 generation 失效时，如果 `partial_reply` 非空，发送 `output:chat:interrupted`。
+4. `output:chat:interrupted` 携带 `chat_id`、`character_id`、`generation_id`、`partial_reply`、`interrupted=true`、`reason`。
+5. 前端收到 `output:chat:interrupted` 后结束当前 streaming 状态。
+6. 如果 `partial_reply` 非空，前端把当前半截回复收束成一条 AI 消息，并标记 `interrupted=true`。
+7. 如果 `partial_reply` 为空，前端只清空 `streamingText`，不生成 AI 消息。
+8. 扩展前端 `Message` 类型，支持 `generation_id`、`interrupted`、`interrupt_reason`。
+9. 扩展前端历史响应类型，使历史消息可以携带 interrupted metadata。
+10. 扩展后端普通聊天历史存储，使 AI 消息可以保存 `generation_id`、`interrupted`、`interrupt_reason`。
+11. 扩展 MemoryManager 的 `chat_history` 写入能力，使 interrupted AI 消息能进入审计历史。
+12. 修改 MemoryManager 有效轮次判断，使 `interrupted=true` 的 AI 消息不计入有效轮次。
+13. 修改 MemoryManager rebuild 逻辑，使从 `chat_history` 恢复短期记忆时跳过 `interrupted=true` 的 AI 消息。
+14. 确保 interrupted AI 消息不进入 `recent_messages`。
+15. 确保 interrupted AI 消息不触发 L3/L4 短期记忆压缩。
+16. 确保 interrupted AI 消息不写入长期记忆。
+17. 前端自动 TTS 调用携带 `generation_id`。
+18. `useAudioPlayer` 为队列项和正在进行的合成请求记录 `generation_id`。
+19. VAD interrupt 到来时，前端标记旧 `generation_id` 的 TTS 结果失效。
+20. 旧 REST TTS 请求返回后，如果 `generation_id` 已失效，直接释放结果，不入队、不播放。
+21. 普通 `output:chat:complete` 路径继续表示正常完整回复；只有 `output:chat:interrupted` 表示被打断回复。
+
+建议协议字段：
+
+`output:chat:interrupted`：
+
+```json
+{
+  "type": "output:chat:interrupted",
+  "data": {
+    "chat_id": "chat id",
+    "character_id": "character id",
+    "generation_id": "被打断的生成 id",
+    "partial_reply": "已经发送给前端的半截 AI 回复",
+    "interrupted": true,
+    "reason": "vad_speech_start"
+  }
+}
+```
+
+历史消息 metadata：
+
+```json
+{
+  "role": "ai",
+  "content": "已经发送给前端的半截 AI 回复",
+  "generation_id": "被打断的生成 id",
+  "interrupted": true,
+  "interrupt_reason": "vad_speech_start"
+}
+```
 
 验收：
 
-1. LLM 正在输出文字时，用户开口能停止继续输出。
-2. 被打断的回复不会继续触发新的 TTS 合成。
-3. `chat_history` 能保留半截回复，并用 `interrupted=true` 区分普通完整回复。
-4. 用户下一句话能正常接续对话。
-5. 记忆系统不会把被打断的半截回复当作完整对话轮次。
+1. LLM 正在流式输出文字时，用户开口后前端 streaming 状态能正常结束。
+2. 已经输出的半截 AI 回复能在前端显示为 interrupted 消息。
+3. 空 `partial_reply` 不生成空 AI 消息。
+4. 被打断的半截 AI 回复能写入可审计历史，并带 `interrupted=true`。
+5. 被打断的半截 AI 回复不增加 `total_rounds`。
+6. 被打断的半截 AI 回复不进入 `recent_messages`。
+7. 被打断的半截 AI 回复不触发短期记忆压缩。
+8. 被打断的半截 AI 回复不写入长期记忆。
+9. 从 `chat_history` rebuild 后，`interrupted=true` 的 AI 消息仍不会进入短期记忆。
+10. 被打断 generation 不会触发新的自动 TTS。
+11. 已经发出的旧 REST TTS 请求返回后不会入队播放。
+12. 普通完整聊天回复仍按原有 complete 路径展示、持久化和自动 TTS。
+13. 用户下一句话能正常接续对话。
+
+M5 不做：
+
+1. 不做 VAD 检测。
+2. 不做 ASR 自动提交。
+3. 不做后端机械取消。
+4. 不做基础 `generation_id` 引入。
+5. 不引入前端 `heard_response` 回传。
+6. 不引入 OLV 的句子级 TTS 管线。
+7. 不做 TTS WebSocket 化。
+8. 不保证 provider 级取消已经发出的 TTS API 请求。
 
 ### M6：配置、测试与文档补齐
 
@@ -234,6 +402,28 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 
 目标：在第一版稳定后，评估是否把 TTS 输出改成更接近 OLV 的 WebSocket 分段音频。
 
+OLV 可借鉴机制：
+
+1. OLV 的 LLM token stream 不直接按 token 驱动 TTS。
+2. OLV 先用 sentence divider 把 token 累积成句子或短句。
+3. 每个句子产生一个 `SentenceOutput`，同时包含 `display_text` 和 `tts_text`。
+4. `display_text` 用于前端展示。
+5. `tts_text` 用于 TTS 合成。
+6. TTS task manager 为每个句子创建 TTS 任务，并用 sequence 保证音频按顺序下发。
+7. interrupt 到来时，conversation task 被取消，TTS manager 清理未发送音频队列。
+8. OLV 可由前端发送 `heard_response`，表示用户实际已经听到或看到的回复片段。
+9. 后端把 `heard_response` 交给 agent 的 interrupt handler。
+10. agent 将半截回复写入上下文，并追加 `[Interrupted by user]`，让下一轮模型知道上一轮被用户打断。
+
+OLV 打断处理流程：
+
+1. 用户开口触发 VAD interrupt 后，WebSocket 层通知当前 conversation 停止继续处理旧输出。
+2. conversation task 取消后，LLM token stream 停止继续消费；各 provider 在 `finally` 中关闭流式连接或释放上下文。
+3. TTS manager 清空尚未发送或尚未播放的句子级音频任务，避免旧回复继续出声。
+4. 前端把已经实际展示或播放到的内容作为 `heard_response` 回传。
+5. 后端 interrupt handler 优先使用 `heard_response` 作为半截回复，而不是使用完整模型输出。
+6. 半截回复只作为“这轮被打断”的上下文事实保留，并带 interrupt marker；它不等同于一轮正常完成的 AI 回复。
+
 执行内容：
 
 1. 将 LLM 文本按句子或短段切分。
@@ -241,12 +431,22 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 3. 后端通过 WebSocket 下发音频 payload 和 sequence。
 4. 前端按 sequence 播放。
 5. interrupt 到来时，前端清空音频队列，后端取消未完成 TTS 任务。
+6. 为每个句子级输出分配 `generation_id`、`segment_id` 和 `sequence`。
+7. 前端记录已经展示或已经播放完成的 segment。
+8. interrupt 到来时，前端可回传 `heard_response` 或已播放 segment 列表。
+9. 后端使用前端回传内容修正被打断回复的 `partial_reply`，使其更接近用户实际听到的内容。
+10. 后端将 interrupt marker 注入下一轮上下文，但仍避免把 interrupted 回复当作普通完整轮次写入记忆。
 
 验收：
 
 1. 即使 TTS provider 不支持真正流式，也能实现分段播放。
 2. 用户能更早听到角色回复。
 3. 打断时未播放的 TTS 队列能被清理。
+4. 打断时后端能知道哪些句子或片段已经展示/播放。
+5. `heard_response` 能用于更准确地保存被打断的半截回复。
+6. interrupted 回复仍不会污染普通记忆轮次。
+
+M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk 累积值”作为 `partial_reply`；只有在 M7 引入句子级 TTS 和播放确认后，才考虑切换为 OLV 式 `heard_response`。
 
 ## 3. 推荐执行顺序
 
@@ -254,7 +454,7 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 2. 再做 M2，把事件接入 WebSocket，但暂不接真实前端。
 3. 再做 M3，让前端能发送音频并响应 interrupt。
 4. 再做 M4，把 speech_end 接到 ASR 和聊天。
-5. 再做 M5，补齐 LLM task 取消和历史策略。
+5. 再做 M5，补齐打断语义、历史策略、记忆跳过和旧 TTS 结果丢弃。
 6. 最后做 M6 的测试和文档收尾。
 7. M7 不进入第一版必做范围。
 
