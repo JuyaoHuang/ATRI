@@ -14,8 +14,8 @@ from src.routes.chat_ws import (
     WebSocketVADState,
     _handle_audio_chunk,
     _handle_audio_end,
-    _run_tracked_chat_task,
     _send_asr_transcript,
+    _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
 
@@ -65,6 +65,12 @@ def mock_storage() -> AsyncMock:
 
 
 async def _mock_chat_stream(chunks: list[str]) -> AsyncIterator[str]:
+    for chunk in chunks:
+        yield chunk
+
+
+async def _mock_delayed_chat_stream(chunks: list[str], delay_seconds: float) -> AsyncIterator[str]:
+    await asyncio.sleep(delay_seconds)
     for chunk in chunks:
         yield chunk
 
@@ -177,7 +183,7 @@ async def test_send_asr_transcript_uses_reserved_protocol() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_tracked_chat_task_sets_and_clears_current_task() -> None:
+async def test_start_tracked_chat_task_sets_and_clears_current_task() -> None:
     vad_state = WebSocketVADState(session_id="test-session")
     observed_task: asyncio.Task[None] | None = None
 
@@ -185,7 +191,12 @@ async def test_run_tracked_chat_task_sets_and_clears_current_task() -> None:
         nonlocal observed_task
         observed_task = vad_state.current_chat_task
 
-    await _run_tracked_chat_task(vad_state, chat_handler())
+    started = _start_tracked_chat_task(vad_state, chat_handler())
+    task = vad_state.current_chat_task
+    assert started is True
+    assert task is not None
+    await task
+    await asyncio.sleep(0)
 
     assert isinstance(observed_task, asyncio.Task)
     assert vad_state.current_chat_task is None
@@ -234,6 +245,54 @@ async def test_websocket_text_input_streaming(
     mock_storage.append_message_for_user.assert_any_call(
         "default", "test_chat_123", "ai", "你好，主人！", name="atri"
     )
+
+
+@pytest.mark.asyncio
+async def test_websocket_handles_audio_while_chat_task_runs(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda text: _mock_delayed_chat_stream(["稍后"], 0.2))
+    app = _make_app(mock_config, mock_context, mock_storage)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:text",
+                "data": {
+                    "text": "你好",
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            }
+        )
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.1],
+                    "seq": 9,
+                },
+            }
+        )
+
+        listen_state = websocket.receive_json()
+        assert listen_state["type"] == "control:listen-state"
+        assert listen_state["data"]["state"] == "silence"
+        assert listen_state["data"]["seq"] == 9
+
+        chunk = websocket.receive_json()
+        assert chunk["type"] == "output:chat:chunk"
+        assert chunk["data"]["chunk"] == "稍后"
+
+        complete = websocket.receive_json()
+        assert complete["type"] == "output:chat:complete"
+        assert complete["data"]["full_reply"] == "稍后"
 
 
 @pytest.mark.asyncio

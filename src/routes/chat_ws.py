@@ -122,10 +122,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if msg_type == "ping":
                 await _handle_ping(websocket)
             elif msg_type == "input:text":
-                await _run_tracked_chat_task(
+                started = _start_tracked_chat_task(
                     vad_state,
                     _handle_text_input(websocket, message, service_context, storage, user_id),
                 )
+                if not started:
+                    await _send_error(
+                        websocket,
+                        "Chat task already running",
+                        chat_id=message.get("data", {}).get("chat_id"),
+                    )
             elif msg_type == "input:audio:chunk":
                 await _handle_audio_chunk(websocket, message, vad_service, vad_state)
             elif msg_type == "input:audio:end":
@@ -164,19 +170,36 @@ async def _handle_ping(websocket: WebSocket) -> None:
     await websocket.send_json({"type": "pong"})
 
 
-async def _run_tracked_chat_task(
+def _start_tracked_chat_task(
     vad_state: WebSocketVADState,
     chat_coro: Coroutine[Any, Any, None],
-) -> None:
-    """Run one chat coroutine while exposing its task on the connection state."""
+) -> bool:
+    """Start one chat coroutine while exposing its task on the connection state."""
 
+    current_task = vad_state.current_chat_task
+    if current_task is not None and not current_task.done():
+        chat_coro.close()
+        return False
     task = asyncio.create_task(chat_coro)
     vad_state.current_chat_task = task
+    task.add_done_callback(lambda completed: _finalize_tracked_chat_task(vad_state, completed))
+    return True
+
+
+def _finalize_tracked_chat_task(
+    vad_state: WebSocketVADState,
+    task: asyncio.Task[None],
+) -> None:
+    """Clear a completed chat task reference and consume terminal exceptions."""
+
+    if vad_state.current_chat_task is task:
+        vad_state.current_chat_task = None
     try:
-        await task
-    finally:
-        if vad_state.current_chat_task is task:
-            vad_state.current_chat_task = None
+        task.result()
+    except asyncio.CancelledError:
+        logger.debug("Tracked chat task cancelled")
+    except Exception as exc:
+        logger.error(f"Tracked chat task failed: {exc}")
 
 
 async def _handle_text_input(
