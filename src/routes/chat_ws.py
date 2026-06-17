@@ -27,8 +27,10 @@ Reference: docs/Phase5_执行规格.md §US-SRV-006, docs/OLV架构文档.md
 """
 
 import asyncio
+import io
 import json
 import uuid
+import wave
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,6 +39,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 from starlette.websockets import WebSocketState
 
+from src.asr.exceptions import ASRConfigError, ASRProviderUnavailableError, ASRTranscriptionError
 from src.auth import get_websocket_user_id
 from src.llm.exceptions import LLMError
 from src.vad import VADEvent, VADEventType, VADService, VADState
@@ -90,6 +93,13 @@ class WebSocketVADState:
 
         self.audio_buffer.clear()
 
+    def consume_audio_buffer(self) -> list[float]:
+        """Return and clear the buffered speech audio for this connection."""
+
+        audio = list(self.audio_buffer)
+        self.clear_audio_buffer()
+        return audio
+
     def release(self) -> None:
         """Release lightweight per-connection references."""
 
@@ -122,6 +132,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     service_context = websocket.app.state.service_context
     storage = websocket.app.state.storage
     vad_service = websocket.app.state.vad_service
+    asr_service = websocket.app.state.asr_service
     vad_state = WebSocketVADState(session_id=f"ws:{uuid.uuid4().hex}")
 
     try:
@@ -173,7 +184,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         chat_id=message.get("data", {}).get("chat_id"),
                     )
             elif msg_type == "input:audio:chunk":
-                await _handle_audio_chunk(websocket, message, vad_service, vad_state)
+                await _handle_audio_chunk(websocket, message, vad_service, vad_state, asr_service)
             elif msg_type == "input:audio:end":
                 await _handle_audio_end(websocket, message, vad_service, vad_state)
             else:
@@ -461,6 +472,7 @@ async def _handle_audio_chunk(
     message: dict[str, Any],
     vad_service: VADService,
     vad_state: WebSocketVADState,
+    asr_service: Any | None = None,
 ) -> None:
     """Handle realtime microphone audio chunks for backend VAD."""
 
@@ -493,9 +505,10 @@ async def _handle_audio_chunk(
     event = await vad_service.process_audio(vad_state.session_id, audio_samples)
     if event.is_speech and event.metadata.get("disabled") is not True:
         vad_state.append_audio(audio_samples)
+    speech_audio: list[float] | None = None
     if event.type is VADEventType.SPEECH_END:
         vad_state.interrupt_sent = False
-        vad_state.clear_audio_buffer()
+        speech_audio = vad_state.consume_audio_buffer()
     await _send_listen_state(
         websocket,
         event,
@@ -519,6 +532,15 @@ async def _handle_audio_chunk(
             chat_id=str(chat_id),
             character_id=str(character_id),
             reason="speech_start",
+        )
+    if event.type is VADEventType.SPEECH_END and speech_audio is not None:
+        await _handle_speech_end_asr(
+            websocket,
+            asr_service,
+            speech_audio,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            seq=data.get("seq"),
         )
 
 
@@ -575,6 +597,118 @@ def _coerce_audio_array(audio: Any) -> list[float] | None:
     return samples
 
 
+def _float_audio_to_wav_bytes(audio: list[float], *, sample_rate: int = 16000) -> bytes:
+    """Encode mono float PCM samples as 16-bit WAV bytes for ASR providers."""
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        pcm = bytearray()
+        for sample in audio:
+            clipped = max(-1.0, min(1.0, float(sample)))
+            pcm_value = int(clipped * 32767)
+            pcm.extend(pcm_value.to_bytes(2, byteorder="little", signed=True))
+        wav.writeframes(bytes(pcm))
+    return buffer.getvalue()
+
+
+async def _handle_speech_end_asr(
+    websocket: WebSocket,
+    asr_service: Any | None,
+    audio: list[float],
+    *,
+    chat_id: str,
+    character_id: str,
+    seq: Any | None = None,
+) -> str | None:
+    """Transcribe a completed VAD speech segment and notify the frontend."""
+
+    if asr_service is None:
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="backend_asr_unavailable",
+            message="Realtime VAD auto-submit requires a backend ASR service.",
+            seq=seq,
+        )
+        return None
+    if not audio:
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="empty_speech_audio",
+            message="Realtime VAD speech segment is empty.",
+            seq=seq,
+        )
+        return None
+
+    generation_id = uuid.uuid4().hex
+    try:
+        result = await asr_service.transcribe_audio(
+            _float_audio_to_wav_bytes(audio),
+            filename="realtime-vad.wav",
+            content_type="audio/wav",
+        )
+    except ASRProviderUnavailableError as exc:
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="backend_asr_unavailable",
+            message=str(exc),
+            seq=seq,
+        )
+        return None
+    except (ASRConfigError, ASRTranscriptionError) as exc:
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="asr_transcription_failed",
+            message=str(exc),
+            seq=seq,
+        )
+        return None
+    except Exception as exc:
+        logger.error(f"Unexpected ASR error during realtime speech handoff: {exc}")
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="asr_transcription_failed",
+            message="Realtime VAD ASR transcription failed.",
+            seq=seq,
+        )
+        return None
+
+    transcript = str(result.get("text") or "").strip() if isinstance(result, dict) else ""
+    if not transcript:
+        await _send_listen_error(
+            websocket,
+            chat_id=chat_id,
+            character_id=character_id,
+            code="empty_asr_transcript",
+            message="Realtime VAD ASR returned empty transcript.",
+            seq=seq,
+        )
+        return None
+
+    await _send_asr_transcript(
+        websocket,
+        chat_id=chat_id,
+        character_id=character_id,
+        text=transcript,
+        generation_id=generation_id,
+        is_final=True,
+        seq=seq,
+    )
+    return transcript
+
+
 async def _send_listen_state(
     websocket: WebSocket,
     event: VADEvent,
@@ -602,6 +736,29 @@ async def _send_listen_state(
     if event.type is VADEventType.ERROR and event.metadata.get("reason"):
         data["reason"] = str(event.metadata["reason"])
 
+    await _send_json(websocket, {"type": "control:listen-state", "data": data})
+
+
+async def _send_listen_error(
+    websocket: WebSocket,
+    *,
+    chat_id: str,
+    character_id: str,
+    code: str,
+    message: str,
+    seq: Any | None = None,
+) -> None:
+    """Send a control:listen-state error message to the frontend."""
+
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "character_id": character_id,
+        "state": VADEventType.ERROR.value,
+        "code": code,
+        "message": message,
+    }
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        data["seq"] = seq
     await _send_json(websocket, {"type": "control:listen-state", "data": data})
 
 

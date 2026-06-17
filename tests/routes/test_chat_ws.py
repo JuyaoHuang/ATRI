@@ -11,10 +11,13 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import create_app
+from src.asr.exceptions import ASRProviderUnavailableError
 from src.routes.chat_ws import (
     WebSocketVADState,
+    _float_audio_to_wav_bytes,
     _handle_audio_chunk,
     _handle_audio_end,
+    _handle_speech_end_asr,
     _handle_text_input,
     _send_asr_transcript,
     _send_json,
@@ -383,6 +386,119 @@ async def test_audio_speech_start_cancels_current_chat_task(tmp_path) -> None:
     assert vad_state.current_chat_task is None
     assert vad_state.current_generation_id is None
     assert websocket.messages[-1]["type"] == "control:interrupt"
+
+
+def test_float_audio_to_wav_bytes_encodes_pcm_wav() -> None:
+    payload = _float_audio_to_wav_bytes([0.0, 0.5, -0.5])
+
+    assert payload.startswith(b"RIFF")
+    assert b"WAVE" in payload[:16]
+
+
+@pytest.mark.asyncio
+async def test_speech_end_asr_sends_transcript_with_generation_id() -> None:
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "你好"})
+
+    transcript = await _handle_speech_end_asr(
+        websocket,
+        asr_service,
+        [0.8, 0.9],
+        chat_id="test_chat_123",
+        character_id="atri",
+        seq=4,
+    )
+
+    assert transcript == "你好"
+    asr_service.transcribe_audio.assert_awaited_once()
+    call = asr_service.transcribe_audio.await_args
+    assert call is not None
+    assert call.kwargs == {
+        "filename": "realtime-vad.wav",
+        "content_type": "audio/wav",
+    }
+    assert call.args[0].startswith(b"RIFF")
+    assert websocket.messages[0]["type"] == "output:asr:transcript"
+    assert websocket.messages[0]["data"]["text"] == "你好"
+    assert websocket.messages[0]["data"]["chat_id"] == "test_chat_123"
+    assert websocket.messages[0]["data"]["character_id"] == "atri"
+    assert websocket.messages[0]["data"]["generation_id"]
+    assert websocket.messages[0]["data"]["is_final"] is True
+    assert websocket.messages[0]["data"]["seq"] == 4
+
+
+@pytest.mark.asyncio
+async def test_speech_end_asr_reports_backend_unavailable() -> None:
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(
+        side_effect=ASRProviderUnavailableError(
+            "ASR provider 'web_speech_api' does not support backend transcription"
+        )
+    )
+
+    transcript = await _handle_speech_end_asr(
+        websocket,
+        asr_service,
+        [0.8, 0.9],
+        chat_id="test_chat_123",
+        character_id="atri",
+        seq=5,
+    )
+
+    assert transcript is None
+    assert websocket.messages == [
+        {
+            "type": "control:listen-state",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "state": "error",
+                "code": "backend_asr_unavailable",
+                "message": "ASR provider 'web_speech_api' does not support backend transcription",
+                "seq": 5,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_end_calls_asr_and_clears_buffer(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "你好"})
+
+    for seq, audio in ((1, [0.8]), (2, [0.9]), (3, [0.0]), (4, [0.0])):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": audio,
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+            asr_service,
+        )
+
+    assert vad_state.audio_buffer == []
+    asr_service.transcribe_audio.assert_awaited_once()
+    assert websocket.messages[-2]["type"] == "control:listen-state"
+    assert websocket.messages[-2]["data"]["state"] == "speech_end"
+    assert websocket.messages[-1]["type"] == "output:asr:transcript"
+    assert websocket.messages[-1]["data"]["text"] == "你好"
+    assert websocket.messages[-1]["data"]["generation_id"]
 
 
 @pytest.mark.asyncio
