@@ -90,6 +90,15 @@ async def _mock_delayed_chat_stream(chunks: list[str], delay_seconds: float) -> 
         yield chunk
 
 
+async def _wait_for_message_type(websocket: CapturingWebSocket, msg_type: str) -> dict:
+    for _ in range(20):
+        for message in websocket.messages:
+            if message["type"] == msg_type:
+                return message
+        await asyncio.sleep(0)
+    raise AssertionError(f"Message type {msg_type!r} was not sent")
+
+
 def _make_app(config: dict, service_context: MagicMock, storage: AsyncMock):
     with (
         patch("src.app.ServiceContext", return_value=service_context),
@@ -401,7 +410,7 @@ async def test_speech_end_asr_sends_transcript_with_generation_id() -> None:
     asr_service = AsyncMock()
     asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "你好"})
 
-    transcript = await _handle_speech_end_asr(
+    asr_result = await _handle_speech_end_asr(
         websocket,
         asr_service,
         [0.8, 0.9],
@@ -410,7 +419,9 @@ async def test_speech_end_asr_sends_transcript_with_generation_id() -> None:
         seq=4,
     )
 
-    assert transcript == "你好"
+    assert asr_result is not None
+    assert asr_result["text"] == "你好"
+    assert asr_result["generation_id"]
     asr_service.transcribe_audio.assert_awaited_once()
     call = asr_service.transcribe_audio.await_args
     assert call is not None
@@ -423,7 +434,7 @@ async def test_speech_end_asr_sends_transcript_with_generation_id() -> None:
     assert websocket.messages[0]["data"]["text"] == "你好"
     assert websocket.messages[0]["data"]["chat_id"] == "test_chat_123"
     assert websocket.messages[0]["data"]["character_id"] == "atri"
-    assert websocket.messages[0]["data"]["generation_id"]
+    assert websocket.messages[0]["data"]["generation_id"] == asr_result["generation_id"]
     assert websocket.messages[0]["data"]["is_final"] is True
     assert websocket.messages[0]["data"]["seq"] == 4
 
@@ -438,7 +449,7 @@ async def test_speech_end_asr_reports_backend_unavailable() -> None:
         )
     )
 
-    transcript = await _handle_speech_end_asr(
+    asr_result = await _handle_speech_end_asr(
         websocket,
         asr_service,
         [0.8, 0.9],
@@ -447,7 +458,7 @@ async def test_speech_end_asr_reports_backend_unavailable() -> None:
         seq=5,
     )
 
-    assert transcript is None
+    assert asr_result is None
     assert websocket.messages == [
         {
             "type": "control:listen-state",
@@ -499,6 +510,67 @@ async def test_audio_speech_end_calls_asr_and_clears_buffer(tmp_path) -> None:
     assert websocket.messages[-1]["type"] == "output:asr:transcript"
     assert websocket.messages[-1]["data"]["text"] == "你好"
     assert websocket.messages[-1]["data"]["generation_id"]
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_end_auto_starts_chat_with_asr_generation(
+    tmp_path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda text: _mock_chat_stream(["收到"]))
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "你好"})
+
+    for seq, audio in ((1, [0.8]), (2, [0.9]), (3, [0.0]), (4, [0.0])):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": audio,
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+            asr_service,
+            service_context=mock_context,
+            storage=mock_storage,
+            user_id="default",
+        )
+
+    complete = await _wait_for_message_type(websocket, "output:chat:complete")
+    transcript = next(
+        message for message in websocket.messages if message["type"] == "output:asr:transcript"
+    )
+    chunk = next(
+        message for message in websocket.messages if message["type"] == "output:chat:chunk"
+    )
+
+    generation_id = transcript["data"]["generation_id"]
+    assert transcript["data"]["text"] == "你好"
+    assert chunk["data"]["chunk"] == "收到"
+    assert chunk["data"]["generation_id"] == generation_id
+    assert complete["data"]["full_reply"] == "收到"
+    assert complete["data"]["generation_id"] == generation_id
+    mock_agent.chat.assert_called_once_with("你好")
+    mock_storage.append_message_for_user.assert_any_call(
+        "default", "test_chat_123", "human", "你好", name="default"
+    )
+    mock_storage.append_message_for_user.assert_any_call(
+        "default", "test_chat_123", "ai", "收到", name="atri"
+    )
 
 
 @pytest.mark.asyncio

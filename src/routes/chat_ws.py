@@ -184,7 +184,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         chat_id=message.get("data", {}).get("chat_id"),
                     )
             elif msg_type == "input:audio:chunk":
-                await _handle_audio_chunk(websocket, message, vad_service, vad_state, asr_service)
+                await _handle_audio_chunk(
+                    websocket,
+                    message,
+                    vad_service,
+                    vad_state,
+                    asr_service,
+                    service_context=service_context,
+                    storage=storage,
+                    user_id=user_id,
+                )
             elif msg_type == "input:audio:end":
                 await _handle_audio_end(websocket, message, vad_service, vad_state)
             else:
@@ -473,6 +482,9 @@ async def _handle_audio_chunk(
     vad_service: VADService,
     vad_state: WebSocketVADState,
     asr_service: Any | None = None,
+    service_context: Any | None = None,
+    storage: Any | None = None,
+    user_id: str | None = None,
 ) -> None:
     """Handle realtime microphone audio chunks for backend VAD."""
 
@@ -534,7 +546,7 @@ async def _handle_audio_chunk(
             reason="speech_start",
         )
     if event.type is VADEventType.SPEECH_END and speech_audio is not None:
-        await _handle_speech_end_asr(
+        asr_result = await _handle_speech_end_asr(
             websocket,
             asr_service,
             speech_audio,
@@ -542,6 +554,18 @@ async def _handle_audio_chunk(
             character_id=str(character_id),
             seq=data.get("seq"),
         )
+        if asr_result is not None:
+            await _start_asr_chat_task(
+                websocket,
+                vad_state,
+                service_context,
+                storage,
+                user_id,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                text=asr_result["text"],
+                generation_id=asr_result["generation_id"],
+            )
 
 
 async def _handle_audio_end(
@@ -622,7 +646,7 @@ async def _handle_speech_end_asr(
     chat_id: str,
     character_id: str,
     seq: Any | None = None,
-) -> str | None:
+) -> dict[str, str] | None:
     """Transcribe a completed VAD speech segment and notify the frontend."""
 
     if asr_service is None:
@@ -706,7 +730,56 @@ async def _handle_speech_end_asr(
         is_final=True,
         seq=seq,
     )
-    return transcript
+    return {"text": transcript, "generation_id": generation_id}
+
+
+async def _start_asr_chat_task(
+    websocket: WebSocket,
+    vad_state: WebSocketVADState,
+    service_context: Any | None,
+    storage: Any | None,
+    user_id: str | None,
+    *,
+    chat_id: str,
+    character_id: str,
+    text: str,
+    generation_id: str,
+) -> None:
+    """Start a backend-owned chat turn from a completed ASR transcript."""
+
+    if service_context is None or storage is None or user_id is None:
+        return
+
+    current_task = vad_state.current_chat_task
+    if current_task is not None and current_task.cancelling():
+        try:
+            await current_task
+        except asyncio.CancelledError:
+            pass
+
+    message = {
+        "type": "input:text",
+        "data": {
+            "text": text,
+            "chat_id": chat_id,
+            "character_id": character_id,
+        },
+    }
+    started = _start_tracked_chat_task(
+        vad_state,
+        generation_id,
+        _handle_text_input(
+            websocket,
+            message,
+            service_context,
+            storage,
+            user_id,
+            vad_state,
+            generation_id,
+        ),
+    )
+    if not started:
+        await _send_error(websocket, "Chat task already running", chat_id=chat_id)
 
 
 async def _send_listen_state(
