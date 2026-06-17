@@ -17,6 +17,8 @@ Server → Client:
      "character_id": "..."}}
   - {"type": "output:chat:complete", "data": {"full_reply": "...",
      "chat_id": "...", "character_id": "..."}}
+  - {"type": "output:asr:transcript", "data": {"text": "...",
+     "chat_id": "...", "character_id": "...", "is_final": true}}
   - {"type": "error", "data": {"message": "...", "chat_id": "..."}}
   - {"type": "pong"}
 
@@ -479,6 +481,29 @@ async def _send_interrupt(
             },
         }
     )
+
+
+async def _send_asr_transcript(
+    websocket: WebSocket,
+    *,
+    chat_id: str,
+    character_id: str,
+    text: str,
+    is_final: bool = True,
+    seq: Any | None = None,
+) -> None:
+    """Send an output:asr:transcript message reserved for M4 ASR handoff."""
+
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "character_id": character_id,
+        "text": text,
+        "is_final": is_final,
+    }
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        data["seq"] = seq
+
+    await websocket.send_json({"type": "output:asr:transcript", "data": data})
 
 
 async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -> None:

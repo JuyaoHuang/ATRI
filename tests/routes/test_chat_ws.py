@@ -9,7 +9,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import create_app
-from src.routes.chat_ws import WebSocketVADState, _handle_audio_chunk, _handle_audio_end
+from src.routes.chat_ws import (
+    WebSocketVADState,
+    _handle_audio_chunk,
+    _handle_audio_end,
+    _send_asr_transcript,
+)
 from src.vad import VADConfigStore, VADService
 
 
@@ -140,6 +145,33 @@ async def test_websocket_vad_state_buffers_and_clears_audio(tmp_path) -> None:
     )
 
     assert vad_state.audio_buffer == []
+
+
+@pytest.mark.asyncio
+async def test_send_asr_transcript_uses_reserved_protocol() -> None:
+    websocket = CapturingWebSocket()
+
+    await _send_asr_transcript(
+        websocket,
+        chat_id="test_chat_123",
+        character_id="atri",
+        text="你好",
+        is_final=True,
+        seq=3,
+    )
+
+    assert websocket.messages == [
+        {
+            "type": "output:asr:transcript",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "text": "你好",
+                "is_final": True,
+                "seq": 3,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
