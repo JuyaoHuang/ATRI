@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,11 +15,14 @@ from src.routes.chat_ws import (
     WebSocketVADState,
     _handle_audio_chunk,
     _handle_audio_end,
+    _handle_text_input,
     _send_asr_transcript,
     _send_json,
     _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
+
+_TEST_VAD_CONFIG_PATH = Path(__file__).with_name("__test_vad_config.yaml")
 
 
 class CapturingWebSocket:
@@ -91,6 +95,9 @@ def _make_app(config: dict, service_context: MagicMock, storage: AsyncMock):
         app = create_app(config)
         app.state.service_context = service_context
         app.state.storage = storage
+        app.state.vad_service = VADService(
+            VADConfigStore(config.get("vad", {}), path=_TEST_VAD_CONFIG_PATH)
+        )
         return app
 
 
@@ -186,6 +193,7 @@ async def test_send_asr_transcript_uses_reserved_protocol() -> None:
         chat_id="test_chat_123",
         character_id="atri",
         text="你好",
+        generation_id="gen-123",
         is_final=True,
         seq=3,
     )
@@ -197,6 +205,7 @@ async def test_send_asr_transcript_uses_reserved_protocol() -> None:
                 "chat_id": "test_chat_123",
                 "character_id": "atri",
                 "text": "你好",
+                "generation_id": "gen-123",
                 "is_final": True,
                 "seq": 3,
             },
@@ -213,15 +222,121 @@ async def test_start_tracked_chat_task_sets_and_clears_current_task() -> None:
         nonlocal observed_task
         observed_task = vad_state.current_chat_task
 
-    started = _start_tracked_chat_task(vad_state, chat_handler())
+    started = _start_tracked_chat_task(vad_state, "gen-123", chat_handler())
     task = vad_state.current_chat_task
     assert started is True
     assert task is not None
+    assert vad_state.current_generation_id == "gen-123"
     await task
     await asyncio.sleep(0)
 
     assert isinstance(observed_task, asyncio.Task)
     assert vad_state.current_chat_task is None
+    assert vad_state.current_generation_id == "gen-123"
+
+
+@pytest.mark.asyncio
+async def test_start_tracked_chat_task_rejects_concurrent_generation() -> None:
+    vad_state = WebSocketVADState(session_id="test-session")
+    stop_event = asyncio.Event()
+
+    async def chat_handler() -> None:
+        await stop_event.wait()
+
+    first_started = _start_tracked_chat_task(vad_state, "gen-1", chat_handler())
+    first_task = vad_state.current_chat_task
+    assert first_started is True
+    assert first_task is not None
+    assert vad_state.current_generation_id == "gen-1"
+
+    second_started = _start_tracked_chat_task(vad_state, "gen-2", chat_handler())
+    assert second_started is False
+    assert vad_state.current_chat_task is first_task
+    assert vad_state.current_generation_id == "gen-1"
+
+    stop_event.set()
+    await first_task
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_stale_chat_generation_does_not_complete_or_persist(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-stale"
+    vad_state.activate_generation(generation_id)
+
+    async def stream_then_invalidate() -> AsyncIterator[str]:
+        yield "旧回复"
+        vad_state.invalidate_current_generation()
+
+    mock_agent.chat = MagicMock(side_effect=lambda text: stream_then_invalidate())
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        generation_id,
+    )
+
+    assert websocket.messages == [
+        {
+            "type": "output:chat:chunk",
+            "data": {
+                "chunk": "旧回复",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "generation_id": generation_id,
+            },
+        }
+    ]
+    mock_storage.append_message_for_user.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_start_invalidates_current_generation(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-old")
+    websocket = CapturingWebSocket()
+
+    for seq, audio in ((1, [0.8]), (2, [0.9])):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": audio,
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+        )
+
+    assert vad_state.current_generation_id is None
+    assert websocket.messages[-1]["type"] == "control:interrupt"
+    assert websocket.messages[-1]["data"]["reason"] == "speech_start"
 
 
 @pytest.mark.asyncio
@@ -248,14 +363,19 @@ async def test_websocket_text_input_streaming(
             }
         )
 
+        generation_id = None
         for chunk in chunks:
             response = websocket.receive_json()
             assert response["type"] == "output:chat:chunk"
             assert response["data"]["chunk"] == chunk
+            assert response["data"]["generation_id"]
+            generation_id = generation_id or response["data"]["generation_id"]
+            assert response["data"]["generation_id"] == generation_id
 
         complete_response = websocket.receive_json()
         assert complete_response["type"] == "output:chat:complete"
         assert complete_response["data"]["full_reply"] == "".join(chunks)
+        assert complete_response["data"]["generation_id"] == generation_id
 
     mock_storage.get_chat_for_user_character.assert_awaited_once_with(
         "default", "atri", "test_chat_123"
@@ -311,10 +431,12 @@ async def test_websocket_handles_audio_while_chat_task_runs(
         chunk = websocket.receive_json()
         assert chunk["type"] == "output:chat:chunk"
         assert chunk["data"]["chunk"] == "稍后"
+        generation_id = chunk["data"]["generation_id"]
 
         complete = websocket.receive_json()
         assert complete["type"] == "output:chat:complete"
         assert complete["data"]["full_reply"] == "稍后"
+        assert complete["data"]["generation_id"] == generation_id
 
 
 @pytest.mark.asyncio

@@ -14,11 +14,12 @@ Client → Server:
 
 Server → Client:
   - {"type": "output:chat:chunk", "data": {"chunk": "...", "chat_id": "...",
-     "character_id": "..."}}
+     "character_id": "...", "generation_id": "..."}}
   - {"type": "output:chat:complete", "data": {"full_reply": "...",
-     "chat_id": "...", "character_id": "..."}}
+     "chat_id": "...", "character_id": "...", "generation_id": "..."}}
   - {"type": "output:asr:transcript", "data": {"text": "...",
-     "chat_id": "...", "character_id": "...", "is_final": true}}
+     "chat_id": "...", "character_id": "...", "generation_id": "...",
+     "is_final": true}}
   - {"type": "error", "data": {"message": "...", "chat_id": "..."}}
   - {"type": "pong"}
 
@@ -48,9 +49,27 @@ class WebSocketVADState:
     session_id: str
     interrupt_sent: bool = False
     current_chat_task: asyncio.Task[None] | None = None
+    current_generation_id: str | None = None
     audio_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
     last_character_id: str | None = None
+
+    def activate_generation(self, generation_id: str) -> None:
+        """Mark a chat generation as the only valid one for this connection."""
+
+        self.current_generation_id = generation_id
+
+    def is_generation_active(self, generation_id: str) -> bool:
+        """Return whether a chat generation can still emit side effects."""
+
+        return self.current_generation_id == generation_id
+
+    def invalidate_current_generation(self) -> str | None:
+        """Mark the current generation invalid and return its previous id."""
+
+        generation_id = self.current_generation_id
+        self.current_generation_id = None
+        return generation_id
 
     def append_audio(self, audio: list[float]) -> None:
         """Append a valid speech-like audio chunk to this connection buffer."""
@@ -67,6 +86,7 @@ class WebSocketVADState:
 
         self.clear_audio_buffer()
         self.current_chat_task = None
+        self.current_generation_id = None
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -123,9 +143,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if msg_type == "ping":
                 await _handle_ping(websocket)
             elif msg_type == "input:text":
+                generation_id = uuid.uuid4().hex
                 started = _start_tracked_chat_task(
                     vad_state,
-                    _handle_text_input(websocket, message, service_context, storage, user_id),
+                    generation_id,
+                    _handle_text_input(
+                        websocket,
+                        message,
+                        service_context,
+                        storage,
+                        user_id,
+                        vad_state,
+                        generation_id,
+                    ),
                 )
                 if not started:
                     await _send_error(
@@ -186,6 +216,7 @@ async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
 
 def _start_tracked_chat_task(
     vad_state: WebSocketVADState,
+    generation_id: str,
     chat_coro: Coroutine[Any, Any, None],
 ) -> bool:
     """Start one chat coroutine while exposing its task on the connection state."""
@@ -194,6 +225,7 @@ def _start_tracked_chat_task(
     if current_task is not None and not current_task.done():
         chat_coro.close()
         return False
+    vad_state.activate_generation(generation_id)
     task = asyncio.create_task(chat_coro)
     vad_state.current_chat_task = task
     task.add_done_callback(lambda completed: _finalize_tracked_chat_task(vad_state, completed))
@@ -216,12 +248,21 @@ def _finalize_tracked_chat_task(
         logger.error(f"Tracked chat task failed: {exc}")
 
 
+def _discard_generation_if_active(vad_state: WebSocketVADState, generation_id: str) -> None:
+    """Invalidate a generation only if it is still the connection's active one."""
+
+    if vad_state.is_generation_active(generation_id):
+        vad_state.invalidate_current_generation()
+
+
 async def _handle_text_input(
     websocket: WebSocket,
     message: dict[str, Any],
     service_context: Any,
     storage: Any,
     user_id: str,
+    vad_state: WebSocketVADState,
+    generation_id: str,
 ) -> None:
     """Handle text input message and stream ChatAgent response.
     处理文本输入消息并流式传输 ChatAgent 响应。
@@ -248,12 +289,15 @@ async def _handle_text_input(
     # 验证必填字段
     if not text:
         await _send_error(websocket, "Missing 'text' field", chat_id=chat_id)
+        _discard_generation_if_active(vad_state, generation_id)
         return
     if not chat_id:
         await _send_error(websocket, "Missing 'chat_id' field", chat_id=None)
+        _discard_generation_if_active(vad_state, generation_id)
         return
     if not character_id:
         await _send_error(websocket, "Missing 'character_id' field", chat_id=chat_id)
+        _discard_generation_if_active(vad_state, generation_id)
         return
 
     logger.info(f"Received text input | chat_id={chat_id} | character_id={character_id}")
@@ -269,6 +313,7 @@ async def _handle_text_input(
             exc,
         )
         await _send_error(websocket, f"Invalid chat request: {exc}", chat_id=chat_id)
+        _discard_generation_if_active(vad_state, generation_id)
         return
 
     if chat is None or chat.get("character_id") != character_id:
@@ -283,6 +328,7 @@ async def _handle_text_input(
             f"Chat '{chat_id}' not found for character '{character_id}'",
             chat_id=chat_id,
         )
+        _discard_generation_if_active(vad_state, generation_id)
         return
 
     # Get or create ChatAgent for this character/user/chat.
@@ -296,6 +342,7 @@ async def _handle_text_input(
             f"Failed to initialize character '{character_id}': {e}",
             chat_id=chat_id,
         )
+        _discard_generation_if_active(vad_state, generation_id)
         return
 
     # Stream ChatAgent response
@@ -306,6 +353,13 @@ async def _handle_text_input(
             agent.chat(text, runtime_context=client_context) if client_context else agent.chat(text)
         )
         async for chunk in chat_stream:
+            if not vad_state.is_generation_active(generation_id):
+                logger.info(
+                    "Discarding stale chat chunk | chat_id={} | generation_id={}",
+                    chat_id,
+                    generation_id,
+                )
+                return
             chunks.append(chunk)
             # Send chunk to client
             # 发送 chunk 给客户端
@@ -317,9 +371,18 @@ async def _handle_text_input(
                         "chunk": chunk,
                         "chat_id": chat_id,
                         "character_id": character_id,
+                        "generation_id": generation_id,
                     },
                 },
             )
+
+        if not vad_state.is_generation_active(generation_id):
+            logger.info(
+                "Discarding stale chat completion | chat_id={} | generation_id={}",
+                chat_id,
+                generation_id,
+            )
+            return
 
         # Stream complete
         # 流式传输完成
@@ -357,6 +420,7 @@ async def _handle_text_input(
                     "full_reply": full_reply,
                     "chat_id": chat_id,
                     "character_id": character_id,
+                    "generation_id": generation_id,
                 },
             },
         )
@@ -372,6 +436,7 @@ async def _handle_text_input(
             f"LLM call failed: {e}",
             chat_id=chat_id,
         )
+        _discard_generation_if_active(vad_state, generation_id)
     except Exception as e:
         logger.error(f"Unexpected error during chat: {e}")
         await _send_error(
@@ -379,6 +444,7 @@ async def _handle_text_input(
             f"Chat processing failed: {e}",
             chat_id=chat_id,
         )
+        _discard_generation_if_active(vad_state, generation_id)
 
 
 async def _handle_audio_chunk(
@@ -430,6 +496,13 @@ async def _handle_audio_chunk(
     )
     if event.type is VADEventType.SPEECH_START and not vad_state.interrupt_sent:
         vad_state.interrupt_sent = True
+        stale_generation_id = vad_state.invalidate_current_generation()
+        if stale_generation_id is not None:
+            logger.info(
+                "Invalidated chat generation on speech_start | chat_id={} | generation_id={}",
+                chat_id,
+                stale_generation_id,
+            )
         await _send_interrupt(
             websocket,
             chat_id=str(chat_id),
@@ -549,6 +622,7 @@ async def _send_asr_transcript(
     chat_id: str,
     character_id: str,
     text: str,
+    generation_id: str | None = None,
     is_final: bool = True,
     seq: Any | None = None,
 ) -> None:
@@ -560,6 +634,8 @@ async def _send_asr_transcript(
         "text": text,
         "is_final": is_final,
     }
+    if generation_id is not None:
+        data["generation_id"] = generation_id
     if isinstance(seq, int) and not isinstance(seq, bool):
         data["seq"] = seq
 
