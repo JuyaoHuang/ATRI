@@ -25,8 +25,10 @@ Server → Client:
 Reference: docs/Phase5_执行规格.md §US-SRV-006, docs/OLV架构文档.md
 """
 
+import asyncio
 import json
 import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,7 +47,7 @@ class WebSocketVADState:
 
     session_id: str
     interrupt_sent: bool = False
-    current_chat_task: Any | None = None
+    current_chat_task: asyncio.Task[None] | None = None
     audio_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
     last_character_id: str | None = None
@@ -120,7 +122,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if msg_type == "ping":
                 await _handle_ping(websocket)
             elif msg_type == "input:text":
-                await _handle_text_input(websocket, message, service_context, storage, user_id)
+                await _run_tracked_chat_task(
+                    vad_state,
+                    _handle_text_input(websocket, message, service_context, storage, user_id),
+                )
             elif msg_type == "input:audio:chunk":
                 await _handle_audio_chunk(websocket, message, vad_service, vad_state)
             elif msg_type == "input:audio:end":
@@ -157,6 +162,21 @@ async def _handle_ping(websocket: WebSocket) -> None:
                    WebSocket 连接。
     """
     await websocket.send_json({"type": "pong"})
+
+
+async def _run_tracked_chat_task(
+    vad_state: WebSocketVADState,
+    chat_coro: Coroutine[Any, Any, None],
+) -> None:
+    """Run one chat coroutine while exposing its task on the connection state."""
+
+    task = asyncio.create_task(chat_coro)
+    vad_state.current_chat_task = task
+    try:
+        await task
+    finally:
+        if vad_state.current_chat_task is task:
+            vad_state.current_chat_task = None
 
 
 async def _handle_text_input(

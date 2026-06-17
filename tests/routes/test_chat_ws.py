@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,7 @@ from src.routes.chat_ws import (
     WebSocketVADState,
     _handle_audio_chunk,
     _handle_audio_end,
+    _run_tracked_chat_task,
     _send_asr_transcript,
 )
 from src.vad import VADConfigStore, VADService
@@ -172,6 +174,21 @@ async def test_send_asr_transcript_uses_reserved_protocol() -> None:
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_tracked_chat_task_sets_and_clears_current_task() -> None:
+    vad_state = WebSocketVADState(session_id="test-session")
+    observed_task: asyncio.Task[None] | None = None
+
+    async def chat_handler() -> None:
+        nonlocal observed_task
+        observed_task = vad_state.current_chat_task
+
+    await _run_tracked_chat_task(vad_state, chat_handler())
+
+    assert isinstance(observed_task, asyncio.Task)
+    assert vad_state.current_chat_task is None
 
 
 @pytest.mark.asyncio
