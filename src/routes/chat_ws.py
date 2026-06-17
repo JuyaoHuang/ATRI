@@ -25,7 +25,7 @@ Reference: docs/Phase5_执行规格.md §US-SRV-006, docs/OLV架构文档.md
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -44,8 +44,25 @@ class WebSocketVADState:
     session_id: str
     interrupt_sent: bool = False
     current_chat_task: Any | None = None
+    audio_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
     last_character_id: str | None = None
+
+    def append_audio(self, audio: list[float]) -> None:
+        """Append a valid speech-like audio chunk to this connection buffer."""
+
+        self.audio_buffer.extend(audio)
+
+    def clear_audio_buffer(self) -> None:
+        """Release buffered audio for the current connection turn."""
+
+        self.audio_buffer.clear()
+
+    def release(self) -> None:
+        """Release lightweight per-connection references."""
+
+        self.clear_audio_buffer()
+        self.current_chat_task = None
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -124,6 +141,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         except Exception:
             pass  # Connection already closed
     finally:
+        vad_state.release()
         vad_service.reset_session(vad_state.session_id)
         logger.info("WebSocket connection cleanup complete")
 
@@ -324,8 +342,8 @@ async def _handle_audio_chunk(
         await _send_error(websocket, "Missing 'character_id' field", chat_id=chat_id)
         return
 
-    audio = data.get("audio")
-    if not _is_valid_audio_array(audio):
+    audio_samples = _coerce_audio_array(data.get("audio"))
+    if audio_samples is None:
         await _send_error(
             websocket,
             "Invalid 'audio' field; expected a non-empty number[]",
@@ -336,9 +354,12 @@ async def _handle_audio_chunk(
     vad_state.last_chat_id = str(chat_id)
     vad_state.last_character_id = str(character_id)
 
-    event = await vad_service.process_audio(vad_state.session_id, audio)
+    event = await vad_service.process_audio(vad_state.session_id, audio_samples)
+    if event.is_speech and event.metadata.get("disabled") is not True:
+        vad_state.append_audio(audio_samples)
     if event.type is VADEventType.SPEECH_END:
         vad_state.interrupt_sent = False
+        vad_state.clear_audio_buffer()
     await _send_listen_state(
         websocket,
         event,
@@ -380,6 +401,7 @@ async def _handle_audio_end(
 
     vad_service.reset_session(vad_state.session_id)
     vad_state.interrupt_sent = False
+    vad_state.clear_audio_buffer()
     vad_state.last_chat_id = str(chat_id)
     vad_state.last_character_id = str(character_id)
 
@@ -396,10 +418,16 @@ async def _handle_audio_end(
     )
 
 
-def _is_valid_audio_array(audio: Any) -> bool:
+def _coerce_audio_array(audio: Any) -> list[float] | None:
     if not isinstance(audio, list) or not audio:
-        return False
-    return all(isinstance(sample, int | float) and not isinstance(sample, bool) for sample in audio)
+        return None
+
+    samples: list[float] = []
+    for sample in audio:
+        if not isinstance(sample, int | float) or isinstance(sample, bool):
+            return None
+        samples.append(float(sample))
+    return samples
 
 
 async def _send_listen_state(

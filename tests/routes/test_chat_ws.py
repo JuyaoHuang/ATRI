@@ -9,6 +9,16 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.app import create_app
+from src.routes.chat_ws import WebSocketVADState, _handle_audio_chunk, _handle_audio_end
+from src.vad import VADConfigStore, VADService
+
+
+class CapturingWebSocket:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    async def send_json(self, message: dict) -> None:
+        self.messages.append(message)
 
 
 @pytest.fixture
@@ -75,6 +85,61 @@ def _vad_enabled_config(base_config: dict) -> dict:
             "fake": {"speech_threshold": 0.5},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_websocket_vad_state_buffers_and_clears_audio(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+
+    await _handle_audio_chunk(
+        websocket,
+        {
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "audio": [0.7, -0.2],
+                "seq": 1,
+            }
+        },
+        vad_service,
+        vad_state,
+    )
+    await _handle_audio_chunk(
+        websocket,
+        {
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "audio": [0.9],
+                "seq": 2,
+            }
+        },
+        vad_service,
+        vad_state,
+    )
+
+    assert vad_state.audio_buffer == [0.7, -0.2, 0.9]
+
+    await _handle_audio_end(
+        websocket,
+        {
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            }
+        },
+        vad_service,
+        vad_state,
+    )
+
+    assert vad_state.audio_buffer == []
 
 
 @pytest.mark.asyncio
