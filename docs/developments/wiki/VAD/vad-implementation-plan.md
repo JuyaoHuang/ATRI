@@ -18,7 +18,7 @@
 8. 被打断的 AI 半截回复不作为普通完整 AI 回复进入短期记忆压缩或长期记忆写入流程。
 9. Web Speech API 是浏览器侧 ASR 或降级事件源，不作为 VAD model。
 10. OLV 的状态机、防抖和任务取消机制可复用；OLV 的 WebSocket 消息名和 sentinel bytes 不直接复用。
-11. VAD 开发每完成一个独立小点单独提交，提交信息统一使用 `feat: M<X>/:<summary>` 格式，例如 `feat: M2/:emit VAD interrupt events`。
+11. VAD 开发每完成一个独立小点单独提交，提交信息统一使用 `<type>(M<X>): <subject>` 格式，例如 `feat(M2): emit VAD interrupt events`。
 
 ## 2. 里程碑
 
@@ -111,24 +111,41 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 
 目标：前端新增实时语音模式，把麦克风小片段持续发给后端。
 
+已确认决策：
+
+1. 实时 VAD 使用独立开关，不替换现有麦克风按钮。
+2. 开关放在 `frontend/src/components/chat/InputBox.vue` 的 `chat-input-tools` 区域，紧邻当前 `VoiceInput`。
+3. 开关随所有 `InputBox` 入口显示；当前包括普通聊天模式和 Live2D stage 聊天模式。
+4. 第一版必须已有 `character_id`、有效 `chat_id` 且 WebSocket 已连接后才允许开启。
+5. 没有有效聊天窗口时禁用开关，不自动创建空聊天或 draft chat。
+6. 实时音频 chunk 只在 WebSocket 已连接时发送，不进入 `WebSocketManager` 的普通消息队列。
+7. 断线或重连中直接丢弃实时音频 chunk；如果正在监听，则立即停止监听、释放麦克风并进入错误状态。
+8. WebSocket 重连成功后不自动恢复监听，必须由用户手动再次打开开关。
+9. 收到 `control:interrupt` 后调用现有 `useAudioPlayer().stop()`，停止当前 TTS 播放并清空播放队列。
+10. 保留现有按钮式 ASR、MediaRecorder 降级路径和 stop button。
+
 预计涉及位置：
 
 1. `frontend/src/composables/`
 2. `frontend/src/utils/websocket.ts`
-3. 当前语音输入控件所在组件
-4. 当前 WebSocket 消息处理 composable
-5. 当前 audio player composable
+3. `frontend/src/components/chat/InputBox.vue`
+4. `frontend/src/components/chat/VoiceInput.vue`
+5. `frontend/src/composables/useWebSocket.ts`
+6. `frontend/src/stores/websocket.ts`
+7. `frontend/src/composables/useAudioPlayer.ts`
 
 执行内容：
 
-1. 新增实时语音输入 composable。
-2. 优先使用 AudioContext/AudioWorklet 获取小片段音频。
-3. 将音频重采样为 16 kHz、mono、PCM float 数组。
-4. 将音频片段通过 WebSocket 的 `input:audio:chunk` 发送到后端。
-5. 接收后端 interrupt 控制事件。
-6. 收到 interrupt 后调用现有 audio player stop 能力。
-7. 为实时语音模式增加连接、监听中、说话中、错误等状态。
-8. 保留 MediaRecorder 作为非实时按钮式 ASR 或降级路径，不作为 VAD 主路径。
+1. 扩展前端 WebSocket 消息分发，识别 `control:listen-state`、`control:interrupt`、`output:asr:transcript`。
+2. 在当前 WebSocket composable 中接收 `control:interrupt`，并调用现有 audio player stop 能力。
+3. 新增实时语音输入 composable，例如 `useRealtimeVoiceInput.ts`。
+4. 优先使用 AudioContext/AudioWorklet 获取小片段音频。
+5. 将音频重采样为 16 kHz、mono、PCM float 数组。
+6. 将音频片段通过 WebSocket 的 `input:audio:chunk` 发送到后端。
+7. 实时音频发送必须绕开普通离线消息队列，未连接时直接丢弃并停止监听。
+8. 新增实时 VAD 独立开关组件或在 `InputBox.vue` 中封装等价 UI，样式与当前麦克风按钮保持一致。
+9. 为实时语音模式增加连接、监听中、说话中、错误、禁用等状态。
+10. 保留 MediaRecorder 作为非实时按钮式 ASR 或降级路径，不作为 VAD 主路径。
 
 验收：
 
@@ -136,6 +153,10 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 2. 后端发送 interrupt 后，前端能停止当前 TTS 播放和播放队列。
 3. 关闭实时语音模式后，麦克风资源被释放。
 4. 原有按钮式 ASR 仍可使用。
+5. 没有 `character_id`、有效 `chat_id` 或 WebSocket 连接时，实时 VAD 开关不可用。
+6. WebSocket 断线或重连时，实时 VAD 自动停止并释放麦克风，不补发旧音频。
+7. 普通聊天模式和 Live2D stage 聊天模式中，开关都位于当前麦克风按钮旁边。
+8. 前端类型检查和构建通过。
 
 ### M4：VAD 到 ASR 的衔接
 
@@ -239,7 +260,7 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
 
 这个顺序能保证每一步都有独立可验收结果，避免一开始同时改 VAD、ASR、TTS、LLM 和前端播放器。
 
-提交时按当前所属里程碑填写 `M<X>`，不把不同里程碑或无关仓库变更混入同一个提交。
+提交时按当前所属里程碑填写 scope，例如 `feat(M3): implement microphone capture`，不把不同里程碑或无关仓库变更混入同一个提交。
 
 ## 4. 配置计划
 

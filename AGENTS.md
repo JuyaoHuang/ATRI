@@ -108,13 +108,29 @@ module/
 
 - 在开始子系统的实现前（如 LLM 调用模块），执行`git checkout -b feat/...` 切换分支，在新分支上开发
 - 每个功能点一个 commit，不要把多个不相关的改动混在一起
-- commit message 格式：`<type>: <description>`
-  - `feat:` 新功能
-  - `fix:` 修复
-  - `refactor:` 重构
-  - `docs:` 文档
-  - `chore:` 构建/依赖/配置
-- 示例：`feat: implement LLM registry factory and openai_compatible provider`，**注意**：commit 内容应该简洁，重点描述做了什么，不附带任何的 AI 协助信息，例如"aaaa@claude.com<cooperate by claude>"。
+- commit message 标准格式：`<type>(<scope>): <subject>`
+- `type` 必填，允许值：
+  - `feat`：新功能
+  - `fix`：Bug 修复
+  - `docs`：文档变动
+  - `refactor`：重构（不改功能不改 bug）
+  - `perf`：性能优化
+  - `test`：测试相关
+  - `style`：代码格式（不改逻辑）
+  - `chore`：杂项（依赖、配置、CI 等）
+  - `revert`：回滚
+- `scope` 必填。属于 VAD 里程碑时使用 `M0`、`M1`、`M2`、`M3` 等；不属于里程碑时使用模块名，例如 `ci`、`docs`、`frontend`。
+- `subject` 使用英文祈使句，首字母小写，句末不加句号，单行不超过 72 个字符。
+- 示例：
+  - `feat(M2): add audio chunk message dispatch`
+  - `fix(M2): prevent duplicate interrupt on continuous speech`
+  - `test(M2): add audio message protocol tests`
+  - `docs(M3): update realtime voice input plan`
+  - `chore(ci): update GitHub Actions runner version`
+- 如改动涉及多个文件的协调变更、技术决策或权衡，commit body 可选但建议填写；body 与 subject 之间空一行，每行不超过 72 个字符。
+- 不在 commit message 里写 TODO；未完成的工作拆到后续 commit。
+- 提交前至少通过当前改动范围对应的 basic check。
+- **注意**：commit 内容应该简洁，重点描述做了什么，不附带任何 AI 协助信息，例如"aaaa@claude.com<cooperate by claude>"。
 - 提交 commit 时如果触发 GPG 签名验证，前往`.env`文件获取密码`GPG_VERIFY_KEY`
 - 在实现功能后，等待负责人验收。
 - 验收结束后，执行`git push` 推送到上游仓库，并且执行`gh pr`进 PR 的提交 
@@ -123,6 +139,7 @@ module/
 
 1. 在开始实现前，执行`git checkout -b feat/...` 切换分支，在新分支上开发
 2. 每完成一个功能点一个 commit，不要把多个不相关的改动混在一起
+3. VAD 开发提交统一使用里程碑 scope，例如 `feat(M3): implement microphone capture`，不使用 `feat: M3/:...`。
 
 当前主线任务为 VAD 语音实时打断。按 `docs/developments/wiki/VAD/vad-implementation-plan.md` 的里程碑推进：
 
