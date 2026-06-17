@@ -18,7 +18,7 @@ from typing import Any
 
 from src.asr.exceptions import ASRProviderUnavailableError
 from src.asr.factory import ASRFactory, ASRProviderMetadata
-from src.asr.interface import ASRHealth, ASRInterface
+from src.asr.interface import ASRAudioUploadMetadata, ASRHealth, ASRInterface
 
 
 @ASRFactory.register(
@@ -74,6 +74,7 @@ class WebSpeechAPIASR(ASRInterface):
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        upload_metadata: ASRAudioUploadMetadata | None = None,
     ) -> str:
         """Not supported — transcription runs in the browser.
 

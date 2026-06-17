@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
 from src.asr import ASRConfigStore, ASRService
 from src.asr.exceptions import ASRConfigError, ASRProviderUnavailableError, ASRTranscriptionError
+from src.asr.interface import ASRAudioUploadMetadata
 from src.models.asr import (
     ASRConfigResponse,
     ASRHealthResponse,
@@ -140,6 +141,11 @@ async def get_asr_health(service: ASRServiceDep) -> ASRHealthResponse:
 async def transcribe_audio(
     audio: AudioFile,
     service: ASRServiceDep,
+    *,
+    source: str | None = Form(None),
+    sample_rate: int | None = Form(None),
+    channels: int | None = Form(None),
+    encoding: str | None = Form(None),
     provider: str | None = None,
 ) -> ASRTranscriptionResponse:
     """Transcribe uploaded audio with the active or requested ASR provider.
@@ -153,6 +159,12 @@ async def transcribe_audio(
             payload,
             filename=audio.filename,
             content_type=audio.content_type,
+            upload_metadata=ASRAudioUploadMetadata(
+                source=source,
+                sample_rate=sample_rate,
+                channels=channels,
+                encoding=encoding,
+            ),
             provider=provider,
         )
     except Exception as error:

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import wave
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -11,9 +14,31 @@ from httpx import ASGITransport, AsyncClient
 
 from src.app import create_app
 from src.asr import ASRConfigStore, ASRService
+from src.asr.exceptions import ASRTranscriptionError
+from src.asr.interface import ASRAudioUploadMetadata, ASRInterface
 from src.asr.providers import faster_whisper as faster_whisper_module
 from src.asr.providers import sherpa_onnx_asr as sherpa_onnx_module
 from src.utils.config_loader import load_config
+
+
+def _build_pcm_wav_bytes(
+    *,
+    sample_rate: int = 16000,
+    channels: int = 1,
+    num_frames: int = 320,
+) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * num_frames * channels)
+    return buffer.getvalue()
+
+
+class _DummyASR(ASRInterface):
+    def transcribe_np(self, audio):  # type: ignore[override]
+        return "dummy"
 
 
 @pytest_asyncio.fixture
@@ -334,6 +359,62 @@ async def test_web_speech_api_rejects_backend_transcription(client_and_config_pa
 
     assert response.status_code == 503
     assert "does not support backend transcription" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_route_passes_upload_metadata_to_service(
+    client_and_config_path,
+):
+    client, _config_path = client_and_config_path
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.asr_service.transcribe_audio = AsyncMock(  # type: ignore[attr-defined]
+        return_value={"provider": "dummy", "text": "hello"}
+    )
+
+    response = await client.post(
+        "/api/asr/transcribe",
+        data={
+            "source": "browser_recorder",
+            "sample_rate": "16000",
+            "channels": "1",
+            "encoding": "pcm_s16le",
+        },
+        files={"audio": ("recording.wav", _build_pcm_wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    await_args = app.state.asr_service.transcribe_audio.await_args  # type: ignore[attr-defined]
+    kwargs = await_args.kwargs
+    metadata = kwargs["upload_metadata"]
+    assert isinstance(metadata, ASRAudioUploadMetadata)
+    assert metadata.source == "browser_recorder"
+    assert metadata.sample_rate == 16000
+    assert metadata.channels == 1
+    assert metadata.encoding == "pcm_s16le"
+
+
+def test_default_wav_adapter_rejects_declared_contract_mismatch() -> None:
+    audio = _build_pcm_wav_bytes(sample_rate=16000, channels=1)
+    provider = _DummyASR()
+
+    with pytest.raises(ASRTranscriptionError) as exc_info:
+        provider.audio_bytes_to_float32_array(
+            audio,
+            filename="recording.wav",
+            content_type="audio/wav",
+            upload_metadata=ASRAudioUploadMetadata(
+                source="browser_recorder",
+                sample_rate=48000,
+                channels=2,
+                encoding="pcm_f32le",
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert "Uploaded audio contract mismatch" in message
+    assert "sample_rate declared 48000, actual 16000" in message
+    assert "channels declared 2, actual 1" in message
+    assert "encoding declared pcm_f32le, actual pcm_s16le" in message
 
 
 @pytest.mark.asyncio

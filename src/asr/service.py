@@ -19,6 +19,7 @@ from . import providers as _providers  # noqa: F401
 from .config import ASRConfigStore
 from .exceptions import ASRConfigError, ASRProviderUnavailableError
 from .factory import ASRFactory
+from .interface import ASRAudioUploadMetadata
 
 SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
 SENSITIVE_CONFIG_MASK = "********"
@@ -160,6 +161,7 @@ class ASRService:
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        upload_metadata: ASRAudioUploadMetadata | None = None,
         provider: str | None = None,
     ) -> dict[str, Any]:
         """Transcribe uploaded audio with the selected backend-capable provider.
@@ -193,6 +195,7 @@ class ASRService:
             audio,
             filename=filename,
             content_type=content_type,
+            upload_metadata=upload_metadata,
         )
         return {
             "provider": provider_name,

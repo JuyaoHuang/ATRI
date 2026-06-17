@@ -23,7 +23,7 @@ from typing import Any
 
 from src.asr.exceptions import ASRProviderUnavailableError
 from src.asr.factory import ASRFactory, ASRProviderMetadata
-from src.asr.interface import ASRHealth, ASRInterface
+from src.asr.interface import ASRAudioUploadMetadata, ASRHealth, ASRInterface
 
 
 @ASRFactory.register(
@@ -97,6 +97,7 @@ class FasterWhisperASR(ASRInterface):
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        upload_metadata: ASRAudioUploadMetadata | None = None,
     ) -> str:
         """Transcribe uploaded audio.
 
@@ -113,7 +114,10 @@ class FasterWhisperASR(ASRInterface):
 
         if self._looks_like_wav(audio, filename=filename, content_type=content_type):
             return await super().async_transcribe_audio(
-                audio, filename=filename, content_type=content_type
+                audio,
+                filename=filename,
+                content_type=content_type,
+                upload_metadata=upload_metadata,
             )
 
         suffix = Path(filename or "recording.webm").suffix or ".webm"
