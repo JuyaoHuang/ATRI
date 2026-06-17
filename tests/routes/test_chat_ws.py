@@ -15,6 +15,7 @@ from src.routes.chat_ws import (
     _handle_audio_chunk,
     _handle_audio_end,
     _send_asr_transcript,
+    _send_json,
     _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
@@ -26,6 +27,13 @@ class CapturingWebSocket:
 
     async def send_json(self, message: dict) -> None:
         self.messages.append(message)
+
+
+class LockedCapturingWebSocket(CapturingWebSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.state = MagicMock()
+        self.state.send_lock = asyncio.Lock()
 
 
 @pytest.fixture
@@ -153,6 +161,20 @@ async def test_websocket_vad_state_buffers_and_clears_audio(tmp_path) -> None:
     )
 
     assert vad_state.audio_buffer == []
+
+
+@pytest.mark.asyncio
+async def test_send_json_uses_connection_send_lock() -> None:
+    websocket = LockedCapturingWebSocket()
+
+    async with websocket.state.send_lock:
+        send_task = asyncio.create_task(_send_json(websocket, {"type": "locked"}))
+        await asyncio.sleep(0)
+        assert websocket.messages == []
+
+    await send_task
+
+    assert websocket.messages == [{"type": "locked"}]
 
 
 @pytest.mark.asyncio

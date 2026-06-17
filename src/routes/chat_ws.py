@@ -85,6 +85,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         return
 
     await websocket.accept()
+    websocket.state.send_lock = asyncio.Lock()
     logger.info("WebSocket connection established")
 
     # Access app state (ServiceContext + Storage)
@@ -167,7 +168,20 @@ async def _handle_ping(websocket: WebSocket) -> None:
         websocket: WebSocket connection.
                    WebSocket 连接。
     """
-    await websocket.send_json({"type": "pong"})
+    await _send_json(websocket, {"type": "pong"})
+
+
+async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
+    """Serialize WebSocket writes for concurrent chat and control tasks."""
+
+    websocket_state = getattr(websocket, "state", None)
+    send_lock = getattr(websocket_state, "send_lock", None)
+    if send_lock is None:
+        await websocket.send_json(message)
+        return
+
+    async with send_lock:
+        await websocket.send_json(message)
 
 
 def _start_tracked_chat_task(
@@ -295,7 +309,8 @@ async def _handle_text_input(
             chunks.append(chunk)
             # Send chunk to client
             # 发送 chunk 给客户端
-            await websocket.send_json(
+            await _send_json(
+                websocket,
                 {
                     "type": "output:chat:chunk",
                     "data": {
@@ -303,7 +318,7 @@ async def _handle_text_input(
                         "chat_id": chat_id,
                         "character_id": character_id,
                     },
-                }
+                },
             )
 
         # Stream complete
@@ -334,7 +349,8 @@ async def _handle_text_input(
 
         # Now send complete event
         # 现在发送完成事件
-        await websocket.send_json(
+        await _send_json(
+            websocket,
             {
                 "type": "output:chat:complete",
                 "data": {
@@ -342,7 +358,7 @@ async def _handle_text_input(
                     "chat_id": chat_id,
                     "character_id": character_id,
                 },
-            }
+            },
         )
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
@@ -502,7 +518,7 @@ async def _send_listen_state(
     if event.type is VADEventType.ERROR and event.metadata.get("reason"):
         data["reason"] = str(event.metadata["reason"])
 
-    await websocket.send_json({"type": "control:listen-state", "data": data})
+    await _send_json(websocket, {"type": "control:listen-state", "data": data})
 
 
 async def _send_interrupt(
@@ -514,7 +530,8 @@ async def _send_interrupt(
 ) -> None:
     """Send a control:interrupt message to the frontend."""
 
-    await websocket.send_json(
+    await _send_json(
+        websocket,
         {
             "type": "control:interrupt",
             "data": {
@@ -522,7 +539,7 @@ async def _send_interrupt(
                 "character_id": character_id,
                 "reason": reason,
             },
-        }
+        },
     )
 
 
@@ -546,7 +563,7 @@ async def _send_asr_transcript(
     if isinstance(seq, int) and not isinstance(seq, bool):
         data["seq"] = seq
 
-    await websocket.send_json({"type": "output:asr:transcript", "data": data})
+    await _send_json(websocket, {"type": "output:asr:transcript", "data": data})
 
 
 async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -> None:
@@ -565,4 +582,4 @@ async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -
     if chat_id:
         error_data["chat_id"] = chat_id
 
-    await websocket.send_json({"type": "error", "data": error_data})
+    await _send_json(websocket, {"type": "error", "data": error_data})
