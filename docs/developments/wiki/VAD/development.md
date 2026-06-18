@@ -492,3 +492,296 @@ http://127.0.0.1:5173/ started
 ### 5. 后续
 
 进入 M4：后端在 `speech_end` 后把缓存的音频提交给现有 ASR service，并通过 `output:asr:transcript` 把转写结果接入前端和聊天流程。
+
+## 2026-06-18: M4 VAD 到 ASR 的衔接实施完成
+
+### 1. 背景与目标
+
+M3 已经完成前端实时麦克风输入，但它只证明前端能持续发送音频 chunk，并能响应后端 interrupt。M4 要完成“实时语音接管闭环”：用户开口时先打断旧输出，用户说完后由后端提交 ASR，并把转写文本自动接入新一轮聊天。
+
+M4 的目标不是处理被打断的半截回复如何进入历史和记忆。该部分已划入 M5。M4 只负责让旧生成停止、让新语音接管、让 ASR 文本进入聊天。
+
+### 2. 方案与决策
+
+#### 考虑过的方案
+
+| 方案 | 优点 | 缺点 |
+| --- | --- | --- |
+| 仅做 `speech_end -> ASR` | 改动较小 | 不能处理 LLM 正在输出时的实时接管 |
+| 在 M4 引入 `generation_id` 并取消当前 task | 能阻止旧回复继续输出，符合实时打断目标 | 需要改 WebSocket 会话状态和测试 |
+| 前端收到 ASR transcript 后再次调用 `sendMessage()` | 前端复用已有发送路径 | 容易重复提交，且语音接管控制权分散 |
+| 后端收到 ASR transcript 后自动启动聊天 | 控制链路集中，符合 OLV 的后端编排思路 | 后端 WebSocket 逻辑更复杂 |
+
+#### 决策理由
+
+M4 选择“后端自动提交 + `generation_id` 失效规则”。`chat_id` 只表示聊天窗口，不能表示某一次 LLM 生成。因此每次文字输入或 ASR 自动提交都生成新的 `generation_id`。
+
+当 VAD 检测到 `speech_start` 时，后端立即发送 `control:interrupt`，并让当前 generation 失效。旧 generation 的 chunk、complete 和普通持久化结果都会被丢弃。这样即使 LLM 或 TTS 请求已经开始，旧结果也不会继续污染当前聊天流程。
+
+### 3. 改动详情
+
+#### 3.1 核心变更
+
+1. 增加聊天 generation 状态。
+   - WebSocket 连接维护当前有效 `generation_id`。
+   - 文字聊天和 ASR 自动提交聊天都会创建新的 `generation_id`。
+   - `output:chat:chunk`、`output:chat:complete`、`output:asr:transcript` 均携带 `generation_id`。
+
+2. 实现 `speech_start` 打断旧输出。
+   - `speech_start` 到来时发送 `control:interrupt`。
+   - 取消当前 `current_chat_task`。
+   - 标记旧 `generation_id` 失效。
+   - 旧 generation 的 chunk、complete 和普通持久化结果直接丢弃。
+
+3. 实现 `speech_end -> ASR -> 自动聊天`。
+   - `speech_start` 后开始缓存有效音频。
+   - 保留 `pre_buffer_ms`，避免 ASR 吞掉句首。
+   - `speech_end` 后把缓存音频转成 WAV 字节。
+   - 调用现有 ASR service。
+   - ASR 成功后发送 `output:asr:transcript`。
+   - ASR 文本有效时，后端自动以该文本启动新一轮聊天。
+
+4. 接入后端 ASR provider。
+   - 新增 `sherpa_onnx_asr`，用于复用 OLV 默认 SenseVoice / Sherpa-ONNX 思路。
+   - 修复传统按钮式 ASR 的浏览器上传格式问题。
+   - 增加上传音频元数据，便于后端判断 `source`、`sample_rate`、`channels` 和 `encoding`。
+
+5. 接入真实 VAD provider。
+   - 新增 `silero_vad` provider。
+   - 使用 `silero-vad` 包中的 `load_silero_vad()` 懒加载模型。
+   - 固定 CPU 推理路径，便于本地和服务器一致验证。
+   - 使用 OLV 风格的 512 samples / 16 kHz 内部窗口、平滑窗口和防抖参数。
+
+6. 增加本地 ASR 常驻能力。
+   - 新增 `persistent_provider`，本地后端 ASR provider 首次加载后可常驻。
+   - 新增 `preload_provider`，允许服务启动时预加载本地 ASR。
+   - 两个字段为后端私有配置，不暴露给前端配置 API，也不允许前端回写。
+
+7. 完善联调错误提示。
+   - `web_speech_api` 场景下，VAD 打断仍可用，但后端自动 ASR 会返回明确错误。
+   - 过短音频、空 ASR 文本和 ASR 失败不会触发新一轮聊天。
+   - 前端 VAD 错误提示改为 3 秒后自动清除，新的错误仍覆盖旧错误。
+
+#### 3.2 协议 / 数据结构变更
+
+`output:chat:chunk` 和 `output:chat:complete` 新增 `generation_id`：
+
+```json
+{
+  "type": "output:chat:chunk",
+  "data": {
+    "chunk": "文本片段",
+    "chat_id": "chat id",
+    "character_id": "character id",
+    "generation_id": "本轮生成 id"
+  }
+}
+```
+
+`output:asr:transcript` 在 M4 变成真实触发事件：
+
+```json
+{
+  "type": "output:asr:transcript",
+  "data": {
+    "text": "用户刚说的话",
+    "chat_id": "chat id",
+    "character_id": "character id",
+    "generation_id": "本轮生成 id",
+    "is_final": true
+  }
+}
+```
+
+`control:listen-state` 在 ASR 不可用或转写失败时返回错误状态：
+
+```json
+{
+  "type": "control:listen-state",
+  "data": {
+    "state": "error",
+    "code": "backend_asr_unavailable",
+    "message": "VAD auto-submit requires a backend ASR provider; current provider is browser-only.",
+    "chat_id": "chat id",
+    "character_id": "character id"
+  }
+}
+```
+
+ASR 后端私有配置：
+
+```yaml
+asr_model: sherpa_onnx_asr
+```
+
+```yaml
+persistent_provider: true
+preload_provider: false
+```
+
+VAD provider 配置：
+
+```yaml
+vad_model: silero_vad
+
+silero_vad:
+  sample_rate: 16000
+  prob_threshold: 0.4
+  db_threshold: 60
+  required_hits: 3
+  required_misses: 24
+  smoothing_window: 5
+```
+
+当前 Silero 延时估算：
+
+```text
+Silero 内部窗口 = 512 samples / 16000 Hz = 32 ms
+speech_start 理论防抖延时 = required_hits * 32 ms = 96 ms
+speech_end 理论静默结束延时 = required_misses * 32 ms = 768 ms
+```
+
+实际体感还会叠加前端采集 chunk、网络传输、平滑窗口和 ASR 耗时。
+
+#### 3.3 文件清单
+
+- `src/routes/chat_ws.py`
+  - 增加 `generation_id`、当前聊天 task、旧 generation 丢弃规则。
+  - 接入 `speech_end -> ASR -> output:asr:transcript -> 自动聊天`。
+  - 处理短音频、空 transcript、browser-only ASR 和 ASR 异常。
+- `src/asr/`
+  - 增加 ASR provider 常驻缓存和可选预加载。
+  - 增加上传音频元数据契约。
+  - 增加 `sherpa_onnx_asr` provider。
+- `src/vad/`
+  - 增加 `silero_vad` provider。
+  - 调整 VAD 配置结构和 Silero 参数。
+- `frontend/src/composables/useWebSocket.ts`
+  - 消费 `output:asr:transcript` 并展示 ASR 文本。
+  - 收到 `control:interrupt` 后停止当前音频播放。
+- `frontend/src/composables/useRealtimeVoiceInput.ts`
+  - 显示后端 VAD/ASR 错误。
+  - 错误提示 3 秒后自动清除。
+- `frontend/src/stores/chat.ts`
+  - 展示 ASR transcript，不再次触发 `sendMessage()`。
+- `config/asr_config.yaml`
+  - 增加 `sherpa_onnx_asr` 配置。
+  - 增加 `persistent_provider` 和 `preload_provider`。
+- `config/vad_config.yaml`
+  - 切换到 `silero_vad`。
+  - 增加 Silero 延时计算说明。
+- `tests/routes/test_chat_ws.py`
+  - 覆盖 generation、speech_start 取消、speech_end ASR、自动聊天和错误路径。
+- `tests/routes/test_asr.py`
+  - 覆盖后端 ASR provider、上传格式、后端私有配置和常驻缓存。
+- `tests/vad/`
+  - 覆盖 fake 和 Silero provider 注册、状态机和防抖行为。
+- `docs/developments/wiki/VAD/vad-implementation-plan.md`
+  - 同步 M4/M5 边界、协议和后续分支策略。
+
+### 4. 验证
+
+#### 测试结果
+
+```bash
+uv run pytest tests/routes/test_asr.py tests/routes/test_chat_ws.py -q
+```
+
+```text
+51 passed
+```
+
+```bash
+uv run pytest tests/ -q
+```
+
+```text
+420 passed, 4 deselected
+```
+
+前端验证：
+
+```bash
+npm run type-check
+npm run lint
+npm run build
+```
+
+```text
+type-check: passed
+lint: passed with existing warnings
+build: passed
+```
+
+既有 lint warning：
+
+```text
+src/components/airi-ui/TransitionVertical.vue
+  74:14  warning  Unexpected any. Specify a different type
+  75:13  warning  Unexpected any. Specify a different type
+```
+
+#### 代码检查
+
+```bash
+uv run ruff check src/asr src/app.py src/routes/chat_ws.py tests/routes/test_asr.py tests/routes/test_chat_ws.py
+uv run python -m mypy src/asr src/app.py src/routes/chat_ws.py --ignore-missing-imports
+```
+
+结果：通过。
+
+#### 已知问题
+
+1. M4 代码实施已经完成，但浏览器端真实联调仍需最终验收。
+2. 当前浏览器 DevTools 中 `Network -> WS` 未稳定出现消息记录。需要确认用户实际访问的是 `/` 首页聊天入口，而不是设置页或登录页。
+3. `web_speech_api` 不能作为后端自动 ASR provider。完整 M4 验收需要切到 `sherpa_onnx_asr`。
+4. 第一次使用本地 ASR provider 时可能有冷启动延迟。`persistent_provider=true` 后，后续识别会复用常驻 recognizer。
+5. `ScriptProcessorNode` 有弃用警告，但当前仍可用于 M4 联调。迁移 `AudioWorklet` 不属于 M4。
+6. M4 不处理半截 AI 回复的历史、记忆和 TTS 副作用治理。这些内容属于 M5。
+
+#### Git 记录
+
+主仓库 M4 相关提交：
+
+```text
+78d65d8 feat(M4): 增加 ASR 常驻与 VAD 联调修正
+a19f2eb feat(M4): implement silero vad provider
+e7c88a6 feat(M4): validate traditional asr wav upload contracts
+3e5db28 feat(M4): add sherpa onnx asr provider
+af85913 fix(M4): update frontend VAD error handling
+21ae84e feat(M4): filter invalid ASR handoff
+413ebef feat(M4): update frontend transcript handling
+6208c90 feat(M4): auto submit ASR transcript chat
+700e564 feat(M4): transcribe speech end audio
+c7ab12e feat(M4): cancel chat task on speech start
+bd5e2d9 feat(M4): add chat generation state
+dc786fc docs(M4): update impliment plan for M4 and M5 in VAD.
+```
+
+前端子模块 M4 相关提交：
+
+```text
+4c51cee fix(M4): 设置 VAD 错误提示自动清除
+93ddbac feat(M4): upload traditional asr recordings as pcm wav
+cd364a3 fix(M4): show realtime VAD backend errors
+5569e7f feat(M4): display ASR transcript events
+```
+
+### 5. 后续
+
+M4 后续只保留人工联调验收，不再继续扩展功能。
+
+建议分支策略：
+
+1. `feat/vad-realtime-interrupt` 保留为 M4 验收分支。
+2. 从当前 HEAD 新建 `feat/vad-dev`，用于 M5 开发。
+3. M4 验证如果发现 bug，先回到 `feat/vad-realtime-interrupt` 修复并提交。
+4. M5 分支通过 `rebase feat/vad-realtime-interrupt` 吸收 M4 修复。
+5. M4 验收通过后，继续在 `feat/vad-dev` 推进 M5。
+
+M5 将处理：
+
+1. 被打断的半截 AI 回复如何展示为 interrupted 消息。
+2. `chat_history` 如何保存 `interrupted=true`。
+3. 记忆系统如何跳过 interrupted AI 消息。
+4. 旧 generation 的 REST TTS 请求返回后如何丢弃结果。
