@@ -721,6 +721,46 @@ src/components/airi-ui/TransitionVertical.vue
   75:13  warning  Unexpected any. Specify a different type
 ```
 
+#### 浏览器联调
+
+本次联调使用实时 VAD button，不是传统按钮式 ASR。浏览器 DevTools `Network -> WS -> /ws -> 消息` 中观察到的关键顺序如下：
+
+```text
+output:chat:complete
+input:audio:chunk
+control:listen-state
+input:audio:chunk
+control:listen-state
+control:interrupt
+output:asr:transcript
+output:chat:chunk
+```
+
+该顺序对应的链路为：
+
+```text
+AI 第一轮回复完成
+  -> 用户开启 VAD button 并说话
+  -> 前端持续发送 input:audio:chunk
+  -> 后端 VAD 持续返回 control:listen-state
+  -> 后端检测到 speech_start，发送 control:interrupt
+  -> 后端在 speech_end 后提交 ASR
+  -> ASR 成功，后端发送 output:asr:transcript
+  -> 后端用 ASR 文本自动启动新一轮聊天
+  -> 新一轮聊天开始 output:chat:chunk 流式输出
+```
+
+本次联调验证了 M4 的关键剩余点：
+
+1. VAD button 实时音频链路可用。
+2. `speech_start` 可触发 `control:interrupt`。
+3. `speech_end` 后 ASR 可用。
+4. ASR 成功后返回 `output:asr:transcript`。
+5. transcript 由后端自动进入新一轮聊天。
+6. 新一轮聊天开始流式输出 `output:chat:chunk`。
+
+结论：该 WS 消息序列能证明本次链路不是传统 ASR，也不是手动文字输入，而是 `VAD -> ASR -> 自动聊天` 的 M4 闭环。
+
 #### 代码检查
 
 ```bash
@@ -732,8 +772,8 @@ uv run python -m mypy src/asr src/app.py src/routes/chat_ws.py --ignore-missing-
 
 #### 已知问题
 
-1. M4 代码实施已经完成，但浏览器端真实联调仍需最终验收。
-2. 当前浏览器 DevTools 中 `Network -> WS` 未稳定出现消息记录。需要确认用户实际访问的是 `/` 首页聊天入口，而不是设置页或登录页。
+1. M4 的 `VAD -> ASR -> 自动聊天` 基本链路已通过浏览器 WS 联调。
+2. Chrome DevTools 需要进入单条 `/ws` 连接的“消息”面板查看帧列表；`?token=...` 是 Vite HMR 通道，不是业务 WebSocket。
 3. `web_speech_api` 不能作为后端自动 ASR provider。完整 M4 验收需要切到 `sherpa_onnx_asr`。
 4. 第一次使用本地 ASR provider 时可能有冷启动延迟。`persistent_provider=true` 后，后续识别会复用常驻 recognizer。
 5. `ScriptProcessorNode` 有弃用警告，但当前仍可用于 M4 联调。迁移 `AudioWorklet` 不属于 M4。
