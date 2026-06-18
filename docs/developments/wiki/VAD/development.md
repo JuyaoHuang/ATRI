@@ -1118,8 +1118,107 @@ M5 的主要开发和联调已完成。下一步进入 M6：配置、测试与�
 
 M6 需要重点处理：
 
-1. 补齐 VAD/ASR/WS 协议相关测试说明。
-2. 在对应测试目录补充或更新 `test-exe.md`。
-3. 整理配置文档，明确 `web_speech_api`、`sherpa_onnx_asr`、`silero_vad` 的适用边界。
-4. 更新 VAD wiki 中的最终验收标准。
+1. 整理配置文档，明确 `web_speech_api`、`sherpa_onnx_asr`、`silero_vad` 的适用边界。
+2. 补齐实时语音模式的使用说明和浏览器 WebSocket 验收路径。
+3. 更新 VAD wiki 中的最终验收标准。
+4. 汇总已有测试和前端检查入口，暂不更新 `tests/*/test-exe.md`。
 5. 检查是否需要保留终端 WS 抓包脚本为临时验收工具，或只记录命令与结果。
+
+## 2026-06-19: M6 配置与使用文档补齐
+
+### 1. 背景与目标
+
+M4/M5 已经完成实时语音打断、ASR 自动接管、LLM generation 打断、interrupted 历史和记忆策略。进入 M6 后，主要问题不是继续扩展功能，而是让配置、使用方法和验收路径可查。
+
+本次 M6 文档收尾的目标：
+
+1. 让维护者能快速理解 `config/vad_config.yaml` 的字段含义。
+2. 让使用者能知道实时语音 button 怎么开启、怎么验证。
+3. 说明 `web_speech_api`、`sherpa_onnx_asr`、`silero_vad` 三者在 VAD 闭环中的边界。
+4. 记录当前 Silero 防抖和静默结束时间的计算方式。
+5. 保留现有测试和构建检查入口，但本轮不更新 `tests/*/test-exe.md`。
+
+### 2. 方案与决策
+
+#### 考虑过的方案
+
+| 方案 | 优点 | 缺点 |
+| --- | --- | --- |
+| 只在 VAD wiki 中继续补说明 | 改动集中 | 使用者不容易在配置文档目录找到入口 |
+| 新增正式配置文档和使用说明 | 更接近现有 ASR/TTS 文档结构，便于发布 | 需要维护中英文两套文档 |
+| 同步更新 `tests/*/test-exe.md` | 测试入口更完整 | 当前用户判断这些文件暂不需要补充，容易产生无效文档 churn |
+
+#### 决策理由
+
+M6 采用“正式配置文档 + 使用说明 + wiki 状态同步”的方式。`tests/*/test-exe.md` 本轮不修改；现有测试命令和验收方式记录在配置文档、使用说明和本开发日志中。
+
+### 3. 改动详情
+
+#### 3.1 核心变更
+
+1. 新增 VAD 配置说明。
+   - 解释 `enabled`、`vad_model`、`sample_rate`、`pre_buffer_ms`。
+   - 区分 `fake` 和 `silero_vad` 两个 Provider。
+   - 说明 Silero 32 ms 内部窗口、防抖和静默结束延时。
+   - 说明 VAD 与 ASR 的关系，以及 `web_speech_api` 的限制。
+
+2. 新增实时语音模式使用说明。
+   - 区分传统按钮式 ASR 和实时 VAD button。
+   - 说明 button 启用条件。
+   - 给出浏览器 DevTools WebSocket 验收路径。
+   - 说明 `control:interrupt`、`output:asr:transcript`、`output:chat:interrupted` 的验收意义。
+
+3. 更新实施计划。
+   - 将 M6 当前收尾范围明确为发布文档和人工验收入口。
+   - 记录本轮不更新 `tests/*/test-exe.md`。
+   - 补齐 M6 文档验收标准。
+
+#### 3.2 文件清单
+
+- `docs/configs/CN/VAD配置说明.md`
+  - 新增中文 VAD 配置说明。
+- `docs/configs/EN/VAD-configuration.md`
+  - 新增英文 VAD 配置说明。
+- `docs/configs/CN/实时语音模式使用说明.md`
+  - 新增中文实时语音模式使用说明。
+- `docs/configs/EN/realtime-voice-mode.md`
+  - 新增英文实时语音模式使用说明。
+- `docs/developments/wiki/VAD/vad-implementation-plan.md`
+  - 同步 M6 当前执行范围和验收标准。
+- `docs/developments/wiki/VAD/development.md`
+  - 记录本次 M6 文档收尾。
+
+### 4. 验证
+
+#### 文档检查
+
+本次是文档改动，没有新增运行时代码。验证重点是：
+
+1. 新增文档路径位于正式 `docs/` 目录。
+2. 配置字段与当前 `config/vad_config.yaml`、`config/asr_config.yaml` 对齐。
+3. 使用说明中的 WebSocket 消息顺序与 M4/M5 联调结果一致。
+4. M6 计划已明确不更新 `tests/*/test-exe.md`。
+
+#### 可回归命令
+
+后端检查入口：
+
+```bash
+uv run pytest tests/vad tests/routes/test_chat_ws.py tests/routes/test_asr.py -q
+```
+
+前端检查入口：
+
+```bash
+cd frontend
+npm run type-check
+npm run lint
+npm run build
+```
+
+### 5. 后续
+
+M6 后续如果继续推进，优先做两件事：
+
+1. 根据用户联调反馈微调 VAD/ASR 配置文档。
+2. 决定是否保留终端 WebSocket 抓包脚本作为开发者验收工具。

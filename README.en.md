@@ -75,10 +75,12 @@ ATRI is also a fully-featured AI character companion platform -- Live2D avatars,
 
 ### Voice Pipeline
 
-- **ASR Voice Input**: Supports Faster Whisper / Whisper.cpp / OpenAI Whisper / Browser-native Web Speech API
+- **ASR Voice Input**: Supports Sherpa-ONNX SenseVoice / Faster Whisper / Whisper.cpp / OpenAI Whisper / Browser-native Web Speech API
 - **TTS Voice Output**: Supports Edge TTS / GPT-SoVITS / SiliconFlow / CosyVoice3
+- **Realtime VAD Interruption**: Continuously uploads microphone audio over WebSocket, allowing the user to interrupt streaming LLM replies and current TTS playback
+- **Automatic Voice Handoff**: After the user stops speaking, backend ASR can transcribe the utterance and start the next chat turn automatically
 - **Floating Player**: Custom progress bar, drag-to-seek, queue display
-- **Modular Toggle**: Both ASR and TTS are optional plugins, enabled on demand
+- **Modular Toggle**: ASR, TTS, and VAD are optional plugins, enabled on demand
 
 ### Deployment and Authentication
 
@@ -126,6 +128,8 @@ After the backend starts, you can also access the auto-generated API documentati
 | [Authentication System Guide](docs/configs/EN/authentication-system-guide.md) | GitHub OAuth configuration and whitelist management |
 | [ASR Configuration Guide](docs/configs/EN/ASR-configuration.md) | Speech recognition provider configuration |
 | [TTS Configuration Guide](docs/configs/EN/TTS-configuration.md) | Speech synthesis provider configuration |
+| [VAD Configuration Guide](docs/configs/EN/VAD-configuration.md) | Realtime voice activity detection, Silero parameters, and ASR handoff |
+| [Realtime Voice Mode Guide](docs/configs/EN/realtime-voice-mode.md) | VAD button usage, WebSocket debugging, and acceptance path |
 | [Character Creation Guide](docs/configs/EN/character-creation-guide.md) | Character persona, avatar, and greeting setup |
 
 ---
@@ -140,6 +144,7 @@ atri/
 │   ├── llm/            #   LLM calling layer (factory pattern)
 │   ├── asr/            #   ASR providers
 │   ├── tts/            #   TTS providers
+│   ├── vad/            #   VAD realtime voice activity detection
 │   ├── auth/           #   Authentication system
 │   ├── storage/        #   Storage abstraction layer
 │   ├── routes/         #   FastAPI routes
@@ -148,7 +153,7 @@ atri/
 ├── prompts/            # Character personas + compression prompts
 ├── data/               # Runtime data / avatars / Live2D models
 ├── tests/              # Backend tests
-└── atri-webui/         # Frontend (submodule)
+└── frontend/           # Frontend (submodule)
 ```
 
 ---
@@ -162,6 +167,7 @@ ATRI currently has a complete web chat experience: persistent memory, character 
 - Three-layer memory compression and persistent storage: supports session history, short-term memory, long-term memory, and character isolation.
 - Web-based core experience: supports chat, character switching, settings page, Live2D stage, and standard chat mode.
 - Voice pipeline: ASR and TTS integrated with multi-provider configuration support.
+- Realtime VAD interruption: supports realtime microphone input, LLM streaming interruption, current TTS playback stop, and ASR automatic handoff.
 - Deployment and authentication infrastructure: supports local deployment, cloud deployment, GitHub OAuth, JWT, and whitelist access control.
 
 **Near-Term Plans**
@@ -169,7 +175,7 @@ ATRI currently has a complete web chat experience: persistent memory, character 
 - Add a "plugin-style" translation module that operates between the LLM calling layer and TTS/frontend consumption.
 - Optimize mobile web adaptation to improve the experience when accessing via phone after cloud deployment.
 - Enhance the TTS streaming playback pipeline to reduce voice wait time for long responses.
-- Introduce VAD real-time voice control to gradually shift from "push-to-talk recording" to natural voice interaction.
+- Continue tuning realtime VAD parameters and weak-network integration behavior.
 - Improve UI consistency and interaction details between Live2D and standard chat modes.
 - Continue refining the UI. The current frontend design references AIRI -- thanks to the AIRI project for the excellent design foundation.
 

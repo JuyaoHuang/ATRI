@@ -75,10 +75,12 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 
 ### 🎙️ 语音链路
 
-- **ASR 语音输入**：支持 Faster Whisper / Whisper.cpp / OpenAI Whisper / 浏览器原生 Web Speech API
+- **ASR 语音输入**：支持 Sherpa-ONNX SenseVoice / Faster Whisper / Whisper.cpp / OpenAI Whisper / 浏览器原生 Web Speech API
 - **TTS 语音输出**：支持 Edge TTS / GPT-SoVITS / SiliconFlow / CosyVoice3
+- **VAD 实时打断**：通过 WebSocket 持续上传麦克风音频，支持用户开口打断 LLM 流式回复和当前 TTS 播放
+- **自动语音接管**：用户说完后可由后端 ASR 自动转写，并直接进入新一轮聊天
 - **浮动播放器**：自定义进度条、拖动 seek、队列显示
-- **模块化开关**：ASR 和 TTS 均为可选插件，按需启用
+- **模块化开关**：ASR、TTS 和 VAD 均为可选插件，按需启用
 
 ### 🔐 部署与认证
 
@@ -126,6 +128,8 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 | [认证系统使用指南](docs/configs/CN/认证系统使用指南.md) | GitHub OAuth 配置与白名单管理 |
 | [ASR 配置说明](docs/configs/CN/ASR配置说明.md) | 语音识别提供商配置 |
 | [TTS 配置说明](docs/configs/CN/TTS配置说明.md) | 语音合成提供商配置 |
+| [VAD 配置说明](docs/configs/CN/VAD配置说明.md) | 实时语音活动检测、Silero 参数和 ASR 衔接说明 |
+| [实时语音模式使用说明](docs/configs/CN/实时语音模式使用说明.md) | VAD button 使用、WebSocket 联调和验收路径 |
 | [角色创建指南](docs/configs/CN/角色创建指南.md) | 角色人设、头像与问候语 |
 
 ---
@@ -140,6 +144,7 @@ atri/
 │   ├── llm/            #   LLM 调用层（工厂模式）
 │   ├── asr/            #   ASR 提供商
 │   ├── tts/            #   TTS 提供商
+│   ├── vad/            #   VAD 实时语音活动检测
 │   ├── auth/           #   认证系统
 │   ├── storage/        #   存储抽象层
 │   ├── routes/         #   FastAPI 路由
@@ -148,7 +153,7 @@ atri/
 ├── prompts/            # 角色人设 + 压缩 Prompt
 ├── data/               # 运行时数据 / 头像 / Live2D 模型
 ├── tests/              # 后端测试
-└── atri-webui/         # 前端（子模块）
+└── frontend/           # 前端（子模块）
 ```
 
 ---
@@ -162,6 +167,7 @@ ATRI 当前已经具备完整的 Web 对话体验：持久化记忆、角色管�
 - 三层记忆压缩与持久化存储：支持会话历史、短期记忆、长期记忆和角色隔离。
 - Web 端基础体验：支持聊天、角色切换、设置页、Live2D 舞台和普通聊天模式。
 - 语音链路：已接入 ASR 与 TTS，并支持多提供商配置。
+- VAD 实时语音打断：支持实时麦克风输入、打断 LLM 流式输出、停止当前 TTS 播放和 ASR 自动接管。
 - 部署与认证基础：支持本地部署、云端部署、GitHub OAuth、JWT 和白名单访问控制。
 
 **近期计划**
@@ -169,7 +175,7 @@ ATRI 当前已经具备完整的 Web 对话体验：持久化记忆、角色管�
 - 新增"插件式"翻译模块，作用于 llm calling 层与 TTS/前端消费之间
 - 优化移动端 Web 适配，提升云部署后的手机访问体验。
 - 增强 TTS 流式播放链路，减少长回复的语音等待时间。
-- 引入 VAD 实时语音控制，让对话从“按键录音”逐步转向自然语音交互。
+- 继续调优 VAD 实时语音参数和弱网环境下的联调体验。
 - 完善 Live2D 与普通聊天模式下的界面一致性和交互细节。
 - 持续打磨 UI。目前前端设计参考 AIRI，感谢 AIRI 项目的优秀设计基础。
 

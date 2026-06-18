@@ -382,21 +382,25 @@ M5 不做：
 
 目标：让功能可配置、可测试、可回归。
 
+当前收尾范围：M4/M5 已补齐主要后端测试、WebSocket 测试、存储测试、记忆测试和前端构建验证；M6 本轮以发布文档和人工验收入口为主，不再更新 `tests/*/test-exe.md`。
+
 执行内容：
 
 1. 增加 VAD 配置文档。
 2. 增加前端实时语音模式说明。
-3. 增加后端单元测试，覆盖 VAD 状态机和 fake provider。
-4. 增加 WebSocket 消息流测试。
-5. 增加前端类型检查或构建验证。
-6. 增加手动测试清单。
+3. 在文档中明确 `web_speech_api`、`sherpa_onnx_asr`、`silero_vad` 的适用边界。
+4. 在文档中明确 Silero 防抖、静默结束时间和调参方法。
+5. 在文档中明确浏览器 DevTools 的 WebSocket 验收路径。
+6. 汇总现有后端测试、WebSocket 测试和前端检查命令。
 
 验收：
 
-1. VAD 默认配置清晰可查。
-2. 关闭 VAD 后所有现有功能保持可用。
-3. 单元测试覆盖 speech_start、speech_end、误触发、短音频等情况。
-4. 前端构建通过。
+1. VAD 默认配置清晰可查，入口为 `docs/configs/CN/VAD配置说明.md` 和 `docs/configs/EN/VAD-configuration.md`。
+2. 实时语音模式使用方法清晰可查，入口为 `docs/configs/CN/实时语音模式使用说明.md` 和 `docs/configs/EN/realtime-voice-mode.md`。
+3. 文档能解释为什么 `web_speech_api` 不能完成后端 VAD 自动 ASR。
+4. 文档能解释 `silero_vad.required_hits`、`required_misses`、`smoothing_window` 的作用和延时估算。
+5. 文档能指导用户在 DevTools 中确认 `VAD -> ASR -> 后端自动聊天` 链路。
+6. 文档记录现有测试和构建检查入口，便于回归。
 
 ### M7：可选 TTS WebSocket 化
 
