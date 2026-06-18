@@ -471,14 +471,15 @@ M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk �
 1. `enabled`：是否启用 VAD。
 2. `provider`：选择 VAD provider。
 3. `sample_rate`：后端 VAD 使用的目标采样率。
-4. `chunk_ms`：前端音频片段长度。
-5. `fake.speech_threshold`：fake provider 的能量阈值。
-6. `fake.required_hits` / `fake.required_misses`：fake provider 的防抖参数。
-7. `silero_vad.prob_threshold` / `silero_vad.db_threshold`：Silero provider 的语音概率与分贝阈值。
-8. `silero_vad.required_hits` / `silero_vad.required_misses` / `silero_vad.smoothing_window`：Silero provider 的 OLV 风格状态机参数。
-9. `min_speech_ms`：最短有效语音长度。
-10. `interrupt_on_speech_start`：是否在 speech_start 立即触发打断。
-11. `auto_submit_after_speech_end`：speech_end 后是否自动 ASR 并提交对话。
+4. `pre_buffer_ms`：speech_start 前保留的音频长度，用于避免 ASR 吞掉句首。
+5. `chunk_ms`：前端音频片段长度。
+6. `fake.speech_threshold`：fake provider 的能量阈值。
+7. `fake.required_hits` / `fake.required_misses`：fake provider 的防抖参数。
+8. `silero_vad.prob_threshold` / `silero_vad.db_threshold`：Silero provider 的语音概率与分贝阈值。
+9. `silero_vad.required_hits` / `silero_vad.required_misses` / `silero_vad.smoothing_window`：Silero provider 的 OLV 风格状态机参数。
+10. `min_speech_ms`：最短有效语音长度。
+11. `interrupt_on_speech_start`：是否在 speech_start 立即触发打断。
+12. `auto_submit_after_speech_end`：speech_end 后是否自动 ASR 并提交对话。
 
 配置原则：
 
@@ -487,6 +488,7 @@ M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk �
 3. 关闭 VAD 后不加载重型模型。
 4. fake 被视为一个正式测试 provider，而不是全局 VAD 参数的特殊分支。
 5. Silero 的防抖参数按 512-sample 小窗口理解，不能直接和前端 WebSocket chunk 次数混用。
+6. Silero model 通过 `silero-vad` 包依赖提供，运行时用 `load_silero_vad()` 懒加载，不要求手动网页下载模型文件。
 
 ## 5. 测试计划
 

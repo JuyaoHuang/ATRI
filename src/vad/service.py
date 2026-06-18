@@ -117,6 +117,7 @@ class VADService:
 
         provider_name = self._active_provider(config)
         provider_config = self._provider_config(config, provider_name)
+        provider_metadata = VADFactory.metadata(provider_name)
         provider = VADFactory.create(provider_name, **provider_config)
         health = provider.health()
         if not health.available:
@@ -124,22 +125,29 @@ class VADService:
                 health.reason or f"VAD provider '{provider_name}' is unavailable"
             )
 
+        if provider_metadata.uses_internal_debounce:
+            required_hits = 1
+            required_misses = 1
+        else:
+            required_hits = self._session_debounce_value(
+                provider_config,
+                config,
+                "required_hits",
+                default=1,
+            )
+            required_misses = self._session_debounce_value(
+                provider_config,
+                config,
+                "required_misses",
+                default=1,
+            )
+
         session = VADSession(
             provider,
             config=VADSessionConfig(
                 sample_rate=int(config.get("sample_rate") or 16000),
-                required_hits=self._session_debounce_value(
-                    provider_config,
-                    config,
-                    "required_hits",
-                    default=1,
-                ),
-                required_misses=self._session_debounce_value(
-                    provider_config,
-                    config,
-                    "required_misses",
-                    default=1,
-                ),
+                required_hits=required_hits,
+                required_misses=required_misses,
             ),
         )
         self._sessions[session_id] = session

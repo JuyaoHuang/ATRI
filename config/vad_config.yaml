@@ -5,6 +5,7 @@ vad_model: fake # 可选：fake、silero_vad
 
 # 后端 VAD 目标音频格式：16 kHz、mono、PCM float array。
 sample_rate: 16000
+pre_buffer_ms: 500 # 保留 speech_start 前的短音频，避免 ASR 吞掉句首
 
 # fake 是开发/联调用的能量阈值 provider，不依赖真实模型。
 # 防抖参数跟随 provider 配置，避免和真实 VAD 模型参数混在一起。

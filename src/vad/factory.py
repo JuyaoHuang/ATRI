@@ -18,6 +18,7 @@ class VADProviderMetadata:
     provider_type: str
     requires_model: bool
     description: str
+    uses_internal_debounce: bool = False
 
 
 class VADFactory:

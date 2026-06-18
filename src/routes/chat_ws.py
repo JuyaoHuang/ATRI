@@ -54,6 +54,7 @@ class WebSocketVADState:
     current_chat_task: asyncio.Task[None] | None = None
     current_generation_id: str | None = None
     audio_buffer: list[float] = field(default_factory=list)
+    pre_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
     last_character_id: str | None = None
 
@@ -88,6 +89,39 @@ class WebSocketVADState:
 
         self.audio_buffer.extend(audio)
 
+    def append_pre_buffer(
+        self,
+        audio: list[float],
+        *,
+        sample_rate: int,
+        pre_buffer_ms: int,
+    ) -> None:
+        """Keep a bounded rolling audio buffer before speech_start."""
+
+        if pre_buffer_ms <= 0:
+            self.pre_buffer.clear()
+            return
+
+        self.pre_buffer.extend(audio)
+        max_samples = max(1, int(sample_rate * pre_buffer_ms / 1000))
+        overflow = len(self.pre_buffer) - max_samples
+        if overflow > 0:
+            del self.pre_buffer[:overflow]
+
+    def start_audio_buffer_from_pre_buffer(self, fallback_audio: list[float]) -> None:
+        """Begin a speech segment with pre-buffered audio or the current chunk."""
+
+        if self.pre_buffer:
+            self.audio_buffer.extend(self.pre_buffer)
+        else:
+            self.audio_buffer.extend(fallback_audio)
+        self.clear_pre_buffer()
+
+    def clear_pre_buffer(self) -> None:
+        """Release pre-speech audio for the current connection turn."""
+
+        self.pre_buffer.clear()
+
     def clear_audio_buffer(self) -> None:
         """Release buffered audio for the current connection turn."""
 
@@ -104,6 +138,7 @@ class WebSocketVADState:
         """Release lightweight per-connection references."""
 
         self.clear_audio_buffer()
+        self.clear_pre_buffer()
         self.current_chat_task = None
         self.current_generation_id = None
 
@@ -514,10 +549,24 @@ async def _handle_audio_chunk(
     vad_state.last_chat_id = str(chat_id)
     vad_state.last_character_id = str(character_id)
 
+    sample_rate = _get_vad_sample_rate(vad_service)
+    vad_state.append_pre_buffer(
+        audio_samples,
+        sample_rate=sample_rate,
+        pre_buffer_ms=_get_vad_pre_buffer_ms(vad_service),
+    )
+
     event = await vad_service.process_audio(vad_state.session_id, audio_samples)
-    if event.is_speech and event.metadata.get("disabled") is not True:
-        vad_state.append_audio(audio_samples)
     speech_audio: list[float] | None = None
+    if event.metadata.get("disabled") is True:
+        vad_state.clear_pre_buffer()
+    elif event.type is VADEventType.SPEECH_START:
+        vad_state.start_audio_buffer_from_pre_buffer(audio_samples)
+    elif event.type is VADEventType.SPEECH_CHUNK:
+        vad_state.append_audio(audio_samples)
+    elif event.type is VADEventType.SPEECH_END:
+        vad_state.clear_pre_buffer()
+
     if event.type is VADEventType.SPEECH_END:
         vad_state.interrupt_sent = False
         speech_audio = vad_state.consume_audio_buffer()
@@ -552,7 +601,7 @@ async def _handle_audio_chunk(
             speech_audio,
             chat_id=str(chat_id),
             character_id=str(character_id),
-            sample_rate=_get_vad_sample_rate(vad_service),
+            sample_rate=sample_rate,
             min_speech_ms=_get_min_speech_ms(vad_service),
             seq=data.get("seq"),
         )
@@ -595,6 +644,7 @@ async def _handle_audio_end(
     vad_service.reset_session(vad_state.session_id)
     vad_state.interrupt_sent = False
     vad_state.clear_audio_buffer()
+    vad_state.clear_pre_buffer()
     vad_state.last_chat_id = str(chat_id)
     vad_state.last_character_id = str(character_id)
 
@@ -645,6 +695,13 @@ def _get_vad_sample_rate(vad_service: VADService) -> int:
         return int(vad_service.get_config().get("sample_rate") or 16000)
     except Exception:
         return 16000
+
+
+def _get_vad_pre_buffer_ms(vad_service: VADService) -> int:
+    try:
+        return max(0, int(vad_service.get_config().get("pre_buffer_ms") or 0))
+    except Exception:
+        return 0
 
 
 def _get_min_speech_ms(vad_service: VADService) -> int:

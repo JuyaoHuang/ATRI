@@ -182,6 +182,55 @@ async def test_websocket_vad_state_buffers_and_clears_audio(tmp_path) -> None:
     )
 
     assert vad_state.audio_buffer == []
+    assert vad_state.pre_buffer == []
+
+
+def test_websocket_vad_state_trims_pre_buffer() -> None:
+    vad_state = WebSocketVADState(session_id="test-session")
+
+    vad_state.append_pre_buffer([0.1, 0.2, 0.3], sample_rate=1000, pre_buffer_ms=2)
+
+    assert vad_state.pre_buffer == [0.2, 0.3]
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_start_includes_pre_buffered_audio(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            {
+                "enabled": True,
+                "vad_model": "fake",
+                "sample_rate": 1000,
+                "pre_buffer_ms": 10,
+                "fake": {
+                    "speech_threshold": 0.5,
+                    "required_hits": 2,
+                    "required_misses": 2,
+                },
+            },
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+
+    for seq, audio in ((1, [0.1]), (2, [0.7]), (3, [0.8])):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": audio,
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+        )
+
+    assert vad_state.audio_buffer == [0.1, 0.7, 0.8]
+    assert vad_state.pre_buffer == []
 
 
 @pytest.mark.asyncio

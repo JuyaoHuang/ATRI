@@ -17,6 +17,7 @@ DEFAULT_VAD_CONFIG: dict[str, Any] = {
     "enabled": False,
     "vad_model": "fake",
     "sample_rate": 16000,
+    "pre_buffer_ms": 500,
     "fake": {
         "speech_threshold": 0.05,
         "required_hits": 2,
