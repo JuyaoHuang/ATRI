@@ -71,6 +71,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.service_context = ServiceContext(config)
     logger.info("ServiceContext initialized")
 
+    # 可选预加载本地 ASR 模型；默认关闭，失败不阻塞服务启动。
+    try:
+        await app.state.asr_service.preload_active_provider()
+    except Exception as e:
+        logger.warning(f"ASR provider preload skipped: {e}")
+
     yield
 
     # Shutdown: cleanup resources

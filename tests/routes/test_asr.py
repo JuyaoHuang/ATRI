@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import wave
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -15,7 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from src.app import create_app
 from src.asr import ASRConfigStore, ASRService
 from src.asr.exceptions import ASRTranscriptionError
-from src.asr.interface import ASRAudioUploadMetadata, ASRInterface
+from src.asr.interface import ASRAudioUploadMetadata, ASRHealth, ASRInterface
 from src.asr.providers import faster_whisper as faster_whisper_module
 from src.asr.providers import sherpa_onnx_asr as sherpa_onnx_module
 from src.utils.config_loader import load_config
@@ -39,6 +40,38 @@ def _build_pcm_wav_bytes(
 class _DummyASR(ASRInterface):
     def transcribe_np(self, audio):  # type: ignore[override]
         return "dummy"
+
+
+class _CountingASR(ASRInterface):
+    # 测试用 provider：记录创建后的调用次数和并发情况，验证常驻缓存行为。
+    def __init__(self, text: str = "dummy", *, delay: float = 0.0) -> None:
+        super().__init__()
+        self.text = text
+        self.delay = delay
+        self.calls = 0
+        self.preload_calls = 0
+        self.active_calls = 0
+        self.max_active_calls = 0
+
+    def health(self) -> ASRHealth:
+        return ASRHealth(True)
+
+    def transcribe_np(self, audio):  # type: ignore[override]
+        return self.text
+
+    async def async_transcribe_audio(self, audio: bytes, **kwargs):  # type: ignore[override]
+        self.calls += 1
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            return self.text
+        finally:
+            self.active_calls -= 1
+
+    async def async_preload(self) -> None:
+        self.preload_calls += 1
 
 
 @pytest_asyncio.fixture
@@ -336,6 +369,250 @@ def test_asr_service_blocks_provider_write_protected_fields(tmp_path: Path):
     assert persisted["whisper_cpp"]["model_dir"] == "models/whisper"
     assert persisted["openai_whisper"]["model"] == "whisper-1"
     assert persisted["openai_whisper"]["base_url"] == ""
+
+
+def test_asr_config_store_loads_backend_only_defaults(tmp_path: Path):
+    store = ASRConfigStore(path=tmp_path / "asr_config.yaml")
+
+    config = store.read()
+
+    assert config["persistent_provider"] is True
+    assert config["preload_provider"] is False
+
+
+def test_asr_service_hides_and_rejects_backend_only_root_config(tmp_path: Path):
+    config_path = tmp_path / "asr_config.yaml"
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "web_speech_api",
+                "persistent_provider": True,
+                "preload_provider": False,
+                "auto_send": {"enabled": False},
+            },
+            path=config_path,
+        )
+    )
+
+    public_config = service.get_config()
+    assert "persistent_provider" not in public_config
+    assert "preload_provider" not in public_config
+
+    service.update_config(
+        {
+            "persistent_provider": False,
+            "preload_provider": True,
+            "auto_send": {"enabled": True},
+        }
+    )
+
+    raw_config = service.config_store.read()
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert raw_config["persistent_provider"] is True
+    assert raw_config["preload_provider"] is False
+    assert raw_config["auto_send"]["enabled"] is True
+    assert persisted["persistent_provider"] is True
+    assert persisted["preload_provider"] is False
+
+
+@pytest.mark.asyncio
+async def test_asr_service_reuses_cached_local_provider_when_persistent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider = _CountingASR("cached")
+    create_provider = MagicMock(return_value=provider)
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": True,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    first = await service.transcribe_audio(b"audio", provider="faster_whisper")
+    second = await service.transcribe_audio(b"audio", provider="faster_whisper")
+
+    assert first["text"] == "cached"
+    assert second["text"] == "cached"
+    assert provider.calls == 2
+    assert create_provider.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_asr_service_creates_provider_per_request_when_not_persistent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_provider = _CountingASR("first")
+    second_provider = _CountingASR("second")
+    create_provider = MagicMock(side_effect=[first_provider, second_provider])
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": False,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    first = await service.transcribe_audio(b"audio", provider="faster_whisper")
+    second = await service.transcribe_audio(b"audio", provider="faster_whisper")
+
+    assert first["text"] == "first"
+    assert second["text"] == "second"
+    assert create_provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_asr_service_does_not_cache_cloud_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_provider = _CountingASR("first")
+    second_provider = _CountingASR("second")
+    create_provider = MagicMock(side_effect=[first_provider, second_provider])
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "openai_whisper",
+                "persistent_provider": True,
+                "openai_whisper": {"api_key": "test-key"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    first = await service.transcribe_audio(b"audio", provider="openai_whisper")
+    second = await service.transcribe_audio(b"audio", provider="openai_whisper")
+
+    assert first["text"] == "first"
+    assert second["text"] == "second"
+    assert create_provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_asr_service_clears_cache_after_provider_config_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_provider = _CountingASR("first")
+    second_provider = _CountingASR("second")
+    create_provider = MagicMock(side_effect=[first_provider, second_provider])
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": True,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    first = await service.transcribe_audio(b"audio", provider="faster_whisper")
+    service.update_config({"faster_whisper": {"language": "ja"}}, persist=False)
+    second = await service.transcribe_audio(b"audio", provider="faster_whisper")
+
+    assert first["text"] == "first"
+    assert second["text"] == "second"
+    assert create_provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_asr_service_clears_cache_after_provider_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    first_provider = _CountingASR("first")
+    second_provider = _CountingASR("second")
+    create_provider = MagicMock(side_effect=[first_provider, second_provider])
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": True,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    first = await service.transcribe_audio(b"audio", provider="faster_whisper")
+    service.switch_provider("faster_whisper", persist=False)
+    second = await service.transcribe_audio(b"audio", provider="faster_whisper")
+
+    assert first["text"] == "first"
+    assert second["text"] == "second"
+    assert create_provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_asr_service_serializes_cached_provider_transcription(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider = _CountingASR("cached", delay=0.01)
+    create_provider = MagicMock(return_value=provider)
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": True,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    await asyncio.gather(
+        service.transcribe_audio(b"audio", provider="faster_whisper"),
+        service.transcribe_audio(b"audio", provider="faster_whisper"),
+    )
+
+    assert provider.calls == 2
+    assert provider.max_active_calls == 1
+    assert create_provider.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_asr_service_preloads_active_persistent_local_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider = _CountingASR("cached")
+    create_provider = MagicMock(return_value=provider)
+    monkeypatch.setattr("src.asr.service.ASRFactory.create", create_provider)
+    service = ASRService(
+        ASRConfigStore(
+            {
+                "asr_model": "faster_whisper",
+                "persistent_provider": True,
+                "preload_provider": True,
+                "faster_whisper": {"language": "zh"},
+            },
+            path=tmp_path / "asr_config.yaml",
+        )
+    )
+
+    await service.preload_active_provider()
+    result = await service.transcribe_audio(b"audio", provider="faster_whisper")
+
+    assert result["text"] == "cached"
+    assert provider.preload_calls == 1
+    assert provider.calls == 1
+    assert create_provider.call_count == 1
 
 
 @pytest.mark.asyncio

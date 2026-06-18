@@ -144,6 +144,12 @@ class FasterWhisperASR(ASRInterface):
         segments, _info = model.transcribe(path, **kwargs)
         return "".join(segment.text for segment in segments)
 
+    def preload(self) -> None:
+        """Load the faster-whisper model without transcribing audio."""
+
+        # 复用懒加载入口，让常驻模式提前完成模型初始化。
+        self._get_model()
+
     def _get_model(self) -> Any:
         health = self.health()
         if not health.available:

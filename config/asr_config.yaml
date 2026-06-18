@@ -3,6 +3,11 @@
 # web_speech_api 在浏览器侧识别；其他 provider 用后端处理上传音频。
 asr_model: web_speech_api # 当前使用的语音识别模型
 
+# 后端专用：是否缓存本地 ASR provider/recognizer，前端 API 不应回写。
+persistent_provider: true
+# 后端专用：是否服务启动时预加载当前本地 ASR provider；false 表示第一次请求时加载。
+preload_provider: false
+
 auto_send:
   enabled: false # 浏览器端识别到语音后是否自动发送到聊天
   delay_ms: 2000 # 自动发送前等待的毫秒数

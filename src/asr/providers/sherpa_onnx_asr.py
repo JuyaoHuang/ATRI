@@ -87,6 +87,12 @@ class SherpaOnnxASR(ASRInterface):
         except Exception as error:  # noqa: BLE001
             raise ASRTranscriptionError("Sherpa-ONNX SenseVoice transcription failed") from error
 
+    def preload(self) -> None:
+        """Load the Sherpa-ONNX recognizer without transcribing audio."""
+
+        # 复用懒加载入口，让常驻模式提前完成 recognizer 初始化。
+        self._get_recognizer()
+
     def _get_recognizer(self) -> Any:
         health = self.health()
         if not health.available:

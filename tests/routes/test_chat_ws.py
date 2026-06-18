@@ -552,7 +552,7 @@ async def test_speech_end_asr_skips_short_audio() -> None:
                 "character_id": "atri",
                 "state": "error",
                 "code": "speech_too_short",
-                "message": "Realtime VAD speech segment is too short for ASR auto-submit.",
+                "message": "VAD speech segment is too short for ASR auto-submit.",
                 "seq": 6,
             },
         }
@@ -583,7 +583,7 @@ async def test_speech_end_asr_skips_invalid_transcript() -> None:
                 "character_id": "atri",
                 "state": "error",
                 "code": "empty_asr_transcript",
-                "message": "Realtime VAD ASR returned empty transcript.",
+                "message": "VAD ASR returned empty transcript.",
                 "seq": 7,
             },
         }

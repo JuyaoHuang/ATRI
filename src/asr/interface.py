@@ -89,6 +89,25 @@ class ASRInterface(ABC):
         audio = self._ensure_float32_array(audio)
         return await asyncio.to_thread(self.transcribe_np, audio)
 
+    async def async_preload(self) -> None:
+        """Preload provider resources asynchronously when supported."""
+
+        # 模型加载是阻塞操作，放到线程里避免卡住 FastAPI 事件循环。
+        await asyncio.to_thread(self.preload)
+
+    def preload(self) -> None:
+        """Preload provider resources without transcribing audio.
+
+        Providers with lazy local models should override this method and
+        initialize their model/recognizer. The default implementation only
+        validates availability.
+        """
+
+        health = self.health()
+        if not health.available:
+            # 默认预加载只做可用性检查；本地模型 provider 会覆盖为实际加载。
+            raise ASRProviderUnavailableError(health.reason or "ASR provider is unavailable")
+
     @abstractmethod
     def transcribe_np(self, audio: Any) -> str:
         """Transcribe a 16 kHz mono float32 audio array.

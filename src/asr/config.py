@@ -26,6 +26,9 @@ SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
 
 DEFAULT_ASR_CONFIG: dict[str, Any] = {
     "asr_model": "web_speech_api",
+    # 后端专用默认值：本地 ASR 首次加载后常驻，启动时不强制预加载。
+    "persistent_provider": True,
+    "preload_provider": False,
     "auto_send": {
         "enabled": False,
     },

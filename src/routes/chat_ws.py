@@ -743,7 +743,7 @@ async def _handle_speech_end_asr(
     min_speech_ms: int = 0,
     seq: Any | None = None,
 ) -> dict[str, str] | None:
-    """Transcribe a completed VAD speech segment and notify the frontend."""
+    """转录完成的VAD语音片段并通知前端。"""
 
     if asr_service is None:
         await _send_listen_error(
@@ -751,7 +751,7 @@ async def _handle_speech_end_asr(
             chat_id=chat_id,
             character_id=character_id,
             code="backend_asr_unavailable",
-            message="Realtime VAD auto-submit requires a backend ASR service.",
+            message="VAD auto-submit requires a backend ASR service.",
             seq=seq,
         )
         return None
@@ -761,7 +761,7 @@ async def _handle_speech_end_asr(
             chat_id=chat_id,
             character_id=character_id,
             code="empty_speech_audio",
-            message="Realtime VAD speech segment is empty.",
+            message="VAD speech segment is empty.",
             seq=seq,
         )
         return None
@@ -771,7 +771,7 @@ async def _handle_speech_end_asr(
             chat_id=chat_id,
             character_id=character_id,
             code="speech_too_short",
-            message="Realtime VAD speech segment is too short for ASR auto-submit.",
+            message="VAD speech segment is too short for ASR auto-submit.",
             seq=seq,
         )
         return None
@@ -810,7 +810,7 @@ async def _handle_speech_end_asr(
             chat_id=chat_id,
             character_id=character_id,
             code="asr_transcription_failed",
-            message="Realtime VAD ASR transcription failed.",
+            message="VAD ASR transcription failed.",
             seq=seq,
         )
         return None
@@ -822,7 +822,7 @@ async def _handle_speech_end_asr(
             chat_id=chat_id,
             character_id=character_id,
             code="empty_asr_transcript",
-            message="Realtime VAD ASR returned empty transcript.",
+            message="VAD ASR returned empty transcript.",
             seq=seq,
         )
         return None

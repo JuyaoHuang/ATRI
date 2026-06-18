@@ -232,7 +232,7 @@ M2 不负责前端麦克风采集、真实 ASR 转写、真实 LLM 任务取消�
   "data": {
     "state": "error",
     "code": "backend_asr_unavailable",
-    "message": "Realtime VAD auto-submit requires a backend ASR provider; current provider is browser-only.",
+    "message": "VAD auto-submit requires a backend ASR provider; current provider is browser-only.",
     "chat_id": "chat id",
     "character_id": "character id"
   }

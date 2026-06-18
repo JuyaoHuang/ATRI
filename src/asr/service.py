@@ -13,16 +13,19 @@ Reference: docs/ASR模块设计文档.md
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from . import providers as _providers  # noqa: F401
 from .config import ASRConfigStore
 from .exceptions import ASRConfigError, ASRProviderUnavailableError
 from .factory import ASRFactory
-from .interface import ASRAudioUploadMetadata
+from .interface import ASRAudioUploadMetadata, ASRInterface
 
 SENSITIVE_CONFIG_KEYS = {"api_key", "token", "secret", "password"}
 SENSITIVE_CONFIG_MASK = "********"
+# 后端私有根配置只允许 YAML 控制，避免前端配置 API 覆盖运行策略。
+BACKEND_ONLY_ROOT_CONFIG_KEYS = {"persistent_provider", "preload_provider"}
 PROVIDER_WRITE_ALLOWLISTS: dict[str, set[str]] = {
     "web_speech_api": {"language", "continuous", "interim_results", "max_alternatives"},
     "faster_whisper": {"language"},
@@ -47,6 +50,12 @@ class ASRService:
 
     def __init__(self, config_store: ASRConfigStore) -> None:
         self.config_store = config_store
+        # 本地 ASR 模型加载成本较高，常驻模式下按 provider 名称复用实例。
+        self._provider_cache: dict[str, ASRInterface] = {}
+        # 多个请求复用同一个本地 recognizer 时串行转写，避免线程安全问题。
+        self._provider_locks: dict[str, asyncio.Lock] = {}
+        # 首次创建 provider 时加全局锁，防止并发请求重复加载模型。
+        self._cache_lock = asyncio.Lock()
 
     def get_config(self) -> dict[str, Any]:
         """Return persisted OLV-shaped ASR config.
@@ -75,11 +84,18 @@ class ASRService:
         """
 
         patch = self._strip_masked_sensitive_values(patch)
+        # persistent/preload 只能由后端配置文件决定，前端 patch 会被忽略。
+        patch = self._strip_backend_only_root_fields(patch)
         patch = self._strip_forbidden_provider_writes(patch)
+        if not patch:
+            return self.config_store.read()
         next_model = patch.get("asr_model")
         if next_model is not None:
             self._ensure_provider_registered(str(next_model))
-        return self.config_store.update(patch, persist=persist)
+        config = self.config_store.update(patch, persist=persist)
+        # provider 参数变化后必须丢弃旧实例，否则会继续使用旧模型配置。
+        self.clear_provider_cache()
+        return config
 
     def switch_provider(self, provider: str, *, persist: bool = True) -> dict[str, Any]:
         """Switch the active ASR provider.
@@ -92,7 +108,10 @@ class ASRService:
         """
 
         self._ensure_provider_registered(provider)
-        return self.config_store.update({"asr_model": provider}, persist=persist)
+        config = self.config_store.update({"asr_model": provider}, persist=persist)
+        # 切换 provider 后清空缓存，下一次请求按新 provider 重新创建实例。
+        self.clear_provider_cache()
+        return config
 
     def list_providers(self) -> list[dict[str, Any]]:
         """Return registered provider metadata plus health/config state.
@@ -186,21 +205,116 @@ class ASRService:
             )
 
         provider_config = self._provider_config(config, provider_name)
-        asr = ASRFactory.create(provider_name, **provider_config)
+        if self._should_cache_provider(config, provider_name, metadata):
+            # 本地后端 ASR 走常驻实例；单 provider 内部转写串行，减少并发风险。
+            asr, provider_lock = await self._get_or_create_cached_provider(
+                provider_name,
+                provider_config,
+            )
+            async with provider_lock:
+                text = await self._transcribe_with_provider(
+                    asr,
+                    audio,
+                    provider_name=provider_name,
+                    filename=filename,
+                    content_type=content_type,
+                    upload_metadata=upload_metadata,
+                )
+        else:
+            asr = ASRFactory.create(provider_name, **provider_config)
+            text = await self._transcribe_with_provider(
+                asr,
+                audio,
+                provider_name=provider_name,
+                filename=filename,
+                content_type=content_type,
+                upload_metadata=upload_metadata,
+            )
+
+        return {
+            "provider": provider_name,
+            "text": text,
+        }
+
+    async def preload_active_provider(self) -> None:
+        """Preload the active persistent local ASR provider when enabled.
+
+        仅在 preload_provider=true 且当前 provider 可后端转写时提前加载。
+        """
+
+        config = self.config_store.read()
+        if not bool(config.get("preload_provider", False)):
+            return
+
+        provider_name = self._active_provider(config)
+        metadata = ASRFactory.metadata(provider_name)
+        if not self._should_cache_provider(config, provider_name, metadata):
+            return
+
+        provider_config = self._provider_config(config, provider_name)
+        asr, provider_lock = await self._get_or_create_cached_provider(
+            provider_name,
+            provider_config,
+        )
+        async with provider_lock:
+            await asr.async_preload()
+
+    def clear_provider_cache(self) -> None:
+        """Drop cached provider instances and locks.
+
+        清理缓存后，本地 ASR 模型会在下一次请求或预加载时重新初始化。
+        """
+
+        self._provider_cache.clear()
+        self._provider_locks.clear()
+
+    async def _transcribe_with_provider(
+        self,
+        asr: ASRInterface,
+        audio: bytes,
+        *,
+        provider_name: str,
+        filename: str | None,
+        content_type: str | None,
+        upload_metadata: ASRAudioUploadMetadata | None,
+    ) -> str:
         health = asr.health()
         if not health.available:
             raise ASRProviderUnavailableError(health.reason or f"{provider_name} is unavailable")
-
-        text = await asr.async_transcribe_audio(
+        return await asr.async_transcribe_audio(
             audio,
             filename=filename,
             content_type=content_type,
             upload_metadata=upload_metadata,
         )
-        return {
-            "provider": provider_name,
-            "text": text,
-        }
+
+    async def _get_or_create_cached_provider(
+        self,
+        provider_name: str,
+        provider_config: dict[str, Any],
+    ) -> tuple[ASRInterface, asyncio.Lock]:
+        async with self._cache_lock:
+            provider = self._provider_cache.get(provider_name)
+            if provider is None:
+                # 创建 provider 可能触发模型加载；必须只创建一次再放入缓存。
+                provider = ASRFactory.create(provider_name, **provider_config)
+                self._provider_cache[provider_name] = provider
+                self._provider_locks[provider_name] = asyncio.Lock()
+            return provider, self._provider_locks[provider_name]
+
+    def _should_cache_provider(
+        self,
+        config: dict[str, Any],
+        provider_name: str,
+        metadata: Any,
+    ) -> bool:
+        # 只缓存本地、后端可转写的 provider；浏览器 ASR 和云 API 不应常驻。
+        return (
+            bool(config.get("persistent_provider", False))
+            and metadata.provider_type == "local"
+            and bool(metadata.supports_backend_transcription)
+            and provider_name != "web_speech_api"
+        )
 
     def _provider_health(self, name: str, provider_config: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -231,6 +345,9 @@ class ASRService:
 
         safe: dict[str, Any] = {}
         for key, value in config.items():
+            if key in BACKEND_ONLY_ROOT_CONFIG_KEYS:
+                # 后端运行策略不暴露给前端，避免被配置页读写。
+                continue
             if key.lower() in SENSITIVE_CONFIG_KEYS:
                 safe[key] = SENSITIVE_CONFIG_MASK if value else value
             elif isinstance(value, dict):
@@ -251,6 +368,13 @@ class ASRService:
             else:
                 cleaned[key] = value
         return cleaned
+
+    def _strip_backend_only_root_fields(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Remove backend-owned root config fields from API patches."""
+
+        return {
+            key: value for key, value in config.items() if key not in BACKEND_ONLY_ROOT_CONFIG_KEYS
+        }
 
     def _strip_forbidden_provider_writes(self, config: dict[str, Any]) -> dict[str, Any]:
         """Remove provider fields that are read-only from API updates."""
