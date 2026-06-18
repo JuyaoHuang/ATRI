@@ -1222,3 +1222,18 @@ M6 后续如果继续推进，优先做两件事：
 
 1. 根据用户联调反馈微调 VAD/ASR 配置文档。
 2. 决定是否保留终端 WebSocket 抓包脚本作为开发者验收工具。
+
+### 6. 里程碑边界更新
+
+2026-06-19 进一步确认：原计划中的 M7 不再作为 VAD MVP 的后续里程碑。TTS 流式化会作为一次独立开发处理，后续应单独建立分支、设计文档和验收标准。
+
+当前 VAD 第一版完成边界保持为 M0-M6：
+
+1. 实时麦克风输入。
+2. 后端 VAD 判断。
+3. `speech_start` 打断 LLM 流式输出和当前 TTS 播放。
+4. `speech_end` 后端 ASR 自动接管。
+5. interrupted 历史、记忆和旧 TTS 结果治理。
+6. 配置、使用说明和 README 文档入口。
+
+TTS 流式化后续单独推进，建议分支名为 `feat/tts-streaming` 或 `feat/tts-websocket-streaming`。

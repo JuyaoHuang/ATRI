@@ -4,14 +4,14 @@
 日期：2026-06-15  
 前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-implement.md`
 
-文档职责：本文件是 VAD M0-M7 的唯一实施步骤与验收来源；`vad-implement.md` 用于记录具体开发说明，`development.md` 仅作为开发 blog。
+文档职责：本文件是 VAD M0-M6 第一版 MVP 的唯一实施步骤与验收来源；`vad-implement.md` 用于记录具体开发说明，`development.md` 仅作为开发 blog。
 
 ## 1. 实施总原则
 
 1. 先实现 VAD 实时打断，不先重写全部 TTS 架构。
 2. 后端负责 VAD 判断和会话打断控制，前端负责麦克风采集和本地音频停止。
 3. VAD 模块按 provider/factory/service/session 形式设计，保持与 ASR、TTS 模块风格一致。
-4. 第一版保留现有 REST TTS，后续再选择是否增加 WebSocket TTS payload。
+4. 第一版保留现有 REST TTS；TTS 流式化作为后续独立开发，不纳入 VAD MVP。
 5. 所有新增能力必须可配置、可关闭，关闭后不影响现有聊天、ASR、TTS。
 6. WebSocket 消息命名沿用 ATRI 当前 `input:*`、`output:*`、`control:*` 风格，不直接照搬 OLV 的消息名。
 7. 被 VAD 打断的 AI 半截回复可以写入 `chat_history`，但必须标记 `interrupted=true`。
@@ -402,9 +402,11 @@ M5 不做：
 5. 文档能指导用户在 DevTools 中确认 `VAD -> ASR -> 后端自动聊天` 链路。
 6. 文档记录现有测试和构建检查入口，便于回归。
 
-### M7：可选 TTS WebSocket 化
+### 后续独立开发：TTS 流式化（原 M7）
 
-目标：在第一版稳定后，评估是否把 TTS 输出改成更接近 OLV 的 WebSocket 分段音频。
+目标：在 VAD 第一版稳定后，另开独立分支和独立设计文档，评估是否把 TTS 输出改成更接近 OLV 的 WebSocket 分段音频。
+
+本节不再作为 VAD 第一版里程碑验收项。后续开发建议使用独立分支，例如 `feat/tts-streaming` 或 `feat/tts-websocket-streaming`。
 
 OLV 可借鉴机制：
 
@@ -450,7 +452,7 @@ OLV 打断处理流程：
 5. `heard_response` 能用于更准确地保存被打断的半截回复。
 6. interrupted 回复仍不会污染普通记忆轮次。
 
-M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk 累积值”作为 `partial_reply`；只有在 M7 引入句子级 TTS 和播放确认后，才考虑切换为 OLV 式 `heard_response`。
+TTS 流式化不进入 VAD 第一版必做范围。M5 第一版仍以“后端已发送 chunk 累积值”作为 `partial_reply`；只有在后续独立 TTS 流式化开发中引入句子级 TTS 和播放确认后，才考虑切换为 OLV 式 `heard_response`。
 
 ## 3. 推荐执行顺序
 
@@ -460,7 +462,7 @@ M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk �
 4. 再做 M4，把 speech_end 接到 ASR 和聊天。
 5. 再做 M5，补齐打断语义、历史策略、记忆跳过和旧 TTS 结果丢弃。
 6. 最后做 M6 的测试和文档收尾。
-7. M7 不进入第一版必做范围。
+7. TTS 流式化不进入 VAD 第一版必做范围，后续作为独立开发推进。
 
 这个顺序能保证每一步都有独立可验收结果，避免一开始同时改 VAD、ASR、TTS、LLM 和前端播放器。
 
@@ -546,7 +548,7 @@ M7 不进入第一版必做范围。M5 第一版仍以“后端已发送 chunk �
 
 ## 7. 第一版完成定义
 
-第一版完成不以“所有音频都 WebSocket 化”为标准，而以下列结果为准：
+第一版完成不以“所有音频都 WebSocket 化”为标准，也不包含 TTS 流式化；而以下列结果为准：
 
 1. ATRI 有独立 VAD 模块。
 2. 前端能通过 WebSocket 持续发送麦克风音频。
