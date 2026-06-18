@@ -8,7 +8,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path, PurePath
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from src.memory._io_utils import atomic_replace
 from src.storage.interface import ChatStorageInterface
@@ -23,6 +23,9 @@ class _ChatLocation(NamedTuple):
     user_id: str
     character_id: str
     chat: dict
+
+
+_MESSAGE_METADATA_KEYS = {"generation_id", "interrupted", "interrupt_reason"}
 
 
 def _validate_path_component(label: str, value: str) -> str:
@@ -44,6 +47,25 @@ def _validate_path_component(label: str, value: str) -> str:
     ):
         raise ValueError(f"Invalid {label}: {value!r}")
     return clean
+
+
+def _clean_message_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+
+    clean: dict[str, Any] = {}
+    generation_id = metadata.get("generation_id")
+    if isinstance(generation_id, str) and generation_id.strip():
+        clean["generation_id"] = generation_id.strip()
+
+    if metadata.get("interrupted") is True:
+        clean["interrupted"] = True
+
+    interrupt_reason = metadata.get("interrupt_reason")
+    if isinstance(interrupt_reason, str) and interrupt_reason.strip():
+        clean["interrupt_reason"] = interrupt_reason.strip()
+
+    return {key: value for key, value in clean.items() if key in _MESSAGE_METADATA_KEYS}
 
 
 class JSONChatStorage(ChatStorageInterface):
@@ -151,9 +173,7 @@ class JSONChatStorage(ChatStorageInterface):
         查找聊天位置，可限定到特定用户/角色。
         """
         safe_chat_id = _validate_path_component("chat_id", chat_id)
-        safe_user_id = (
-            _validate_path_component("user_id", user_id) if user_id is not None else None
-        )
+        safe_user_id = _validate_path_component("user_id", user_id) if user_id is not None else None
         safe_character_id = (
             _validate_path_component("character_id", character_id)
             if character_id is not None
@@ -329,7 +349,12 @@ class JSONChatStorage(ChatStorageInterface):
         raise ValueError(f"Chat {chat_id} not found")
 
     async def append_message(
-        self, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """Append message to chat session.
 
@@ -344,10 +369,17 @@ class JSONChatStorage(ChatStorageInterface):
             role,
             content,
             name=name,
+            metadata=metadata,
         )
 
     async def append_message_for_user(
-        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        user_id: str,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """Append message to a user-scoped chat session.
 
@@ -370,6 +402,7 @@ class JSONChatStorage(ChatStorageInterface):
         }
         if name:
             message["name"] = name
+        message.update(_clean_message_metadata(metadata))
 
         session_data["messages"].append(message)
         await self._write_json(session_path, session_data)

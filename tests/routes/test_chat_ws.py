@@ -400,6 +400,91 @@ async def test_audio_speech_start_invalidates_current_generation(tmp_path) -> No
     assert vad_state.current_generation_id is None
     assert websocket.messages[-1]["type"] == "control:interrupt"
     assert websocket.messages[-1]["data"]["reason"] == "speech_start"
+    assert websocket.messages[-1]["data"]["generation_id"] == "gen-old"
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_start_persists_interrupted_partial_reply(
+    tmp_path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    mock_context, mock_agent = mock_service_context
+    mock_agent.persona.name = "ATRI"
+    mock_agent.memory_manager.on_round_complete = AsyncMock()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-old")
+    vad_state.set_generation_context(
+        "gen-old",
+        chat_id="test_chat_123",
+        character_id="atri",
+        user_text="浣犲ソ",
+    )
+    vad_state.append_generation_reply("gen-old", "鍗婃埅")
+    vad_state.append_generation_reply("gen-old", "鍥炲")
+    websocket = CapturingWebSocket()
+
+    for seq, audio in ((1, [0.8]), (2, [0.9])):
+        await _handle_audio_chunk(
+            websocket,
+            {
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": audio,
+                    "seq": seq,
+                }
+            },
+            vad_service,
+            vad_state,
+            service_context=mock_context,
+            storage=mock_storage,
+            user_id="default",
+        )
+
+    interrupted = next(
+        message for message in websocket.messages if message["type"] == "output:chat:interrupted"
+    )
+    assert interrupted["data"] == {
+        "chat_id": "test_chat_123",
+        "character_id": "atri",
+        "generation_id": "gen-old",
+        "partial_reply": "鍗婃埅鍥炲",
+        "interrupted": True,
+        "reason": "vad_speech_start",
+    }
+    mock_storage.append_message_for_user.assert_any_call(
+        "default", "test_chat_123", "human", "浣犲ソ", name="default"
+    )
+    mock_storage.append_message_for_user.assert_any_call(
+        "default",
+        "test_chat_123",
+        "ai",
+        "鍗婃埅鍥炲",
+        name="atri",
+        metadata={
+            "generation_id": "gen-old",
+            "interrupted": True,
+            "interrupt_reason": "vad_speech_start",
+        },
+    )
+    mock_agent.memory_manager.on_round_complete.assert_awaited_once_with(
+        {"role": "human", "content": "浣犲ソ", "name": "default"},
+        {
+            "role": "ai",
+            "content": "鍗婃埅鍥炲",
+            "name": "ATRI",
+            "generation_id": "gen-old",
+            "interrupted": True,
+            "interrupt_reason": "vad_speech_start",
+        },
+    )
 
 
 @pytest.mark.asyncio

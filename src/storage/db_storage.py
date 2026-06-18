@@ -3,6 +3,8 @@
 DatabaseChatStorage 的占位实现（Phase 7）。
 """
 
+from typing import Any
+
 from src.storage.interface import ChatStorageInterface
 
 
@@ -49,12 +51,23 @@ class DatabaseChatStorage(ChatStorageInterface):
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
     async def append_message(
-        self, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 
     async def append_message_for_user(
-        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        user_id: str,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         raise NotImplementedError("Database storage is reserved for Phase 7")
 

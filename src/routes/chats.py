@@ -69,6 +69,9 @@ class ChatMessage(BaseModel):
     content: str
     timestamp: str
     name: str | None = None
+    generation_id: str | None = None
+    interrupted: bool = False
+    interrupt_reason: str | None = None
 
 
 class ChatDetailResponse(BaseModel):

@@ -16,7 +16,10 @@ Server → Client:
   - {"type": "output:chat:chunk", "data": {"chunk": "...", "chat_id": "...",
      "character_id": "...", "generation_id": "..."}}
   - {"type": "output:chat:complete", "data": {"full_reply": "...",
-     "chat_id": "...", "character_id": "...", "generation_id": "..."}}
+      "chat_id": "...", "character_id": "...", "generation_id": "..."}}
+  - {"type": "output:chat:interrupted", "data": {"partial_reply": "...",
+     "chat_id": "...", "character_id": "...", "generation_id": "...",
+     "interrupted": true, "reason": "vad_speech_start"}}
   - {"type": "output:asr:transcript", "data": {"text": "...",
      "chat_id": "...", "character_id": "...", "generation_id": "...",
      "is_final": true}}
@@ -45,6 +48,18 @@ from src.llm.exceptions import LLMError
 from src.vad import VADEvent, VADEventType, VADService, VADState
 
 
+@dataclass(frozen=True)
+class InterruptedGenerationSnapshot:
+    """Already emitted text for a generation that VAD interrupted."""
+
+    generation_id: str
+    chat_id: str
+    character_id: str
+    user_text: str
+    partial_reply: str
+    reason: str
+
+
 @dataclass
 class WebSocketVADState:
     """Per-connection VAD state reserved for realtime audio control."""
@@ -53,6 +68,10 @@ class WebSocketVADState:
     interrupt_sent: bool = False
     current_chat_task: asyncio.Task[None] | None = None
     current_generation_id: str | None = None
+    current_generation_chat_id: str | None = None
+    current_generation_character_id: str | None = None
+    current_generation_user_text: str | None = None
+    current_generation_reply_chunks: list[str] = field(default_factory=list)
     audio_buffer: list[float] = field(default_factory=list)
     pre_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
@@ -62,18 +81,80 @@ class WebSocketVADState:
         """Mark a chat generation as the only valid one for this connection."""
 
         self.current_generation_id = generation_id
+        self.current_generation_chat_id = None
+        self.current_generation_character_id = None
+        self.current_generation_user_text = None
+        self.current_generation_reply_chunks.clear()
+
+    def set_generation_context(
+        self,
+        generation_id: str,
+        *,
+        chat_id: str,
+        character_id: str,
+        user_text: str,
+    ) -> None:
+        """Attach routing and user text metadata to the active generation."""
+
+        if not self.is_generation_active(generation_id):
+            return
+        self.current_generation_chat_id = chat_id
+        self.current_generation_character_id = character_id
+        self.current_generation_user_text = user_text
+
+    def append_generation_reply(self, generation_id: str, chunk: str) -> None:
+        """Record a chunk only after it has been sent to the frontend."""
+
+        if not self.is_generation_active(generation_id):
+            return
+        self.current_generation_reply_chunks.append(chunk)
 
     def is_generation_active(self, generation_id: str) -> bool:
         """Return whether a chat generation can still emit side effects."""
 
         return self.current_generation_id == generation_id
 
+    def get_interrupted_generation(
+        self,
+        *,
+        reason: str,
+    ) -> InterruptedGenerationSnapshot | None:
+        """Return the current generation's emitted partial reply, if any."""
+
+        generation_id = self.current_generation_id
+        chat_id = self.current_generation_chat_id
+        character_id = self.current_generation_character_id
+        user_text = self.current_generation_user_text
+        partial_reply = "".join(self.current_generation_reply_chunks)
+        if not generation_id or not chat_id or not character_id or not user_text:
+            return None
+        if not partial_reply.strip():
+            return None
+        return InterruptedGenerationSnapshot(
+            generation_id=generation_id,
+            chat_id=chat_id,
+            character_id=character_id,
+            user_text=user_text,
+            partial_reply=partial_reply,
+            reason=reason,
+        )
+
     def invalidate_current_generation(self) -> str | None:
         """Mark the current generation invalid and return its previous id."""
 
         generation_id = self.current_generation_id
         self.current_generation_id = None
+        self.current_generation_chat_id = None
+        self.current_generation_character_id = None
+        self.current_generation_user_text = None
+        self.current_generation_reply_chunks.clear()
         return generation_id
+
+    def complete_generation(self, generation_id: str) -> None:
+        """Release partial-reply tracking for a normally completed generation."""
+
+        if self.is_generation_active(generation_id):
+            self.invalidate_current_generation()
 
     def cancel_current_chat_task(self) -> bool:
         """Cancel the active chat task if it is still running."""
@@ -140,7 +221,7 @@ class WebSocketVADState:
         self.clear_audio_buffer()
         self.clear_pre_buffer()
         self.current_chat_task = None
-        self.current_generation_id = None
+        self.invalidate_current_generation()
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -319,6 +400,85 @@ def _discard_generation_if_active(vad_state: WebSocketVADState, generation_id: s
         vad_state.invalidate_current_generation()
 
 
+def _interrupted_metadata(snapshot: InterruptedGenerationSnapshot) -> dict[str, Any]:
+    return {
+        "generation_id": snapshot.generation_id,
+        "interrupted": True,
+        "interrupt_reason": snapshot.reason,
+    }
+
+
+async def _persist_interrupted_generation(
+    snapshot: InterruptedGenerationSnapshot,
+    *,
+    service_context: Any | None,
+    storage: Any | None,
+    user_id: str | None,
+) -> None:
+    """Persist an interrupted partial reply for display and memory audit."""
+
+    if user_id is None:
+        return
+
+    metadata = _interrupted_metadata(snapshot)
+    if storage is not None:
+        try:
+            await storage.append_message_for_user(
+                user_id,
+                snapshot.chat_id,
+                "human",
+                snapshot.user_text,
+                name=user_id,
+            )
+            await storage.append_message_for_user(
+                user_id,
+                snapshot.chat_id,
+                "ai",
+                snapshot.partial_reply,
+                name=snapshot.character_id,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist interrupted chat message | chat_id={} | "
+                "generation_id={} | error={!r}",
+                snapshot.chat_id,
+                snapshot.generation_id,
+                exc,
+            )
+
+    if service_context is None:
+        return
+
+    try:
+        agent = service_context.get_or_create_agent(
+            snapshot.character_id,
+            user_id,
+            snapshot.chat_id,
+        )
+        ai_name = snapshot.character_id
+        persona_name = getattr(getattr(agent, "persona", None), "name", None)
+        if isinstance(persona_name, str) and persona_name.strip():
+            ai_name = persona_name
+        await agent.memory_manager.on_round_complete(
+            {"role": "human", "content": snapshot.user_text, "name": user_id},
+            {
+                "role": "ai",
+                "content": snapshot.partial_reply,
+                "name": ai_name,
+                **metadata,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist interrupted memory history | chat_id={} | "
+            "generation_id={} | error={!r}",
+            snapshot.chat_id,
+            snapshot.generation_id,
+            exc,
+        )
+
+
 async def _handle_text_input(
     websocket: WebSocket,
     message: dict[str, Any],
@@ -395,6 +555,13 @@ async def _handle_text_input(
         _discard_generation_if_active(vad_state, generation_id)
         return
 
+    vad_state.set_generation_context(
+        generation_id,
+        chat_id=str(chat_id),
+        character_id=str(character_id),
+        user_text=str(text),
+    )
+
     # Get or create ChatAgent for this character/user/chat.
     # 获取或创建此 character/user/chat 的 ChatAgent。
     try:
@@ -439,6 +606,7 @@ async def _handle_text_input(
                     },
                 },
             )
+            vad_state.append_generation_reply(generation_id, chunk)
 
         if not vad_state.is_generation_active(generation_id):
             logger.info(
@@ -488,6 +656,7 @@ async def _handle_text_input(
                 },
             },
         )
+        vad_state.complete_generation(generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
 
@@ -579,6 +748,7 @@ async def _handle_audio_chunk(
     )
     if event.type is VADEventType.SPEECH_START and not vad_state.interrupt_sent:
         vad_state.interrupt_sent = True
+        interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
         stale_generation_id = vad_state.invalidate_current_generation()
         if stale_generation_id is not None:
             logger.info(
@@ -593,7 +763,16 @@ async def _handle_audio_chunk(
             chat_id=str(chat_id),
             character_id=str(character_id),
             reason="speech_start",
+            generation_id=stale_generation_id,
         )
+        if interrupted_snapshot is not None:
+            await _persist_interrupted_generation(
+                interrupted_snapshot,
+                service_context=service_context,
+                storage=storage,
+                user_id=user_id,
+            )
+            await _send_chat_interrupted(websocket, interrupted_snapshot)
     if event.type is VADEventType.SPEECH_END and speech_audio is not None:
         asr_result = await _handle_speech_end_asr(
             websocket,
@@ -947,17 +1126,44 @@ async def _send_interrupt(
     chat_id: str,
     character_id: str,
     reason: str,
+    generation_id: str | None = None,
 ) -> None:
     """Send a control:interrupt message to the frontend."""
+
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "character_id": character_id,
+        "reason": reason,
+    }
+    if generation_id is not None:
+        data["generation_id"] = generation_id
 
     await _send_json(
         websocket,
         {
             "type": "control:interrupt",
+            "data": data,
+        },
+    )
+
+
+async def _send_chat_interrupted(
+    websocket: WebSocket,
+    snapshot: InterruptedGenerationSnapshot,
+) -> None:
+    """Send an output:chat:interrupted message for a persisted partial reply."""
+
+    await _send_json(
+        websocket,
+        {
+            "type": "output:chat:interrupted",
             "data": {
-                "chat_id": chat_id,
-                "character_id": character_id,
-                "reason": reason,
+                "chat_id": snapshot.chat_id,
+                "character_id": snapshot.character_id,
+                "generation_id": snapshot.generation_id,
+                "partial_reply": snapshot.partial_reply,
+                "interrupted": True,
+                "reason": snapshot.reason,
             },
         },
     )
