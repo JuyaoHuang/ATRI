@@ -785,3 +785,301 @@ M5 将处理：
 2. `chat_history` 如何保存 `interrupted=true`。
 3. 记忆系统如何跳过 interrupted AI 消息。
 4. 旧 generation 的 REST TTS 请求返回后如何丢弃结果。
+
+## 2026-06-19: M5 打断语义与副作用治理完成
+
+### 1. 背景与目标
+
+M4 已经能在 `speech_start` 时取消旧 LLM task，并用 `generation_id` 阻止旧输出继续进入正常完成路径。但 M4 只解决“旧任务如何停下”和“新语音如何接管”，没有定义旧回复已经输出到一半时该如何处理。
+
+M5 的目标是让“被打断”成为一等语义：
+
+1. 已经发送给前端的旧 LLM 文本要能作为半截回复保留下来。
+2. 半截回复要能展示给用户，并明确标记为被 VAD 打断。
+3. 半截回复要进入 `chat_history` 审计归档，方便回看和排查。
+4. 半截回复不能作为正常完成的 AI 回复进入短期记忆有效轮次。
+5. 旧 generation 的 TTS 播放结果返回后不能继续播放。
+
+### 2. 方案与决策
+
+#### 考虑过的方案
+
+| 方案 | 优点 | 缺点 |
+| --- | --- | --- |
+| 打断后直接丢弃半截 AI 回复 | 实现最简单 | 用户看不到刚才被打断的上下文，也不利于审计 |
+| 使用前端已展示文本作为 `partial_reply` | 更接近 OLV 的 `heard_response` 思路 | 第一版需要新增前端回传协议，链路更复杂 |
+| 使用后端已发送 chunk 累积值作为 `partial_reply` | 后端可控，不需要新增前端回传 | 只能代表“已发送到前端”，不等同于“用户已听完” |
+
+#### 决策理由
+
+M5 第一版采用“后端已发送 chunk 累积值”作为 `partial_reply` 的唯一来源。后端只有在 chunk 已经通过 WebSocket 发给前端后，才把它记录到当前 generation 的 partial buffer。
+
+这保证了 `output:chat:interrupted` 的内容不会包含尚未对前端可见的模型输出。它也避免了 M5 引入 OLV 式 `heard_response` 回传，把句子级 TTS 和播放确认留到 M7 再讨论。
+
+`interrupted=true` 的 AI 回复采用双层处理：
+
+1. 写入前端展示历史和 `chat_history` session 归档。
+2. 不进入 `short_term_memory.recent_messages`，不增加有效轮次，不触发记忆压缩。
+
+### 3. 改动详情
+
+#### 3.1 核心变更
+
+1. 扩展 WebSocket 生成状态。
+   - 每个连接记录当前 `generation_id`、`chat_id`、`character_id` 和用户原始输入。
+   - 每个连接累积已经发送给前端的 LLM chunk。
+   - 正常 complete 或 generation 失效时释放 partial buffer。
+
+2. 增加 `output:chat:interrupted`。
+   - VAD 触发 `speech_start` 后，后端先让旧 generation 失效。
+   - 如果旧 generation 已经发送过文本，后端生成 interrupted snapshot。
+   - 后端发送 `output:chat:interrupted`，携带 `partial_reply`、`generation_id` 和 `reason`。
+
+3. 持久化 interrupted 元数据。
+   - 前端展示历史写入 `generation_id`、`interrupted=true`、`interrupt_reason=vad_speech_start`。
+   - `chat_history` session 归档写入同样的 metadata。
+   - storage 层只允许白名单元数据：`generation_id`、`interrupted`、`interrupt_reason`。
+
+4. 调整记忆系统策略。
+   - `interrupted=true` 的 AI 消息不视为有效轮次。
+   - `short_term_memory.recent_messages` 不记录该半截 AI 回复。
+   - `total_rounds` 不因 interrupted 回复增加。
+   - `append_turn()` 仍会把该消息写入 `chat_history`，用于审计。
+
+5. 调整前端 streaming 状态。
+   - 前端识别 `output:chat:interrupted`。
+   - 当前 streaming 回复结束为 interrupted 消息。
+   - 历史加载时保留 `generation_id`、`interrupted` 和 `interrupt_reason` 字段。
+   - 消息列表对 interrupted 回复显示打断标记。
+
+6. 调整 TTS 副作用处理。
+   - 前端 audio player 记录 active generation。
+   - 收到 `control:interrupt` 或 `output:chat:interrupted` 后，使旧 generation 失效。
+   - 旧 generation 的 REST TTS 请求即使稍后返回，也不会继续入队播放。
+
+#### 3.2 协议 / 数据结构变更
+
+新增服务端到前端消息：
+
+```json
+{
+  "type": "output:chat:interrupted",
+  "data": {
+    "chat_id": "chat id",
+    "character_id": "atri",
+    "generation_id": "old generation id",
+    "partial_reply": "已经发送给前端的半截回复",
+    "interrupted": true,
+    "reason": "vad_speech_start"
+  }
+}
+```
+
+展示历史中的 AI 消息新增可选字段：
+
+```json
+{
+  "role": "ai",
+  "content": "半截回复",
+  "name": "atri",
+  "generation_id": "old generation id",
+  "interrupted": true,
+  "interrupt_reason": "vad_speech_start"
+}
+```
+
+#### 3.3 文件清单
+
+主仓库：
+
+- `src/routes/chat_ws.py`
+  - 增加 interrupted snapshot、partial reply 累积、`output:chat:interrupted` 发送和旧 generation 副作用丢弃。
+- `src/routes/chats.py`
+  - 聊天历史响应模型暴露 interrupted metadata。
+- `src/storage/interface.py`
+  - 为 append message 接口增加 metadata 参数。
+- `src/storage/json_storage.py`
+  - 持久化允许的 interrupted metadata。
+- `src/storage/db_storage.py`
+  - 同步数据库占位实现的接口签名。
+- `src/memory/chat_history.py`
+  - `append_ai()` 支持写入 `generation_id`、`interrupted` 和 `interrupt_reason`。
+- `src/memory/manager.py`
+  - interrupted AI 消息只做审计归档，不进入有效轮次。
+- `tests/routes/test_chat_ws.py`
+  - 覆盖 speech_start 打断、partial reply 持久化和 interrupted 事件。
+- `tests/storage/test_json_storage.py`
+  - 覆盖 metadata 白名单持久化。
+- `tests/memory/test_manager.py`
+  - 覆盖 interrupted 回复不进入 short-term memory。
+
+前端子模块：
+
+- `frontend/src/utils/websocket.ts`
+  - 分发 `output:chat:interrupted`。
+- `frontend/src/composables/useWebSocket.ts`
+  - 消费 interrupted 事件并更新聊天状态。
+- `frontend/src/stores/chat.ts`
+  - 支持 interrupted streaming 收尾。
+- `frontend/src/composables/useAudioPlayer.ts`
+  - 按 `generation_id` 丢弃旧 TTS 结果。
+- `frontend/src/components/chat/MessageItem.vue`
+  - 展示 interrupted 回复标记。
+- `frontend/src/api/types.ts`、`frontend/src/types/message.ts`、`frontend/src/composables/useChat.ts`
+  - 补齐 interrupted metadata 类型和历史加载映射。
+
+### 4. 验证
+
+#### 终端 WebSocket 抓包
+
+使用专用测试 chat 进行端到端抓包，不依赖浏览器 DevTools：
+
+```text
+chat_id=20260618_c2f738e7
+```
+
+测试流程：
+
+1. 终端 WebSocket 连接 `ws://localhost:8430/ws`。
+2. 发送第一轮 `input:text`，让 LLM 开始流式输出。
+3. 收到若干 `output:chat:chunk` 后，发送真实 `zh.wav` 音频 chunk。
+4. 等待 Silero VAD 检测到 `speech_start`。
+5. 捕获 `control:interrupt` 和 `output:chat:interrupted`。
+6. 再发送第二轮 `input:text`。
+7. 等待第二轮正常 `output:chat:complete`。
+
+抓包摘要：
+
+```text
+first_generation_id=1e8c9519dc0846a09068cebae2a12a53
+first_chunk_count=6
+audio_chunks_sent=11
+listen_states=['silence', 'silence', 'silence', 'silence', 'silence', 'silence', 'silence', 'silence', 'silence', 'silence', 'speech_start', 'speech_end']
+interrupt_seen=True
+chat_interrupted_seen=True
+first_complete=False
+stale_after_interrupt_count=0
+second_generation_id=466ccc08c2674590aa2df438af0638dc
+second_chunk_count=57
+second_complete=True
+```
+
+关键抓包结果：
+
+```text
+control:listen-state state=speech_start
+control:interrupt gen=1e8c9519dc0846a09068cebae2a12a53 reason=speech_start
+output:chat:interrupted gen=1e8c9519dc0846a09068cebae2a12a53 reason=vad_speech_start partial=主人！亚托莉看到了
+```
+
+验收结论：
+
+1. 第一轮 LLM 文本已开始流式输出。
+2. VAD `speech_start` 能打断正在输出的 LLM generation。
+3. 旧 generation 没有继续发送 `output:chat:complete`。
+4. 打断后没有旧 generation 的 chunk 泄漏。
+5. 第二轮新 generation 可以继续流式输出并正常 complete。
+
+#### 数据落盘验证
+
+前端展示历史中可以看到 interrupted metadata：
+
+```text
+data/chats/default/atri/sessions/20260617_9f2b0f00.json
+```
+
+关键字段：
+
+```json
+{
+  "generation_id": "136af20c3b604a31923b4b735da7fc0b",
+  "interrupted": true,
+  "interrupt_reason": "vad_speech_start"
+}
+```
+
+`chat_history` session 归档也保留同一条 interrupted AI 回复：
+
+```text
+data/characters/default/atri/chats/20260617_9f2b0f00/sessions/2026-06-18_f6cc0e36.json
+```
+
+`short_term_memory.json` 的 `recent_messages` 不包含这条 half reply，符合“可展示、可审计、不参与记忆压缩”的 M5 决策。
+
+#### 测试结果
+
+```bash
+uv run pytest tests/routes/test_chat_ws.py tests/storage/test_json_storage.py tests/memory/test_manager.py -q
+```
+
+```text
+122 passed
+```
+
+#### 代码检查
+
+```bash
+uv run python -m mypy src/ --ignore-missing-imports
+uv run ruff check src/memory/chat_history.py src/memory/manager.py src/routes/chat_ws.py src/routes/chats.py src/storage/db_storage.py src/storage/interface.py src/storage/json_storage.py tests/memory/test_manager.py tests/routes/test_chat_ws.py tests/storage/test_json_storage.py
+```
+
+结果：通过。
+
+前端验证：
+
+```bash
+npm run type-check
+npm run lint
+npm run build
+```
+
+结果：
+
+```text
+type-check: passed
+lint: 0 errors, 2 existing warnings
+build: passed
+```
+
+既有 lint warning：
+
+```text
+src/components/airi-ui/TransitionVertical.vue
+  74:14  warning  Unexpected any. Specify a different type
+  75:13  warning  Unexpected any. Specify a different type
+```
+
+### 5. Git 记录
+
+主仓库：
+
+```text
+337dc8b feat(M5): 完成 VAD 打断语义治理
+```
+
+前端子模块：
+
+```text
+f9004b9 feat(M5): 完成前端打断状态处理
+```
+
+本次提交未纳入以下本地内容：
+
+```text
+config/asr_config.yaml
+docs/developments/wiki/Storage/
+```
+
+`config/asr_config.yaml` 是当前 ASR provider 的本地运行配置；`docs/developments/wiki/Storage/` 是未整理 Storage 草稿目录。
+
+### 6. 后续
+
+M5 的主要开发和联调已完成。下一步进入 M6：配置、测试与文档补齐。
+
+M6 需要重点处理：
+
+1. 补齐 VAD/ASR/WS 协议相关测试说明。
+2. 在对应测试目录补充或更新 `test-exe.md`。
+3. 整理配置文档，明确 `web_speech_api`、`sherpa_onnx_asr`、`silero_vad` 的适用边界。
+4. 更新 VAD wiki 中的最终验收标准。
+5. 检查是否需要保留终端 WS 抓包脚本为临时验收工具，或只记录命令与结果。
