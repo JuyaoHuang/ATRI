@@ -350,14 +350,122 @@ async def _handle_ping(websocket: WebSocket) -> None:
 async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
     """Serialize WebSocket writes for concurrent chat and control tasks."""
 
-    websocket_state = getattr(websocket, "state", None)
-    send_lock = getattr(websocket_state, "send_lock", None)
+    send_lock = _get_send_lock(websocket)
     if send_lock is None:
         await websocket.send_json(message)
         return
 
     async with send_lock:
         await websocket.send_json(message)
+
+
+def _get_send_lock(websocket: Any) -> Any | None:
+    """Return the per-connection send lock when the websocket provides one."""
+
+    websocket_state = getattr(websocket, "state", None)
+    return getattr(websocket_state, "send_lock", None)
+
+
+async def _send_generation_chunk(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+    message: dict[str, Any],
+    chunk: str,
+) -> bool:
+    """Send a chunk only if its generation is still active at send time."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        vad_state.append_generation_reply(generation_id, chunk)
+        return True
+
+    async with send_lock:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        vad_state.append_generation_reply(generation_id, chunk)
+        return True
+
+
+async def _send_generation_complete(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+    message: dict[str, Any],
+) -> bool:
+    """Send a completion only if its generation is still active."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
+
+    async with send_lock:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
+
+
+async def _send_speech_start_interrupt(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    *,
+    chat_id: str,
+    character_id: str,
+) -> tuple[InterruptedGenerationSnapshot | None, str | None, bool]:
+    """Atomically invalidate the active generation and send interrupt control."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        return await _send_speech_start_interrupt_unlocked(
+            websocket,
+            vad_state,
+            chat_id=chat_id,
+            character_id=character_id,
+        )
+
+    async with send_lock:
+        return await _send_speech_start_interrupt_unlocked(
+            websocket,
+            vad_state,
+            chat_id=chat_id,
+            character_id=character_id,
+        )
+
+
+async def _send_speech_start_interrupt_unlocked(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    *,
+    chat_id: str,
+    character_id: str,
+) -> tuple[InterruptedGenerationSnapshot | None, str | None, bool]:
+    interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
+    stale_generation_id = vad_state.invalidate_current_generation()
+    cancelled = vad_state.cancel_current_chat_task()
+
+    data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "character_id": character_id,
+        "reason": "speech_start",
+    }
+    if stale_generation_id is not None:
+        data["generation_id"] = stale_generation_id
+
+    await websocket.send_json(
+        {
+            "type": "control:interrupt",
+            "data": data,
+        }
+    )
+    return interrupted_snapshot, stale_generation_id, cancelled
 
 
 def _start_tracked_chat_task(
@@ -582,7 +690,9 @@ async def _handle_text_input(
     chunks = []
     try:
         chat_stream = (
-            agent.chat(text, runtime_context=client_context) if client_context else agent.chat(text)
+            agent.chat(text, runtime_context=client_context, commit_round=False)
+            if client_context
+            else agent.chat(text, commit_round=False)
         )
         async for chunk in chat_stream:
             if not vad_state.is_generation_active(generation_id):
@@ -595,8 +705,10 @@ async def _handle_text_input(
             chunks.append(chunk)
             # Send chunk to client
             # 发送 chunk 给客户端
-            await _send_json(
+            sent = await _send_generation_chunk(
                 websocket,
+                vad_state,
+                generation_id,
                 {
                     "type": "output:chat:chunk",
                     "data": {
@@ -606,8 +718,15 @@ async def _handle_text_input(
                         "generation_id": generation_id,
                     },
                 },
+                chunk,
             )
-            vad_state.append_generation_reply(generation_id, chunk)
+            if not sent:
+                logger.info(
+                    "Discarding stale chat chunk before send | chat_id={} | generation_id={}",
+                    chat_id,
+                    generation_id,
+                )
+                return
 
         if not vad_state.is_generation_active(generation_id):
             logger.info(
@@ -628,6 +747,14 @@ async def _handle_text_input(
         try:
             logger.debug(f"Starting message persistence | chat_id={chat_id}")
             await storage.append_message_for_user(user_id, chat_id, "human", text, name=user_id)
+            if not vad_state.is_generation_active(generation_id):
+                logger.info(
+                    "Discarding stale chat completion after human persistence | "
+                    "chat_id={} | generation_id={}",
+                    chat_id,
+                    generation_id,
+                )
+                return
             await storage.append_message_for_user(
                 user_id,
                 chat_id,
@@ -635,6 +762,14 @@ async def _handle_text_input(
                 full_reply,
                 name=character_id,
             )
+            if not vad_state.is_generation_active(generation_id):
+                logger.info(
+                    "Discarding stale chat completion after ai persistence | "
+                    "chat_id={} | generation_id={}",
+                    chat_id,
+                    generation_id,
+                )
+                return
             logger.debug(f"Messages persisted | chat_id={chat_id}")
         except ValueError as e:
             # Chat not found (client may have deleted it)
@@ -643,10 +778,29 @@ async def _handle_text_input(
         except Exception as e:
             logger.error(f"Unexpected error persisting messages: {e}")
 
+        ai_name = character_id
+        persona_name = getattr(getattr(agent, "persona", None), "name", None)
+        if isinstance(persona_name, str) and persona_name.strip():
+            ai_name = persona_name
+        await agent.memory_manager.on_round_complete(
+            {"role": "human", "content": str(text), "name": user_id},
+            {"role": "ai", "content": full_reply, "name": ai_name},
+        )
+        if not vad_state.is_generation_active(generation_id):
+            logger.info(
+                "Discarding stale chat completion after memory commit | "
+                "chat_id={} | generation_id={}",
+                chat_id,
+                generation_id,
+            )
+            return
+
         # Now send complete event
         # 现在发送完成事件
-        await _send_json(
+        sent = await _send_generation_complete(
             websocket,
+            vad_state,
+            generation_id,
             {
                 "type": "output:chat:complete",
                 "data": {
@@ -657,6 +811,13 @@ async def _handle_text_input(
                 },
             },
         )
+        if not sent:
+            logger.info(
+                "Discarding stale chat completion before send | chat_id={} | generation_id={}",
+                chat_id,
+                generation_id,
+            )
+            return
         vad_state.complete_generation(generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
@@ -773,23 +934,24 @@ async def _handle_audio_chunk(
     )
     if event.type is VADEventType.SPEECH_START and not vad_state.interrupt_sent:
         vad_state.interrupt_sent = True
-        interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
-        stale_generation_id = vad_state.invalidate_current_generation()
+        (
+            interrupted_snapshot,
+            stale_generation_id,
+            cancelled_chat_task,
+        ) = await _send_speech_start_interrupt(
+            websocket,
+            vad_state,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+        )
         if stale_generation_id is not None:
             logger.info(
                 "Invalidated chat generation on speech_start | chat_id={} | generation_id={}",
                 chat_id,
                 stale_generation_id,
             )
-        if vad_state.cancel_current_chat_task():
+        if cancelled_chat_task:
             logger.info("Cancelled chat task on speech_start | chat_id={}", chat_id)
-        await _send_interrupt(
-            websocket,
-            chat_id=str(chat_id),
-            character_id=str(character_id),
-            reason="speech_start",
-            generation_id=stale_generation_id,
-        )
         if interrupted_snapshot is not None:
             await _persist_interrupted_generation(
                 interrupted_snapshot,
@@ -1194,33 +1356,6 @@ async def _send_listen_error(
     if isinstance(seq, int) and not isinstance(seq, bool):
         data["seq"] = seq
     await _send_json(websocket, {"type": "control:listen-state", "data": data})
-
-
-async def _send_interrupt(
-    websocket: WebSocket,
-    *,
-    chat_id: str,
-    character_id: str,
-    reason: str,
-    generation_id: str | None = None,
-) -> None:
-    """Send a control:interrupt message to the frontend."""
-
-    data: dict[str, Any] = {
-        "chat_id": chat_id,
-        "character_id": character_id,
-        "reason": reason,
-    }
-    if generation_id is not None:
-        data["generation_id"] = generation_id
-
-    await _send_json(
-        websocket,
-        {
-            "type": "control:interrupt",
-            "data": data,
-        },
-    )
 
 
 async def _send_chat_interrupted(

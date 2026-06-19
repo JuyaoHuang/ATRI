@@ -20,6 +20,7 @@ from src.routes.chat_ws import (
     _handle_speech_end_asr,
     _handle_text_input,
     _send_asr_transcript,
+    _send_generation_chunk,
     _send_json,
     _start_tracked_chat_task,
 )
@@ -65,6 +66,7 @@ def mock_config() -> dict:
 @pytest.fixture
 def mock_service_context() -> tuple[MagicMock, MagicMock]:
     mock_agent = MagicMock()
+    mock_agent.memory_manager.on_round_complete = AsyncMock()
     mock_context = MagicMock()
     mock_context.get_or_create_agent.return_value = mock_agent
     return mock_context, mock_agent
@@ -307,6 +309,72 @@ async def test_send_json_uses_connection_send_lock() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generation_chunk_rechecks_after_waiting_for_send_lock() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-old"
+    vad_state.activate_generation(generation_id)
+    message = {
+        "type": "output:chat:chunk",
+        "data": {
+            "chunk": "旧回复",
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "generation_id": generation_id,
+        },
+    }
+
+    async with websocket.state.send_lock:
+        send_task = asyncio.create_task(
+            _send_generation_chunk(
+                websocket,
+                vad_state,
+                generation_id,
+                message,
+                "旧回复",
+            )
+        )
+        await asyncio.sleep(0)
+        vad_state.invalidate_current_generation()
+        assert websocket.messages == []
+
+    sent = await send_task
+
+    assert sent is False
+    assert websocket.messages == []
+    assert vad_state.current_generation_reply_chunks == []
+
+
+@pytest.mark.asyncio
+async def test_generation_chunk_records_partial_when_sent() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-active"
+    vad_state.activate_generation(generation_id)
+    message = {
+        "type": "output:chat:chunk",
+        "data": {
+            "chunk": "可见回复",
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "generation_id": generation_id,
+        },
+    }
+
+    sent = await _send_generation_chunk(
+        websocket,
+        vad_state,
+        generation_id,
+        message,
+        "可见回复",
+    )
+
+    assert sent is True
+    assert websocket.messages == [message]
+    assert vad_state.current_generation_reply_chunks == ["可见回复"]
+
+
+@pytest.mark.asyncio
 async def test_send_asr_transcript_uses_reserved_protocol() -> None:
     websocket = CapturingWebSocket()
 
@@ -396,7 +464,7 @@ async def test_stale_chat_generation_does_not_complete_or_persist(
         yield "旧回复"
         vad_state.invalidate_current_generation()
 
-    mock_agent.chat = MagicMock(side_effect=lambda text: stream_then_invalidate())
+    mock_agent.chat = MagicMock(side_effect=lambda text, **_kwargs: stream_then_invalidate())
 
     await _handle_text_input(
         websocket,
@@ -427,6 +495,7 @@ async def test_stale_chat_generation_does_not_complete_or_persist(
         }
     ]
     mock_storage.append_message_for_user.assert_not_called()
+    mock_agent.memory_manager.on_round_complete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -779,7 +848,7 @@ async def test_audio_speech_end_auto_starts_chat_with_asr_generation(
     mock_storage: AsyncMock,
 ) -> None:
     mock_context, mock_agent = mock_service_context
-    mock_agent.chat = MagicMock(side_effect=lambda text: _mock_chat_stream(["收到"]))
+    mock_agent.chat = MagicMock(side_effect=lambda text, **_kwargs: _mock_chat_stream(["收到"]))
     vad_service = VADService(
         VADConfigStore(
             _vad_enabled_config({})["vad"],
@@ -824,7 +893,11 @@ async def test_audio_speech_end_auto_starts_chat_with_asr_generation(
     assert chunk["data"]["generation_id"] == generation_id
     assert complete["data"]["full_reply"] == "收到"
     assert complete["data"]["generation_id"] == generation_id
-    mock_agent.chat.assert_called_once_with("你好")
+    mock_agent.chat.assert_called_once_with("你好", commit_round=False)
+    mock_agent.memory_manager.on_round_complete.assert_awaited_once_with(
+        {"role": "human", "content": "你好", "name": "default"},
+        {"role": "ai", "content": "收到", "name": "atri"},
+    )
     mock_storage.append_message_for_user.assert_any_call(
         "default", "test_chat_123", "human", "你好", name="default"
     )
@@ -841,7 +914,7 @@ async def test_websocket_text_input_streaming(
 ) -> None:
     mock_context, mock_agent = mock_service_context
     chunks = ["你好", "，", "主人", "！"]
-    mock_agent.chat = MagicMock(side_effect=lambda text: _mock_chat_stream(chunks))
+    mock_agent.chat = MagicMock(side_effect=lambda text, **_kwargs: _mock_chat_stream(chunks))
     app = _make_app(mock_config, mock_context, mock_storage)
 
     client = TestClient(app)
@@ -881,6 +954,10 @@ async def test_websocket_text_input_streaming(
     mock_storage.append_message_for_user.assert_any_call(
         "default", "test_chat_123", "ai", "你好，主人！", name="atri"
     )
+    mock_agent.memory_manager.on_round_complete.assert_awaited_once_with(
+        {"role": "human", "content": "你好", "name": "default"},
+        {"role": "ai", "content": "你好，主人！", "name": "atri"},
+    )
 
 
 @pytest.mark.asyncio
@@ -890,7 +967,9 @@ async def test_websocket_handles_audio_while_chat_task_runs(
     mock_storage: AsyncMock,
 ) -> None:
     mock_context, mock_agent = mock_service_context
-    mock_agent.chat = MagicMock(side_effect=lambda text: _mock_delayed_chat_stream(["稍后"], 0.2))
+    mock_agent.chat = MagicMock(
+        side_effect=lambda text, **_kwargs: _mock_delayed_chat_stream(["稍后"], 0.2)
+    )
     app = _make_app(mock_config, mock_context, mock_storage)
 
     client = TestClient(app)

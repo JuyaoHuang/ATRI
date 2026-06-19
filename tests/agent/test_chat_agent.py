@@ -229,6 +229,18 @@ async def test_on_round_complete_not_called_before_stream_exhausts() -> None:
     assert agent.memory_manager.on_round_complete.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_chat_can_skip_automatic_round_commit() -> None:
+    """WebSocket VAD paths commit only after generation guards pass."""
+
+    agent = ChatAgent(_make_llm(["safe"]), _make_mgr(), _persona())
+
+    received = [chunk async for chunk in agent.chat("hi", commit_round=False)]
+
+    assert received == ["safe"]
+    agent.memory_manager.on_round_complete.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # chat_collect() non-streaming interface
 # chat_collect() 非流式接口
@@ -262,6 +274,16 @@ async def test_chat_collect_commits_round_exactly_once() -> None:
     await agent.chat_collect("hi")
 
     assert agent.memory_manager.on_round_complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_collect_can_skip_automatic_round_commit() -> None:
+    agent = ChatAgent(_make_llm(["ok"]), _make_mgr(), _persona())
+
+    result = await agent.chat_collect("hi", commit_round=False)
+
+    assert result == "ok"
+    agent.memory_manager.on_round_complete.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
