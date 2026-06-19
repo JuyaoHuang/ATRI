@@ -1248,3 +1248,219 @@ M6 后续如果继续推进，优先做两件事：
 6. 配置、使用说明和 README 文档入口。
 
 TTS 流式化后续单独推进，建议分支名为 `feat/tts-streaming` 或 `feat/tts-websocket-streaming`。
+
+## 2026-06-19: VAD 实时打断状态归属与竞态治理
+
+### 1. 背景与目标
+
+M0-M6 完成后，VAD 第一版已经可以从 `speech_start` 打断当前 LLM/TTS，并在 `speech_end` 后通过 ASR 自动接回聊天流程。后续 review 重点不再是新增主链路，而是检查实时打断在多会话、多角色、页面切换和异步 WebSocket 事件下是否会误写当前 UI。
+
+本次治理的目标：
+
+1. 让前端明确知道“当前正在处理的是哪一次 LLM generation”。
+2. 避免旧 WebSocket 连接、旧聊天、旧角色的 chunk/complete/error 影响当前页面。
+3. 区分“连接忙”和“当前聊天正在流式输出”，避免用 `currentChatId` 代替 streaming 身份。
+4. 让 VAD interrupt 能打断正在播放或即将入队的 TTS，但不把延迟到达的 interrupted 事件误判为新的播放级打断。
+5. 让后端普通 AI 历史也持久化 `generation_id`，为前端历史播放和后续追踪提供一致元数据。
+
+### 2. 问题分析
+
+#### 2.1 前端 streaming 身份不完整
+
+原实现主要依赖 `currentChatId` 和全局 `isStreaming` 判断流式状态。这个模型在单会话顺序聊天中可用，但在以下场景中不够精确：
+
+1. 用户发起 A 会话请求后切到 B 会话，A 的 chunk/complete 后到达。
+2. 用户切换角色后，旧角色的 WebSocket 事件仍然到达。
+3. VAD 打断后，`chat:interrupted` 和 `chat:complete` 的到达顺序不稳定。
+4. `chat:error` 没有明确归属时，直接把全局 streaming 置空，会影响当前正在进行的另一轮请求。
+
+核心问题不是 `currentChatId` 本身错误，而是它只能表示“当前页面正在看哪个 chat”，不能表示“当前 WebSocket 流属于哪个 chat、character 和 generation”。
+
+#### 2.2 WebSocket manager 可重复连接
+
+前端可能创建多个 `WebSocketManager`。旧 manager 的回调如果没有隔离，仍可能更新 store。原来的离线消息队列还会在重连后重放旧消息，这对实时语音场景不合适，因为麦克风音频 chunk 和聊天请求都有时效性。
+
+#### 2.3 实时麦克风启动存在异步竞态
+
+`start()` 中包含麦克风授权、AudioContext、processor 创建等异步步骤。用户如果在启动过程中切换会话、切换角色或停止实时语音，晚到的初始化结果可能重新占用音频资源。
+
+#### 2.4 TTS 手动播放与 VAD 打断边界
+
+历史消息可能没有 `generation_id`，尤其是旧数据或用户点击历史 AI 消息播放。对于这种 generationless 播放，不能通过 generation tombstone 精确阻止晚到的播放结果。因此需要一个播放级别的 VAD interrupt epoch。
+
+这里的“手动 TTS”不是新增一条后端合成链路，而是指前端用户主动点击某条消息播放。当前 MVP 仍然保留 REST TTS，没有引入 TTS WebSocket 流式化。
+
+#### 2.5 后端错误和历史元数据不完整
+
+后端已为 generation 创建、打断和 interrupted 历史提供 `generation_id`。但普通 AI 完整回复写入历史时缺少 `metadata.generation_id`，导致未来从历史加载的 AI 消息无法稳定对应原 generation。
+
+另外，LLM generation 错误和 ASR 自动接管时的 “Chat task already running” 错误如果不带 `generation_id`，前端只能做宽泛处理。
+
+### 3. 方案与决策
+
+#### 3.1 引入 active stream 身份
+
+前端 `chat` store 新增 `activeStream`：
+
+```ts
+{
+  chatId: string
+  characterId: string
+  generationId: string | null
+  status: 'pending' | 'streaming' | 'interrupted'
+}
+```
+
+同时新增 `pendingInterruptedStream`，用于承接 `control:interrupt` 先到、`chat:interrupted` 后到的情况。
+
+处理规则：
+
+1. 发起 ASR 自动聊天或文本聊天时开始跟踪 active stream。
+2. 首个权威事件携带 `generation_id` 时绑定 generation。
+3. 后续 `chat:chunk`、`chat:complete`、`chat:interrupted`、`chat:error` 必须匹配 active stream 才能改变状态。
+4. 只有当前可见 chat 和当前角色匹配时，才更新消息列表、Live2D 表情和自动 TTS。
+
+#### 3.2 拆分 connectionBusy 和 isCurrentChatStreaming
+
+前端不再把一个全局 `isStreaming` 同时用于连接忙碌和当前页面展示。
+
+当前语义：
+
+1. `connectionBusy`：WebSocket 连接上是否存在一轮 active stream，用于锁发送入口。
+2. `isCurrentChatStreaming`：active stream 是否属于当前正在看的 chat，用于当前页面展示流式文本。
+
+这样可以表达“连接仍在处理 A 会话，但用户当前正在看 B 会话”的状态。
+
+#### 3.3 WebSocket manager 幂等化
+
+`useWebSocket.connect()` 现在会复用相同 URL 下仍可用的 manager。新建 manager 前会销毁旧 manager，并通过 `isCurrentManager()` 隔离旧连接回调。
+
+`WebSocketManager` 同步调整：
+
+1. `connect()` 对 OPEN/CONNECTING 状态幂等。
+2. `disconnect()` 禁用自动重连。
+3. `destroy()` 清理连接、timer 和 listeners。
+4. 移除离线消息队列，不再重放过期消息。
+5. socket 回调先检查当前 socket 实例，避免旧 socket 关闭或消息事件污染新连接。
+
+#### 3.4 loadHistory 竞态按当前 chat 判断
+
+本次选择最小方案：`loadHistory(chatId)` await 返回后只检查 `chatStore.currentChatId === chatId`。
+
+如果用户已经切到其他会话，旧请求结果直接丢弃。这里不引入 request token，因为当前问题只需要防止旧历史覆盖当前页面，不需要取消请求或合并多次历史加载结果。
+
+#### 3.5 chat:error 只处理匹配中的 active stream
+
+前端 `chat:error` 仍会更新 WebSocket error 展示，但不再无条件结束当前 streaming。
+
+新的处理方式：
+
+1. 后端尽量携带 `chat_id` 和 `generation_id`。
+2. 前端调用 `failActiveStream({ chatId, generationId })`。
+3. 只有错误归属匹配当前 active stream 时，才清空 active stream 和 streaming text。
+4. 无归属或归属不匹配的错误不会影响当前正在流式输出的 generation。
+
+#### 3.6 TTS interrupt 分两层处理
+
+TTS 侧保留 generation tombstone，同时新增 `vadInterruptEpoch`：
+
+1. `control:interrupt` 代表一次真实播放级 VAD 打断，会调用 `vadInterruptPlayback()`，递增 epoch、标记 generation、停止当前播放。
+2. `chat:interrupted` 只标记对应 generation 已被打断，不递增 epoch。
+3. 自动 TTS 必须带 `generation_id`，被 tombstone 的 generation 不再入队。
+4. 手动点击历史消息播放时，如果合成期间发生新的 VAD interrupt，即使该历史消息没有 `generation_id`，也会因为 epoch 变化而放弃入队。
+
+这个方案避免了两个误判：延迟到达的 `chat:interrupted` 不会打断用户之后手动播放的历史消息；真正的 VAD `control:interrupt` 可以拦截 generationless 的晚到 TTS。
+
+#### 3.7 后端补齐 generation_id
+
+后端普通 AI 完整回复写入历史时增加：
+
+```python
+metadata={"generation_id": generation_id}
+```
+
+同时 `_send_error()` 支持可选 `generation_id`。LLM 调用异常、聊天处理异常和 ASR 自动接管时的 “Chat task already running” 会把当前 generation 一起发给前端。
+
+### 4. 改动详情
+
+#### 4.1 前端文件
+
+- `frontend/src/stores/chat.ts`
+  - 新增 `activeStream`、`pendingInterruptedStream`。
+  - 新增 `connectionBusy`、`isCurrentChatStreaming` getter。
+  - 新增 stream 匹配、完成、打断、失败处理方法。
+- `frontend/src/composables/useWebSocket.ts`
+  - 事件按 `chat_id`、`character_id`、`generation_id` 过滤。
+  - 隐藏或 stale 事件不再触发 Live2D 和自动 TTS。
+  - `chat:error` 改为 scoped failure。
+- `frontend/src/utils/websocket.ts`
+  - manager 幂等化。
+  - 增加 `destroy()`、重连开关和旧 socket 回调隔离。
+  - 移除离线消息队列。
+- `frontend/src/composables/useAudioPlayer.ts`
+  - 新增 `vadInterruptEpoch` 和 `vadInterruptPlayback()`。
+  - 区分播放级打断和 generation tombstone。
+- `frontend/src/composables/useRealtimeVoiceInput.ts`
+  - 新增 `startRunId`，清理过期的异步启动结果。
+  - 将音频图构建绑定到本次 start。
+- `frontend/src/components/chat/RealtimeVoiceInput.vue`
+  - chat 或 character 切换时停止实时语音输入。
+- `frontend/src/components/chat/InputBox.vue`
+  - 使用 `connectionBusy` 锁发送入口。
+- `frontend/src/composables/useChat.ts`
+  - `loadHistory(chatId)` 返回后检查 `currentChatId === chatId`。
+- `frontend/src/stores/websocket.ts`
+  - 配合 manager 生命周期调整连接状态。
+
+#### 4.2 后端文件
+
+- `src/routes/chat_ws.py`
+  - 普通 AI 历史写入增加 `generation_id` metadata。
+  - `_send_error()` 增加可选 `generation_id`。
+  - generation 相关错误携带 `generation_id`。
+- `tests/routes/test_chat_ws.py`
+  - 更新普通文本输入和 ASR 自动聊天的 AI 历史断言，覆盖 `metadata.generation_id`。
+
+### 5. 验证
+
+本轮已执行以下检查：
+
+```bash
+cd frontend
+npm run type-check
+npm run build
+npm run lint
+```
+
+结果：类型检查和构建通过。lint 通过，但仍保留既有警告：
+
+```text
+frontend/src/components/airi-ui/TransitionVertical.vue:74/75 no-explicit-any
+```
+
+后端检查：
+
+```bash
+uv run pytest tests/routes/test_chat_ws.py -q
+uv run pytest tests/vad tests/routes/test_chat_ws.py tests/routes/test_asr.py -q
+uv run pytest tests/ -q
+uv run python -m mypy src/ --ignore-missing-imports
+uv run ruff format src/routes/chat_ws.py tests/routes/test_chat_ws.py --check
+uv run ruff check src/routes/chat_ws.py tests/routes/test_chat_ws.py
+```
+
+结果：
+
+1. `tests/routes/test_chat_ws.py`：32 passed。
+2. `tests/vad tests/routes/test_chat_ws.py tests/routes/test_asr.py`：68 passed。
+3. 全量 `tests/`：432 passed, 4 deselected。
+4. mypy 通过。
+5. ruff format/check 通过。
+6. `git diff --check` 和 `git -C frontend diff --check` 通过，仅出现工作区 CRLF 提示。
+
+### 6. 边界与后续
+
+1. 本次没有引入 TTS WebSocket 流式化，VAD MVP 仍保留 REST TTS。
+2. 新写入的普通 AI 历史会携带 `generation_id`；旧历史仍可能没有该字段，因此前端保留 generationless 手动播放的 epoch 兜底。
+3. `speech_start` 时没有正在跟踪的 LLM generation 不再作为严重 bug 处理。它表示当前没有可归属的 active stream，后端仍可发送 VAD interrupt，前端按播放级打断兜底。
+4. 后续如果推进 TTS 流式化，应单独建立分支和设计文档，不并入当前 VAD MVP 收尾。
