@@ -102,6 +102,8 @@ class ChatAgent:
         self,
         user_input: str,
         runtime_context: dict[str, Any] | None = None,
+        *,
+        commit_round: bool = True,
     ) -> AsyncIterator[str]:
         """Stream LLM tokens for ``user_input`` and auto-commit the round.
 
@@ -211,15 +213,18 @@ class ChatAgent:
                 reply,
             )
 
-        await self.memory_manager.on_round_complete(
-            {"role": "human", "content": user_input},
-            {"role": "ai", "content": reply, "name": self.persona.name},
-        )
+        if commit_round:
+            await self.memory_manager.on_round_complete(
+                {"role": "human", "content": user_input},
+                {"role": "ai", "content": reply, "name": self.persona.name},
+            )
 
     async def chat_collect(
         self,
         user_input: str,
         runtime_context: dict[str, Any] | None = None,
+        *,
+        commit_round: bool = True,
     ) -> str:
         """Collect :meth:`chat`'s streaming output into one string.
 
@@ -233,7 +238,14 @@ class ChatAgent:
         恰好触发一次。不走独立的 LLM 调用路径——当非流式 API 显著更廉价
         时，子类可以覆盖此方法。
         """
-        chunks = [chunk async for chunk in self.chat(user_input, runtime_context=runtime_context)]
+        chunks = [
+            chunk
+            async for chunk in self.chat(
+                user_input,
+                runtime_context=runtime_context,
+                commit_round=commit_round,
+            )
+        ]
         return "".join(chunks)
 
 
