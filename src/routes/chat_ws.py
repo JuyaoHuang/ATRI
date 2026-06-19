@@ -46,6 +46,7 @@ from src.asr.exceptions import ASRConfigError, ASRProviderUnavailableError, ASRT
 from src.auth import get_websocket_user_id
 from src.llm.exceptions import LLMError
 from src.vad import VADEvent, VADEventType, VADService, VADState
+from src.vad.exceptions import VADConfigError, VADProcessingError, VADProviderUnavailableError
 
 
 @dataclass(frozen=True)
@@ -725,7 +726,31 @@ async def _handle_audio_chunk(
         pre_buffer_ms=_get_vad_pre_buffer_ms(vad_service),
     )
 
-    event = await vad_service.process_audio(vad_state.session_id, audio_samples)
+    try:
+        event = await vad_service.process_audio(vad_state.session_id, audio_samples)
+    except (VADProviderUnavailableError, VADConfigError, VADProcessingError) as exc:
+        await _handle_vad_audio_error(
+            websocket,
+            vad_service,
+            vad_state,
+            exc,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            seq=data.get("seq"),
+        )
+        return
+    except Exception as exc:
+        logger.exception("Unexpected VAD processing error during realtime audio handling")
+        await _handle_vad_audio_error(
+            websocket,
+            vad_service,
+            vad_state,
+            exc,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            seq=data.get("seq"),
+        )
+        return
     speech_audio: list[float] | None = None
     if event.metadata.get("disabled") is True:
         vad_state.clear_pre_buffer()
@@ -796,6 +821,57 @@ async def _handle_audio_chunk(
                 text=asr_result["text"],
                 generation_id=asr_result["generation_id"],
             )
+
+
+async def _handle_vad_audio_error(
+    websocket: WebSocket,
+    vad_service: VADService,
+    vad_state: WebSocketVADState,
+    error: Exception,
+    *,
+    chat_id: str,
+    character_id: str,
+    seq: Any | None = None,
+) -> None:
+    """Report VAD processing errors without closing the chat WebSocket."""
+
+    if isinstance(error, VADProviderUnavailableError):
+        code = "vad_provider_unavailable"
+        message = str(error) or "VAD provider is unavailable."
+    elif isinstance(error, VADConfigError):
+        code = "vad_config_error"
+        message = str(error) or "VAD configuration is invalid."
+    elif isinstance(error, VADProcessingError):
+        code = "vad_processing_failed"
+        message = str(error) or "VAD processing failed."
+    else:
+        code = "vad_processing_failed"
+        message = "VAD processing failed."
+
+    logger.warning(
+        "VAD audio processing failed | chat_id={} | character_id={} | code={} | error={}",
+        chat_id,
+        character_id,
+        code,
+        error,
+    )
+
+    vad_state.interrupt_sent = False
+    vad_state.clear_audio_buffer()
+    vad_state.clear_pre_buffer()
+    try:
+        vad_service.reset_session(vad_state.session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"VAD session reset skipped after processing error: {exc}")
+
+    await _send_listen_error(
+        websocket,
+        chat_id=chat_id,
+        character_id=character_id,
+        code=code,
+        message=message,
+        seq=seq,
+    )
 
 
 async def _handle_audio_end(

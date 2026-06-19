@@ -24,6 +24,7 @@ from src.routes.chat_ws import (
     _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
+from src.vad.exceptions import VADProviderUnavailableError
 
 _TEST_VAD_CONFIG_PATH = Path(__file__).with_name("__test_vad_config.yaml")
 
@@ -191,6 +192,64 @@ def test_websocket_vad_state_trims_pre_buffer() -> None:
     vad_state.append_pre_buffer([0.1, 0.2, 0.3], sample_rate=1000, pre_buffer_ms=2)
 
     assert vad_state.pre_buffer == [0.2, 0.3]
+
+
+@pytest.mark.asyncio
+async def test_audio_chunk_reports_vad_provider_error_and_clears_buffers(tmp_path) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            {
+                "enabled": True,
+                "vad_model": "fake",
+                "sample_rate": 1000,
+                "pre_buffer_ms": 10,
+                "fake": {
+                    "speech_threshold": 0.5,
+                    "required_hits": 1,
+                    "required_misses": 1,
+                },
+            },
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_service.process_audio = AsyncMock(  # type: ignore[method-assign]
+        side_effect=VADProviderUnavailableError("Run `uv add silero-vad`.")
+    )
+    vad_service.reset_session = MagicMock()  # type: ignore[method-assign]
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.audio_buffer = [0.8]
+    websocket = CapturingWebSocket()
+
+    await _handle_audio_chunk(
+        websocket,
+        {
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "audio": [0.7],
+                "seq": 9,
+            }
+        },
+        vad_service,
+        vad_state,
+    )
+
+    assert websocket.messages == [
+        {
+            "type": "control:listen-state",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "state": "error",
+                "code": "vad_provider_unavailable",
+                "message": "Run `uv add silero-vad`.",
+                "seq": 9,
+            },
+        }
+    ]
+    assert vad_state.audio_buffer == []
+    assert vad_state.pre_buffer == []
+    vad_service.reset_session.assert_called_once_with("test-session")
 
 
 @pytest.mark.asyncio
@@ -1008,6 +1067,61 @@ async def test_websocket_audio_chunk_returns_disabled_listen_state(
             "seq": 7,
             "disabled": True,
         }
+
+
+@pytest.mark.asyncio
+async def test_websocket_audio_chunk_vad_error_keeps_connection_open(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(_vad_enabled_config(mock_config), mock_context, mock_storage)
+    app.state.vad_service.process_audio = AsyncMock(  # type: ignore[method-assign]
+        side_effect=VADProviderUnavailableError("Run `uv add silero-vad`.")
+    )
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [0.9],
+                    "seq": 11,
+                },
+            }
+        )
+        response = websocket.receive_json()
+
+        assert response["type"] == "control:listen-state"
+        assert response["data"] == {
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "state": "error",
+            "code": "vad_provider_unavailable",
+            "message": "Run `uv add silero-vad`.",
+            "seq": 11,
+        }
+
+        websocket.send_json(
+            {
+                "type": "input:audio:chunk",
+                "data": {
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                    "audio": [],
+                    "seq": 12,
+                },
+            }
+        )
+        still_open_response = websocket.receive_json()
+
+        assert still_open_response["type"] == "error"
+        assert still_open_response["data"]["chat_id"] == "test_chat_123"
+        assert "Invalid 'audio' field" in still_open_response["data"]["message"]
 
 
 @pytest.mark.asyncio
