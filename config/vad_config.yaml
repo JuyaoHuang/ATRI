@@ -1,0 +1,28 @@
+# 语音活动检测（VAD）配置
+# 当前开发验证开启；由后端 WebSocket 实时音频链路使用。
+enabled: true
+vad_model: fake # 可选：fake、silero_vad；silero_vad 需先执行 uv add silero-vad
+
+# 后端 VAD 目标音频格式：16 kHz、mono、PCM float array。
+sample_rate: 16000
+pre_buffer_ms: 500 # 保留 speech_start 前的短音频，避免 ASR 吞掉句首
+
+# fake 是开发/联调用的能量阈值 provider，不依赖真实模型。
+# 防抖参数跟随 provider 配置，避免和真实 VAD 模型参数混在一起。
+fake:
+  speech_threshold: 0.05 # 每个 chunk 的最大绝对振幅达到该值即视作语音
+  required_hits: 2 # 连续多少个 speech chunk 后触发 speech_start
+  required_misses: 10 # 连续多少个 silence chunk 后触发 speech_end
+
+# Silero 使用模型概率、分贝和平滑窗口；启用前需安装可选依赖：uv add silero-vad
+# 延时估算公式（16 kHz）：Silero 内部窗口 = 512 samples / 16000 Hz = 32 ms。
+# speech_start 理论防抖延时 = required_hits * 32 ms。
+# speech_end 理论静默结束延时 = required_misses * 32 ms。
+# 实际体感还会叠加前端采集 chunk、网络传输、smoothing_window 和 ASR 耗时。
+silero_vad:
+  sample_rate: 16000
+  prob_threshold: 0.4 # Silero 模型语音概率阈值。概率高于它，才可能算 speech。
+  db_threshold: 60 # 音量门槛。OLV 把 float 音频转成 int16 后算 dB，要求同时超过这个值，避免小噪声被当语音。
+  required_hits: 3 # 连续命中多少次后算 speech_start。
+  required_misses: 24 # 连续未命中多少次后算 speech_end。
+  smoothing_window: 5 # 平滑窗口。不是只看当前一个小片段，而是看最近 N 个窗口的平均概率/分贝。

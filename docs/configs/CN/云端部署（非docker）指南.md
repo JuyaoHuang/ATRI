@@ -149,6 +149,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable atri
 sudo systemctl start atri
 sudo systemctl status atri
+sudo systemctl restart atri
 ```
 
 查看日志：

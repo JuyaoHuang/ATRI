@@ -6,6 +6,7 @@ Defines the contract for chat persistence implementations (JSON, database, etc.)
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class ChatStorageInterface(ABC):
@@ -174,7 +175,12 @@ class ChatStorageInterface(ABC):
 
     @abstractmethod
     async def append_message(
-        self, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """
         Append a message to chat history.
@@ -198,7 +204,13 @@ class ChatStorageInterface(ABC):
 
     @abstractmethod
     async def append_message_for_user(
-        self, user_id: str, chat_id: str, role: str, content: str, name: str | None = None
+        self,
+        user_id: str,
+        chat_id: str,
+        role: str,
+        content: str,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """
         Append a message to a user-scoped chat history.

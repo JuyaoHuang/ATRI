@@ -252,6 +252,31 @@ async def test_append_message_with_name(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_append_message_with_interrupted_metadata(tmp_path):
+    """Test append_message persists allowed interrupted metadata fields."""
+    storage = JSONChatStorage(base_path=str(tmp_path))
+    chat = await storage.create_chat("user1", "atri", "Test")
+
+    msg = await storage.append_message(
+        chat["id"],
+        "ai",
+        "partial",
+        name="atri",
+        metadata={
+            "generation_id": "gen-1",
+            "interrupted": True,
+            "interrupt_reason": "vad_speech_start",
+            "ignored": "value",
+        },
+    )
+
+    assert msg["generation_id"] == "gen-1"
+    assert msg["interrupted"] is True
+    assert msg["interrupt_reason"] == "vad_speech_start"
+    assert "ignored" not in msg
+
+
+@pytest.mark.asyncio
 async def test_append_message_raises_on_nonexistent(tmp_path):
     """Test append_message raises ValueError for nonexistent chat."""
     storage = JSONChatStorage(base_path=str(tmp_path))

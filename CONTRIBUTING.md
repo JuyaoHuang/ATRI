@@ -26,14 +26,14 @@
 
 ### 后端
 
-- 详细规范见 [执行准则.md](执行准则.md)
+- 详细规范见 [AGENTS.md](AGENTS.md)
 - 使用 `loguru` 而非标准 `logging`
 - 新模块遵循注册表工厂模式（参考 LLM 调用层）
 - 修改代码前先阅读对应的设计文档章节
 
 ### 前端
 
-- 详细规范见 [frontend/执行准则.md](frontend/执行准则.md)（如已配置为子模块）
+- 详细规范见 [frontend/AGENTS.md](frontend/AGENTS.md)（如已配置为子模块）
 - 组件使用 `<script setup lang="ts">` + Composition API
 - 状态管理使用 Pinia Store
 - 样式使用 UnoCSS
@@ -57,7 +57,7 @@
 
 | 文档 | 说明 | 何时阅读 |
 |------|------|---------|
-| [执行准则.md](执行准则.md) | 后端代码规范和自检流程 | **必读** |
+| [AGENTS.md](AGENTS.md) | 后端代码规范和自检流程 | **必读** |
 | [后端设计.md](docs/developments/module-design/后端设计.md) | 后端架构设计（分层、数据流） | 理解后端整体架构时 |
 | [记忆系统设计讨论.md](docs/developments/module-design/记忆系统设计讨论.md) | 记忆系统完整设计（L1/L3/L4 压缩 + mem0） | 修改记忆系统时 |
 | [LLM调用层设计讨论.md](docs/developments/module-design/LLM调用层设计讨论.md) | LLM 调用层设计（工厂模式、流式接口） | 修改 LLM 模块时 |

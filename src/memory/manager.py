@@ -268,6 +268,8 @@ def _is_valid_round(ai_msg: dict[str, Any]) -> bool:
     """
     if ai_msg.get("role") != "ai":
         return False
+    if ai_msg.get("interrupted") is True:
+        return False
     content = ai_msg.get("content") or ""
     if not content:
         return False
@@ -833,6 +835,9 @@ class MemoryManager:
             ai_msg.get("content", ""),
             name=ai_msg.get("name", self.character),
             avatar=ai_msg.get("avatar"),
+            generation_id=ai_msg.get("generation_id"),
+            interrupted=ai_msg.get("interrupted") is True,
+            interrupt_reason=ai_msg.get("interrupt_reason"),
         )
 
         if _is_valid_round(ai_msg):
@@ -845,7 +850,7 @@ class MemoryManager:
             self._state["total_rounds"] = int(self._state.get("total_rounds", 0)) + 1
             self._dirty = True
 
-        await self._maybe_trigger_l3()
+            await self._maybe_trigger_l3()
 
         self.short_term_store.save(self._state)
 

@@ -319,6 +319,10 @@ def test_is_valid_round_rejects_error_prefix() -> None:
     assert _is_valid_round({"role": "ai", "content": "Error: upstream failed"}) is False
 
 
+def test_is_valid_round_rejects_interrupted_ai() -> None:
+    assert _is_valid_round({"role": "ai", "content": "partial", "interrupted": True}) is False
+
+
 def test_is_valid_round_rejects_missing_content() -> None:
     assert _is_valid_round({"role": "ai"}) is False
 
@@ -427,6 +431,32 @@ async def test_invalid_round_does_not_increment_total(tmp_path: Path) -> None:
     # recent_messages only reflects the 10 valid rounds.
     # recent_messages 只反映 10 个有效轮次。
     assert len(mgr.state["recent_messages"]) == 20
+
+
+@pytest.mark.asyncio
+async def test_interrupted_round_is_audit_only(tmp_path: Path) -> None:
+    mgr = _new_manager(tmp_path)
+    await mgr.on_round_complete(
+        _human("hello"),
+        {
+            **_ai("partial"),
+            "generation_id": "gen-1",
+            "interrupted": True,
+            "interrupt_reason": "vad_speech_start",
+        },
+    )
+
+    assert mgr.state["total_rounds"] == 0
+    assert mgr.state["recent_messages"] == []
+    sessions_dir = tmp_path / "sessions"
+    files = list(sessions_dir.glob("*.json"))
+    with files[0].open(encoding="utf-8") as f:
+        data = json.load(f)
+    assert data[-1]["role"] == "ai"
+    assert data[-1]["content"] == "partial"
+    assert data[-1]["generation_id"] == "gen-1"
+    assert data[-1]["interrupted"] is True
+    assert data[-1]["interrupt_reason"] == "vad_speech_start"
 
 
 # ---------------------------------------------------------------------------

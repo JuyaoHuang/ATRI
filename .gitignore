@@ -28,6 +28,10 @@ data/chats/**/short_term_memory.json
 data/chats/**/index.json
 
 data/avatars/
+
+# Local model files
+models/
+
 # Env files
 .env
 .env.*
@@ -38,3 +42,4 @@ data/avatars/
 prompts/persona
 *.chat_scope_migrated
 *.legacy_migrated
+models/

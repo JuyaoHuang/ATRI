@@ -42,6 +42,16 @@ class ASRHealth:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ASRAudioUploadMetadata:
+    """Declared browser-side audio contract for uploaded recordings."""
+
+    source: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    encoding: str | None = None
+
+
 class ASRInterface(ABC):
     """Base interface for all ASR providers.
 
@@ -79,6 +89,25 @@ class ASRInterface(ABC):
         audio = self._ensure_float32_array(audio)
         return await asyncio.to_thread(self.transcribe_np, audio)
 
+    async def async_preload(self) -> None:
+        """Preload provider resources asynchronously when supported."""
+
+        # 模型加载是阻塞操作，放到线程里避免卡住 FastAPI 事件循环。
+        await asyncio.to_thread(self.preload)
+
+    def preload(self) -> None:
+        """Preload provider resources without transcribing audio.
+
+        Providers with lazy local models should override this method and
+        initialize their model/recognizer. The default implementation only
+        validates availability.
+        """
+
+        health = self.health()
+        if not health.available:
+            # 默认预加载只做可用性检查；本地模型 provider 会覆盖为实际加载。
+            raise ASRProviderUnavailableError(health.reason or "ASR provider is unavailable")
+
     @abstractmethod
     def transcribe_np(self, audio: Any) -> str:
         """Transcribe a 16 kHz mono float32 audio array.
@@ -97,6 +126,7 @@ class ASRInterface(ABC):
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        upload_metadata: ASRAudioUploadMetadata | None = None,
     ) -> str:
         """Transcribe uploaded audio bytes.
 
@@ -116,6 +146,7 @@ class ASRInterface(ABC):
             audio,
             filename=filename,
             content_type=content_type,
+            upload_metadata=upload_metadata,
         )
         return await self.async_transcribe_np(audio_array)
 
@@ -154,6 +185,7 @@ class ASRInterface(ABC):
         *,
         filename: str | None = None,
         content_type: str | None = None,
+        upload_metadata: ASRAudioUploadMetadata | None = None,
     ) -> Any:
         """Convert a PCM WAV upload into an OLV-style float32 mono array.
 
@@ -195,6 +227,13 @@ class ASRInterface(ABC):
         if channels < 1:
             raise ASRTranscriptionError("WAV audio must contain at least one channel")
 
+        self._validate_upload_metadata(
+            upload_metadata,
+            sample_rate=sample_rate,
+            channels=channels,
+            encoding=self._encoding_name_for_sample_width(sample_width),
+        )
+
         if sample_width == 1:
             samples = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
         elif sample_width == 2:
@@ -206,6 +245,32 @@ class ASRInterface(ABC):
             samples = samples.reshape(-1, channels).mean(axis=1)
 
         return np.clip(samples, -1.0, 1.0).astype(np.float32)
+
+    def _validate_upload_metadata(
+        self,
+        upload_metadata: ASRAudioUploadMetadata | None,
+        *,
+        sample_rate: int,
+        channels: int,
+        encoding: str,
+    ) -> None:
+        if upload_metadata is None:
+            return
+
+        mismatches: list[str] = []
+        if upload_metadata.sample_rate is not None and upload_metadata.sample_rate != sample_rate:
+            mismatches.append(
+                f"sample_rate declared {upload_metadata.sample_rate}, actual {sample_rate}"
+            )
+        if upload_metadata.channels is not None and upload_metadata.channels != channels:
+            mismatches.append(f"channels declared {upload_metadata.channels}, actual {channels}")
+        if upload_metadata.encoding is not None and upload_metadata.encoding != encoding:
+            mismatches.append(f"encoding declared {upload_metadata.encoding}, actual {encoding}")
+
+        if mismatches:
+            raise ASRTranscriptionError(
+                "Uploaded audio contract mismatch: " + "; ".join(mismatches)
+            )
 
     def nparray_to_audio_file(self, audio: Any, sample_rate: int, file_path: str) -> None:
         """Write a numeric audio array as a mono 16-bit PCM WAV file.
@@ -244,3 +309,12 @@ class ASRInterface(ABC):
         if content_type in {"audio/wav", "audio/wave", "audio/x-wav"}:
             return True
         return bool(filename and filename.lower().endswith(".wav"))
+
+    def _encoding_name_for_sample_width(self, sample_width: int) -> str:
+        if sample_width == 1:
+            return "pcm_u8"
+        if sample_width == 2:
+            return "pcm_s16le"
+        if sample_width == 4:
+            return "pcm_s32le"
+        return f"unknown_{sample_width}"

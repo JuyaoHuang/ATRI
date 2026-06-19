@@ -126,6 +126,9 @@ class ChatHistoryWriter:
         content: str,
         name: str,
         avatar: str | None = None,
+        generation_id: str | None = None,
+        interrupted: bool = False,
+        interrupt_reason: str | None = None,
     ) -> None:
         """Append an AI message. ``avatar`` is included only when provided.
 
@@ -139,6 +142,12 @@ class ChatHistoryWriter:
         }
         if avatar is not None:
             entry["avatar"] = avatar
+        if generation_id is not None:
+            entry["generation_id"] = generation_id
+        if interrupted:
+            entry["interrupted"] = True
+        if interrupt_reason is not None:
+            entry["interrupt_reason"] = interrupt_reason
         self._append(entry)
 
     def append_system(self, content: str) -> None:
