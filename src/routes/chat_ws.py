@@ -761,6 +761,7 @@ async def _handle_text_input(
                 "ai",
                 full_reply,
                 name=character_id,
+                metadata={"generation_id": generation_id},
             )
             if not vad_state.is_generation_active(generation_id):
                 logger.info(
@@ -830,6 +831,7 @@ async def _handle_text_input(
             websocket,
             f"LLM call failed: {e}",
             chat_id=chat_id,
+            generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
     except Exception as e:
@@ -838,6 +840,7 @@ async def _handle_text_input(
             websocket,
             f"Chat processing failed: {e}",
             chat_id=chat_id,
+            generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
 
@@ -1302,7 +1305,12 @@ async def _start_asr_chat_task(
         ),
     )
     if not started:
-        await _send_error(websocket, "Chat task already running", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            "Chat task already running",
+            chat_id=chat_id,
+            generation_id=generation_id,
+        )
 
 
 async def _send_listen_state(
@@ -1406,7 +1414,12 @@ async def _send_asr_transcript(
     await _send_json(websocket, {"type": "output:asr:transcript", "data": data})
 
 
-async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -> None:
+async def _send_error(
+    websocket: WebSocket,
+    message: str,
+    chat_id: str | None,
+    generation_id: str | None = None,
+) -> None:
     """Send error message to client.
     向客户端发送错误消息。
 
@@ -1421,5 +1434,7 @@ async def _send_error(websocket: WebSocket, message: str, chat_id: str | None) -
     error_data: dict[str, Any] = {"message": message}
     if chat_id:
         error_data["chat_id"] = chat_id
+    if generation_id:
+        error_data["generation_id"] = generation_id
 
     await _send_json(websocket, {"type": "error", "data": error_data})

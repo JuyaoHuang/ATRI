@@ -902,7 +902,12 @@ async def test_audio_speech_end_auto_starts_chat_with_asr_generation(
         "default", "test_chat_123", "human", "你好", name="default"
     )
     mock_storage.append_message_for_user.assert_any_call(
-        "default", "test_chat_123", "ai", "收到", name="atri"
+        "default",
+        "test_chat_123",
+        "ai",
+        "收到",
+        name="atri",
+        metadata={"generation_id": generation_id},
     )
 
 
@@ -952,7 +957,12 @@ async def test_websocket_text_input_streaming(
         "default", "test_chat_123", "human", "你好", name="default"
     )
     mock_storage.append_message_for_user.assert_any_call(
-        "default", "test_chat_123", "ai", "你好，主人！", name="atri"
+        "default",
+        "test_chat_123",
+        "ai",
+        "你好，主人！",
+        name="atri",
+        metadata={"generation_id": generation_id},
     )
     mock_agent.memory_manager.on_round_complete.assert_awaited_once_with(
         {"role": "human", "content": "你好", "name": "default"},
