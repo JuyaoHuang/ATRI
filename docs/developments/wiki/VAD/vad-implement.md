@@ -171,13 +171,15 @@ ATRI 已确认采用以下 WebSocket 命名风格：
 
 1. `input:audio:chunk`：前端发送实时麦克风音频片段。
 2. `input:audio:end`：前端通知本轮音频输入结束。
-3. `control:interrupt`：后端通知前端立即停止当前播放和旧回复处理。
+3. `control:interrupt`：后端通知前端用户已开始说话，前端应立即停止当前播放；如果本次事件实际打断了正在生成的 LLM 回复，则同时处理旧 `generation_id`。
 4. `output:asr:transcript`：后端返回 ASR 转写文本。
 5. `control:listen-state`：后端返回监听状态，例如 `speech_start`、`speech_end`、`silence`、`error`。
 
 其中 `output:asr:transcript` 在 M2 只定义和预留协议形态，真实 ASR 转写与触发在 M4 接入。
 
-`control:interrupt` 的 `reason` 字段优先使用 `speech_start`。也就是说，只要后端 VAD 判断用户开始说话，就不等待 ASR 结果，立即触发打断。
+`control:interrupt` 的 `reason` 字段优先使用 `speech_start`。也就是说，只要后端 VAD 判断用户开始说话，就不等待 ASR 结果，立即触发控制事件。
+
+`control:interrupt` 的 `generation_id` 是条件字段：如果 `speech_start` 发生时后端正在跟踪某一轮 LLM generation，并且本次事件实际使该 generation 失效，则必须携带被打断的 `generation_id`。如果用户只是开始说话，但当前没有正在生成的 LLM 回复，则该事件可以不携带 `generation_id`，此时它只表示“停止当前播放/进入用户说话状态”，不表示有旧 generation 需要屏蔽。
 
 ATRI 不直接复用 OLV 的外部消息名，例如 `raw-audio-data`、`mic-audio-end`。这些名称能说明 OLV 的机制，但和 ATRI 当前 `input:*`、`output:*`、`control:*` 风格不一致。
 

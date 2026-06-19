@@ -317,9 +317,10 @@ M5 与 M4 的边界：
 16. 确保 interrupted AI 消息不写入长期记忆。
 17. 前端自动 TTS 调用携带 `generation_id`。
 18. `useAudioPlayer` 为队列项和正在进行的合成请求记录 `generation_id`。
-19. VAD interrupt 到来时，前端标记旧 `generation_id` 的 TTS 结果失效。
-20. 旧 REST TTS 请求返回后，如果 `generation_id` 已失效，直接释放结果，不入队、不播放。
-21. 普通 `output:chat:complete` 路径继续表示正常完整回复；只有 `output:chat:interrupted` 表示被打断回复。
+19. VAD interrupt 到来时，前端标记旧 `generation_id` 的自动 TTS 结果失效。
+20. 旧 REST TTS 请求返回后，如果 `generation_id` 已失效，自动 TTS 直接释放结果，不入队、不播放。
+21. 用户点击消息播放按钮触发的手动 TTS 可以重播 interrupted 消息；但如果手动 TTS 合成期间再次发生 VAD interrupt，则本次手动合成结果也应丢弃。
+22. 普通 `output:chat:complete` 路径继续表示正常完整回复；只有 `output:chat:interrupted` 表示被打断回复。
 
 建议协议字段：
 

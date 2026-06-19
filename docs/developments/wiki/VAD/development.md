@@ -59,7 +59,7 @@ M2 选择 WebSocket JSON 消息结构。第一版优先保证协议清晰、可�
 | type | 作用 | 触发时机 |
 | --- | --- | --- |
 | `control:listen-state` | 返回 VAD 监听状态 | 每次处理音频 chunk 或输入结束 |
-| `control:interrupt` | 通知前端立即打断播放或旧回复 | VAD 事件为 `speech_start` 时 |
+| `control:interrupt` | 通知前端用户已开始说话，立即停止当前播放；如果携带 `generation_id`，同时表示旧 LLM generation 被打断 | VAD 事件为 `speech_start` 时 |
 | `output:asr:transcript` | 返回 ASR 转写文本 | M2 只定义和预留，真实触发属于 M4 |
 
 `input:audio:chunk`：
@@ -130,12 +130,22 @@ M2 选择 WebSocket JSON 消息结构。第一版优先保证协议清晰、可�
   "data": {
     "chat_id": "chat_xxx",
     "character_id": "atri",
-    "reason": "speech_start"
+    "reason": "speech_start",
+    "generation_id": "old_generation_id"
   }
 }
 ```
 
 `control:interrupt` 不等待 ASR 文本。只要后端 VAD 判断用户开始说话，就可以发送该控制事件。
+
+`generation_id` 是条件字段，不是所有 `control:interrupt` 都必须携带。它的语义如下：
+
+| 字段状态 | 含义 | 前端处理 |
+| --- | --- | --- |
+| 有 `generation_id` | 本次 `speech_start` 实际打断了正在生成的 LLM generation。 | 停止播放，并把该 generation 的自动 TTS 结果标记为失效。 |
+| 无 `generation_id` | 用户开始说话，但当前没有正在跟踪的 LLM generation。 | 停止当前播放或清空播放队列；不额外屏蔽某个旧 generation。 |
+
+因此，`control:interrupt` 同时承担“用户开始说话”的实时控制语义和“旧 generation 被打断”的失效语义。只有后者发生时，后端才需要携带 `generation_id`。
 
 `output:asr:transcript`：
 
@@ -895,7 +905,8 @@ M5 第一版采用“后端已发送 chunk 累积值”作为 `partial_reply` �
 6. 调整 TTS 副作用处理。
    - 前端 audio player 记录 active generation。
    - 收到 `control:interrupt` 或 `output:chat:interrupted` 后，使旧 generation 失效。
-   - 旧 generation 的 REST TTS 请求即使稍后返回，也不会继续入队播放。
+   - 旧 generation 的自动 REST TTS 请求即使稍后返回，也不会继续入队播放。
+   - 用户点击消息播放按钮触发的手动 TTS 不应被旧的 VAD interrupt tombstone 静默拦截；但如果手动 TTS 合成期间又发生新的 VAD interrupt，仍应丢弃该次合成结果。
 
 #### 3.2 协议 / 数据结构变更
 
