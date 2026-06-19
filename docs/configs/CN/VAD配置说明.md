@@ -11,13 +11,31 @@
 
 ## 1. 快速开始
 
-当前开发验证配置使用 `silero_vad`：
+默认配置使用 `fake`，不需要安装真实 VAD 模型，可用于验证 WebSocket 链路和状态机：
+
+```yaml
+enabled: true
+vad_model: fake
+sample_rate: 16000
+pre_buffer_ms: 500
+
+fake:
+  speech_threshold: 0.05
+  required_hits: 2
+  required_misses: 10
+```
+
+如果要启用真实 Silero VAD，需要先安装可选依赖：
+
+```bash
+uv add silero-vad
+```
+
+然后切换为 `silero_vad`：
 
 ```yaml
 enabled: true
 vad_model: silero_vad
-sample_rate: 16000
-pre_buffer_ms: 500
 
 silero_vad:
   sample_rate: 16000
@@ -26,18 +44,6 @@ silero_vad:
   required_hits: 3
   required_misses: 24
   smoothing_window: 5
-```
-
-如果只想验证 WebSocket 和状态机，不想加载真实模型，可以切换到 `fake`：
-
-```yaml
-enabled: true
-vad_model: fake
-
-fake:
-  speech_threshold: 0.05
-  required_hits: 2
-  required_misses: 10
 ```
 
 修改 YAML 后需要重启后端服务。
@@ -64,7 +70,7 @@ config/vad_config.yaml -> runtime config["vad"]
 
 ```yaml
 enabled: true
-vad_model: silero_vad
+vad_model: fake
 sample_rate: 16000
 pre_buffer_ms: 500
 
@@ -117,7 +123,11 @@ fake:
 
 ### 4.2 `silero_vad`
 
-`silero_vad` 是当前真实 VAD Provider。它通过 `silero-vad` Python 包懒加载模型，并固定使用 CPU 推理。
+`silero_vad` 是当前真实 VAD Provider。它通过 `silero-vad` Python 包懒加载模型，并固定使用 CPU 推理。该依赖会安装 PyTorch CPU 运行时，启用前需要执行：
+
+```bash
+uv add silero-vad
+```
 
 ```yaml
 vad_model: silero_vad
@@ -289,4 +299,3 @@ npm run type-check
 npm run lint
 npm run build
 ```
-

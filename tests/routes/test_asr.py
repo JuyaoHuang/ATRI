@@ -745,7 +745,36 @@ async def test_missing_optional_sherpa_onnx_dependency_returns_503(
     )
 
     assert response.status_code == 503
-    assert "sherpa_onnx" in response.json()["detail"]
+    assert "uv add sherpa-onnx onnxruntime" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_missing_optional_onnxruntime_dependency_returns_503(
+    client_and_config_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client, _config_path = client_and_config_path
+    original_find_spec = sherpa_onnx_module.importlib.util.find_spec
+
+    def fake_find_spec(name: str, *args, **kwargs):
+        if name == "sherpa_onnx":
+            return object()
+        if name == "onnxruntime":
+            return None
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(sherpa_onnx_module.importlib.util, "find_spec", fake_find_spec)
+
+    switch_response = await client.post("/api/asr/switch", json={"provider": "sherpa_onnx_asr"})
+    assert switch_response.status_code == 200
+
+    response = await client.post(
+        "/api/asr/transcribe",
+        files={"audio": ("recording.wav", b"not-used", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert "uv add sherpa-onnx onnxruntime" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -774,7 +803,7 @@ async def test_missing_sherpa_onnx_model_returns_503(
     )
 
     def fake_find_spec(name: str, *args, **kwargs):
-        if name == "sherpa_onnx":
+        if name in {"sherpa_onnx", "onnxruntime"}:
             return object()
         return original_find_spec(name, *args, **kwargs)
 

@@ -26,14 +26,14 @@ Please read [docs/quickstart.md](docs/quickstart.md) first to set up your enviro
 
 ### Backend
 
-- See [执行准则.md](执行准则.md) for detailed standards
+- See [AGENTS.md](AGENTS.md) for detailed standards
 - Use `loguru` instead of the standard `logging` module
 - New modules should follow the registry factory pattern (refer to the LLM calling layer)
 - Read the relevant design document section before modifying code
 
 ### Frontend
 
-- See [frontend/执行准则.md](frontend/执行准则.md) for detailed standards (if configured as a submodule)
+- See [frontend/AGENTS.md](frontend/AGENTS.md) for detailed standards (if configured as a submodule)
 - Components use `<script setup lang="ts">` + Composition API
 - State management uses Pinia Store
 - Styling uses UnoCSS
@@ -57,7 +57,7 @@ The `docs/developments/` directory contains architecture design and module desig
 
 | Document | Description | When to Read |
 |------|------|---------|
-| [Backend Guidelines](执行准则.md) | Backend code standards and self-check workflow | **Required** |
+| [Backend Guidelines](AGENTS.md) | Backend code standards and self-check workflow | **Required** |
 | [Backend Design](docs/developments/module-design/EN/backend-design.md) | Backend architecture design (layering, data flow) | When understanding the overall backend architecture |
 | [Memory System Design](docs/developments/module-design/EN/memory-system-design.md) | Memory system complete design (L1/L3/L4 compression + mem0) | When modifying the memory system |
 | [LLM Calling Layer Design](docs/developments/module-design/EN/LLM-calling-layer-design.md) | LLM calling layer design (factory pattern, streaming interface) | When modifying the LLM module |

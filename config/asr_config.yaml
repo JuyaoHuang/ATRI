@@ -27,6 +27,7 @@ faster_whisper:
   compute_type: int8 # 计算精度/量化类型，如 int8、float16、float32
 
 # Sherpa-ONNX SenseVoice 配置，兼容 OLV 默认 ASR 模型
+# 启用前需安装可选依赖：uv add sherpa-onnx onnxruntime
 sherpa_onnx_asr:
   model_type: sense_voice # 当前仅支持 OLV 默认 SenseVoice 模型
   sense_voice: models/asr-models/sherpa-onnx-sense-voice/model.int8.onnx

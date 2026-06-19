@@ -14,6 +14,12 @@ from src.vad.exceptions import VADProviderUnavailableError
 from src.vad.factory import VADFactory, VADProviderMetadata
 from src.vad.interface import VADHealth, VADInterface, VADResult
 
+_INSTALL_COMMAND = "uv add silero-vad"
+_INSTALL_HINT = (
+    "Silero VAD requires optional dependencies. "
+    f"Run `{_INSTALL_COMMAND}` before using provider 'silero_vad'."
+)
+
 
 @VADFactory.register(
     "silero_vad",
@@ -54,10 +60,12 @@ class SileroVADProvider(VADInterface):
         self._last_db = 0.0
 
     def health(self) -> VADHealth:
-        if importlib.util.find_spec("torch") is None:
-            return VADHealth(False, "Python package 'torch' is not installed")
-        if importlib.util.find_spec("silero_vad") is None:
-            return VADHealth(False, "Python package 'silero-vad' is not installed")
+        missing_packages = self._missing_optional_packages()
+        if missing_packages:
+            return VADHealth(
+                False,
+                f"{_INSTALL_HINT} Missing package(s): {', '.join(missing_packages)}.",
+            )
         return VADHealth(True)
 
     def detect_speech(
@@ -133,7 +141,9 @@ class SileroVADProvider(VADInterface):
             if hasattr(model, "eval"):
                 model.eval()
         except Exception as exc:  # noqa: BLE001
-            raise VADProviderUnavailableError(f"Failed to load Silero VAD model: {exc}") from exc
+            raise VADProviderUnavailableError(
+                f"Failed to load Silero VAD model. {_INSTALL_HINT} Original error: {exc}"
+            ) from exc
 
         self._model = model
         return model
@@ -149,6 +159,10 @@ class SileroVADProvider(VADInterface):
             return max(0.0, min(1.0, float(probability.item())))
         except VADProviderUnavailableError:
             raise
+        except ModuleNotFoundError as exc:
+            raise VADProviderUnavailableError(
+                f"{_INSTALL_HINT} Missing module: {exc.name}."
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise VADProviderUnavailableError(f"Silero VAD inference failed: {exc}") from exc
 
@@ -216,3 +230,11 @@ class SileroVADProvider(VADInterface):
             return [max(-1.0, min(1.0, float(sample))) for sample in audio_chunk]
         except TypeError:
             return [max(-1.0, min(1.0, float(audio_chunk)))]
+
+    def _missing_optional_packages(self) -> list[str]:
+        missing_packages: list[str] = []
+        if importlib.util.find_spec("torch") is None:
+            missing_packages.append("torch")
+        if importlib.util.find_spec("silero_vad") is None:
+            missing_packages.append("silero-vad")
+        return missing_packages

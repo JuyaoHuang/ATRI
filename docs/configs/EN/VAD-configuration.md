@@ -11,13 +11,31 @@ This document describes the VAD (Voice Activity Detection) configuration, Provid
 
 ## 1. Quick Start
 
-The current development configuration uses `silero_vad`:
+The default configuration uses `fake`. It does not require a real VAD model and is useful for verifying the WebSocket pipeline and state machine:
+
+```yaml
+enabled: true
+vad_model: fake
+sample_rate: 16000
+pre_buffer_ms: 500
+
+fake:
+  speech_threshold: 0.05
+  required_hits: 2
+  required_misses: 10
+```
+
+To enable real Silero VAD, install the optional dependency first:
+
+```bash
+uv add silero-vad
+```
+
+Then switch to `silero_vad`:
 
 ```yaml
 enabled: true
 vad_model: silero_vad
-sample_rate: 16000
-pre_buffer_ms: 500
 
 silero_vad:
   sample_rate: 16000
@@ -26,18 +44,6 @@ silero_vad:
   required_hits: 3
   required_misses: 24
   smoothing_window: 5
-```
-
-To verify the WebSocket pipeline and state machine without loading a real model, switch to `fake`:
-
-```yaml
-enabled: true
-vad_model: fake
-
-fake:
-  speech_threshold: 0.05
-  required_hits: 2
-  required_misses: 10
 ```
 
 Restart the backend service after editing YAML.
@@ -64,7 +70,7 @@ config/vad_config.yaml -> runtime config["vad"]
 
 ```yaml
 enabled: true
-vad_model: silero_vad
+vad_model: fake
 sample_rate: 16000
 pre_buffer_ms: 500
 
@@ -117,7 +123,11 @@ The debounce unit for `fake` is the frontend chunk sent to the backend, not Sile
 
 ### 4.2 `silero_vad`
 
-`silero_vad` is the current real VAD Provider. It lazily loads the model from the `silero-vad` Python package and runs on CPU.
+`silero_vad` is the current real VAD Provider. It lazily loads the model from the `silero-vad` Python package and runs on CPU. This dependency installs the PyTorch CPU runtime, so install it before enabling the provider:
+
+```bash
+uv add silero-vad
+```
 
 ```yaml
 vad_model: silero_vad
@@ -289,4 +299,3 @@ npm run type-check
 npm run lint
 npm run build
 ```
-

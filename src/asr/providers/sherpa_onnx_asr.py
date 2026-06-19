@@ -20,6 +20,11 @@ from src.asr.interface import ASRHealth, ASRInterface
 _ATRI_ROOT = Path(__file__).resolve().parents[3]
 _SUPPORTED_MODEL_TYPE = "sense_voice"
 _SUPPORTED_PROVIDERS = {"cpu", "cuda"}
+_INSTALL_COMMAND = "uv add sherpa-onnx onnxruntime"
+_INSTALL_HINT = (
+    "Sherpa-ONNX ASR requires optional dependencies. "
+    f"Run `{_INSTALL_COMMAND}` before using provider 'sherpa_onnx_asr'."
+)
 _ONNXRUNTIME_DLL_DIRECTORY_ADDED = False
 _DLL_DIRECTORY_HANDLES: list[Any] = []
 
@@ -51,8 +56,12 @@ class SherpaOnnxASR(ASRInterface):
         self._recognizer: Any | None = None
 
     def health(self) -> ASRHealth:
-        if importlib.util.find_spec("sherpa_onnx") is None:
-            return ASRHealth(False, "Python package 'sherpa_onnx' is not installed")
+        missing_packages = self._missing_optional_packages()
+        if missing_packages:
+            return ASRHealth(
+                False,
+                f"{_INSTALL_HINT} Missing package(s): {', '.join(missing_packages)}.",
+            )
         if self.model_type != _SUPPORTED_MODEL_TYPE:
             return ASRHealth(
                 False,
@@ -113,7 +122,8 @@ class SherpaOnnxASR(ASRInterface):
                 )
             except Exception as error:  # noqa: BLE001
                 raise ASRProviderUnavailableError(
-                    "Sherpa-ONNX SenseVoice recognizer initialization failed"
+                    "Sherpa-ONNX SenseVoice recognizer initialization failed. "
+                    f"{_INSTALL_HINT} Original error: {error}"
                 ) from error
         return self._recognizer
 
@@ -124,6 +134,14 @@ class SherpaOnnxASR(ASRInterface):
         if path.is_absolute():
             return path
         return _ATRI_ROOT / path
+
+    def _missing_optional_packages(self) -> list[str]:
+        missing_packages: list[str] = []
+        if importlib.util.find_spec("sherpa_onnx") is None:
+            missing_packages.append("sherpa-onnx")
+        if importlib.util.find_spec("onnxruntime") is None:
+            missing_packages.append("onnxruntime")
+        return missing_packages
 
 
 def _add_onnxruntime_dll_directory() -> None:
