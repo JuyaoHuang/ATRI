@@ -56,13 +56,18 @@ class FakeTTSConfigStore:
 
 
 class FakeStreamingTTSService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        streaming_enabled: bool = True,
+        failures: set[str] | None = None,
+    ) -> None:
         self.config_store = FakeTTSConfigStore(
             {
                 "enabled": True,
                 "auto_play": True,
                 "streaming": {
-                    "enabled": True,
+                    "enabled": streaming_enabled,
                     "segment_method": "pysbd",
                     "faster_first_response": False,
                     "max_concurrent_synthesis": 2,
@@ -70,6 +75,7 @@ class FakeStreamingTTSService:
                 },
             }
         )
+        self.failures = failures or set()
         self.calls: list[str] = []
 
     async def synthesize(
@@ -81,6 +87,8 @@ class FakeStreamingTTSService:
         options: dict | None = None,
     ) -> dict:
         self.calls.append(text)
+        if text in self.failures:
+            raise RuntimeError(f"boom: {text}")
         return {
             "provider": provider or "fake",
             "audio": f"audio:{text}".encode(),
@@ -1102,6 +1110,89 @@ async def test_text_input_streaming_tts_emits_audio_events(
     assert audio_segments[0]["data"]["generation_id"] == generation_id
     assert audio_complete["data"]["generation_id"] == generation_id
     assert audio_complete["data"]["last_sequence"] == 1
+
+
+@pytest.mark.asyncio
+async def test_text_input_streaming_disabled_does_not_emit_audio_events(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda text, **_kwargs: _mock_chat_stream(["第一句。"]))
+    tts_service = FakeStreamingTTSService(streaming_enabled=False)
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-streaming-disabled"
+    vad_state.activate_generation(generation_id)
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        generation_id,
+        tts_service=tts_service,
+    )
+
+    assert tts_service.calls == []
+    assert not any(message["type"].startswith("output:audio:") for message in websocket.messages)
+    assert any(message["type"] == "output:chat:complete" for message in websocket.messages)
+
+
+@pytest.mark.asyncio
+async def test_text_input_streaming_tts_error_keeps_chat_complete(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(
+        side_effect=lambda text, **_kwargs: _mock_chat_stream(["第一句。", "第二句。"])
+    )
+    tts_service = FakeStreamingTTSService(failures={"第一句。"})
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-streaming-error"
+    vad_state.activate_generation(generation_id)
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        generation_id,
+        tts_service=tts_service,
+    )
+
+    audio_errors = [
+        message for message in websocket.messages if message["type"] == "output:audio:error"
+    ]
+    audio_segments = [
+        message for message in websocket.messages if message["type"] == "output:audio:segment"
+    ]
+
+    assert [message["data"]["sequence"] for message in audio_errors] == [0]
+    assert audio_errors[0]["data"]["code"] == "tts_synthesis_failed"
+    assert [message["data"]["sequence"] for message in audio_segments] == [1]
+    assert any(message["type"] == "output:chat:complete" for message in websocket.messages)
+    assert any(message["type"] == "output:audio:complete" for message in websocket.messages)
 
 
 @pytest.mark.asyncio
