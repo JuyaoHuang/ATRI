@@ -1464,3 +1464,162 @@ uv run ruff check src/routes/chat_ws.py tests/routes/test_chat_ws.py
 2. 新写入的普通 AI 历史会携带 `generation_id`；旧历史仍可能没有该字段，因此前端保留 generationless 手动播放的 epoch 兜底。
 3. `speech_start` 时没有正在跟踪的 LLM generation 不再作为严重 bug 处理。它表示当前没有可归属的 active stream，后端仍可发送 VAD interrupt，前端按播放级打断兜底。
 4. 后续如果推进 TTS 流式化，应单独建立分支和设计文档，不并入当前 VAD MVP 收尾。
+
+## 2026-07-08: TTS 分段流式化验收与收尾
+
+### 1. 背景与目标
+
+VAD 实时打断已经能在用户开口时中断当前 LLM generation 和前端播放。下一步问题是：如果 TTS 仍等完整 LLM 回复结束后才开始合成，语音首响会明显滞后，也会让 VAD 打断只能处理“已经开始播放”的旧音频。
+
+本轮 TTS 分段流式化的目标是：在不改变 TTS provider 接口的前提下，让后端把已经发送给前端的 LLM 文本 chunk 累积成较小文本段，调用现有 `TTSService.synthesize()` 合成完整小音频，并通过 WebSocket 逐段下发给前端播放。
+
+核心原则保持不变：聊天历史和前端文本显示始终以 `output:chat:*` 为准。TTS 只是 LLM 文本回复的下游消费者，不拥有对话状态，也不反向决定聊天历史中保存哪些文本。
+
+### 2. 设计决策
+
+#### 2.1 采用应用层分段，不预留 provider 原生 streaming
+
+第一版选择应用层分段合成：
+
+1. LLM 仍按现有 `chat_completion_stream()` 流式输出文本。
+2. WebSocket 路由发送 `output:chat:chunk` 后，把同一份 chunk 喂给 TTS segment manager。
+3. TTS segment manager 按句子或首段短停顿切出文本段。
+4. 每段文本调用现有 `TTSService.synthesize()`，provider 仍返回完整小音频。
+5. 后端通过 `output:audio:segment` 下发音频段，通过 `output:audio:complete` 标记本 generation 的音频结束。
+
+这意味着本轮不实现 `synthesize_stream()`，也不把 SiliconFlow、Edge TTS、CosyVoice 等 provider 的原生流式能力纳入统一接口。
+
+#### 2.2 不引入 heard_response
+
+本轮明确不记录“用户实际听到了哪些文本”。聊天历史保存的是 AI 已经发送/显示给前端的文本；TTS 播放只消费这些文本。用户打断时，策略是停止播放、取消旧 generation 的后续 TTS segment，不把播放进度反馈回 LLM 或 memory。
+
+因此不会新增 `heard_response` 字段，也不会让 TTS 形成反馈回路。
+
+#### 2.3 分段策略
+
+第一版使用 `pysbd` 做句子边界检测：
+
+1. `feed()` 只接收新增 LLM chunk，内部维护 buffer。
+2. `faster_first_response=true` 时，第一段可按短停顿提前切出。
+3. 后续段按 `pysbd` 判断的完整句子切出。
+4. LLM complete 后，`flush()` 输出剩余 buffer。
+5. 空白文本和纯标点文本不生成 segment。
+
+初始中文边界为 `。！？!?…`，首段短停顿为 `，,、；;：:`。验收阶段根据中英日混合文本场景，扩展为：
+
+```python
+SENTENCE_END_CHARS = frozenset("。！？!?…．.｡")
+FIRST_RESPONSE_BREAK_CHARS = frozenset("，,、､；;：:")
+```
+
+注意：逗号类短停顿只用于第一段快速响应。后续仍按完整句边界切分；如果一个长句内部只有逗号，没有句末符号，仍可能形成较长 segment。第一版不做长度兜底切分，后续如 provider 对单段长度敏感，再增加 `max_segment_chars`。
+
+#### 2.4 并发与有序下发
+
+`max_concurrent_synthesis` 控制同一 generation 内最多同时进行多少个 TTS 合成任务。它只作用于“已经切出来的 segment”，不会把单个长 segment 再拆小。
+
+`TTSSegmentManager` 用 `sequence` 保证前端收到的音频段按文本顺序下发。即使后面的短段先合成完成，也会等待前面的 sequence 就绪或被跳过后再发送。
+
+### 3. 改动详情
+
+#### 3.1 后端
+
+- `config/tts_config.yaml`
+  - 增加 `streaming.enabled`、`segment_method`、`faster_first_response`、`max_concurrent_synthesis`、`max_pending_segments`。
+- `src/tts/config.py`
+  - 增加 streaming 默认配置，避免配置缺失时覆盖新增字段。
+- `src/tts/sentence_divider.py`
+  - 新增 `SentenceDivider` 和 `TTSTextSegment`。
+  - 使用 `pysbd` 封装分句逻辑。
+  - 支持第一段短停顿提前切出。
+  - 扩展中文、英文、日文常用句末和短停顿符号。
+- `src/tts/segment_manager.py`
+  - 新增 `TTSSegmentManager`。
+  - 管理 `generation_id`、`segment_id`、`sequence`。
+  - 通过 semaphore 控制并发合成。
+  - 通过 ordered delivery 保证音频段按 sequence 下发。
+  - 支持 interrupt、finish、segment error 和 complete 事件。
+- `src/routes/chat_ws.py`
+  - 在 WebSocket 聊天链路中创建并跟踪当前 generation 的 TTS manager。
+  - 每个已发送的 `output:chat:chunk` 同步喂给 TTS manager。
+  - 新增 `output:audio:segment`、`output:audio:complete`、`output:audio:error`。
+  - VAD interrupt 或 stale generation 时取消旧 TTS manager。
+
+#### 3.2 前端
+
+- `frontend/src/utils/websocket.ts`
+  - 分发 `output:audio:*` 事件。
+- `frontend/src/composables/useWebSocket.ts`
+  - 接收音频 segment、complete、error。
+  - streaming enabled 时停止完整回复后的 REST auto TTS。
+- `frontend/src/composables/useAudioPlayer.ts`
+  - 增加按 `generation_id + sequence` 排队播放音频段的逻辑。
+  - VAD interrupt 时停止当前播放并丢弃旧 generation。
+  - 手动点击历史消息播放继续走 REST TTS。
+- `frontend/src/composables/useWebSocket.ts`
+  - 修复 WebSocket manager 被 Pinia proxy 后身份比较失效的问题，对 `new WebSocketManager()` 使用 `markRaw()`。
+
+### 4. 验收过程
+
+#### 4.1 WebSocket 连接状态问题
+
+验收时发现前端长期显示“未连接”，发送消息提示 `WebSocket is not connected`。该问题不是 TTS stream 新增逻辑直接造成，而是前端状态机旧问题被验收流程暴露出来。
+
+根因是 `WebSocketManager` class 实例放入 Pinia store 后被 Vue proxy 包装，导致 `wsStore.wsManager === wsManager` 身份比较失败，所有受保护的 WebSocket handler 都提前返回。
+
+修复方式是在创建 manager 时使用：
+
+```ts
+markRaw(new WebSocketManager(wsUrl))
+```
+
+修复后本地验证页面显示“已连接”，后端能看到 WebSocket connection established，消息发送和 TTS stream 链路恢复正常。
+
+#### 4.2 临时 WS TTS 日志
+
+由于浏览器 DevTools 的 Network -> WS 面板在当前环境中不稳定显示 `/ws` frames，验收阶段临时在后端增加 `[TEMP][ws-tts]` 日志，用于观察 `output:audio:segment` 和 `output:audio:complete` 的核心字段：
+
+```text
+generation_id
+segment_id
+sequence
+media_type
+audio_bytes
+display_text_len
+tts_text_len
+```
+
+验收确认后，临时日志已回退，没有进入最终提交。
+
+#### 4.3 验收观察
+
+实际日志显示同一 `generation_id` 下多个 segment 递增发送，`sequence` 连续，`audio_bytes > 0`，`media_type=audio/mpeg`。同时也观察到长句可能生成 `display_text_len=242` 的单段，这符合当前“按完整句切分、无长度兜底”的设计。
+
+最终根据验收结论补充了英文、日文常用句末符号，避免中英日混合回复中英文句号或日文全角句号不能作为完整句边界。
+
+### 5. 验证
+
+本轮关键验证包括：
+
+```bash
+uv run pytest tests/tts/test_sentence_divider.py -v
+uv run ruff check src/tts/sentence_divider.py tests/tts/test_sentence_divider.py
+uv run ruff format src/tts/sentence_divider.py tests/tts/test_sentence_divider.py --check
+uv run ruff check src/routes/chat_ws.py
+uv run python -m py_compile src/routes/chat_ws.py
+```
+
+结果：
+
+1. `tests/tts/test_sentence_divider.py`：7 passed。
+2. TTS 分句相关 ruff check 通过。
+3. TTS 分句相关 ruff format check 通过。
+4. 回退临时 WS 日志后，`src/routes/chat_ws.py` ruff check 和 py_compile 通过。
+
+### 6. 边界与后续
+
+1. 当前 TTS stream 是应用层分段合成，不是 provider 原生音频流。
+2. `max_concurrent_synthesis` 只控制并发合成数量，不控制切片长度。
+3. 后续如需避免 200+ 字长句 segment，需要新增 `max_segment_chars` 或“长句按短停顿兜底切分”策略。
+4. 当前没有 `heard_response`，也不计划让 TTS 播放进度回写聊天历史。
+5. 临时 WS 验收日志已回退；如果后续仍需要更直观的 WS payload 验收，可以增加受配置开关控制的 debug 级结构化日志，而不是长期保留 INFO 级临时日志。
