@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,6 +23,7 @@ from src.routes.chat_ws import (
     _send_asr_transcript,
     _send_generation_chunk,
     _send_json,
+    _send_speech_start_interrupt,
     _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
@@ -43,6 +45,55 @@ class LockedCapturingWebSocket(CapturingWebSocket):
         super().__init__()
         self.state = MagicMock()
         self.state.send_lock = asyncio.Lock()
+
+
+class FakeTTSConfigStore:
+    def __init__(self, config: dict) -> None:
+        self._config = config
+
+    def read(self) -> dict:
+        return self._config
+
+
+class FakeStreamingTTSService:
+    def __init__(self) -> None:
+        self.config_store = FakeTTSConfigStore(
+            {
+                "enabled": True,
+                "auto_play": True,
+                "streaming": {
+                    "enabled": True,
+                    "segment_method": "pysbd",
+                    "faster_first_response": False,
+                    "max_concurrent_synthesis": 2,
+                    "max_pending_segments": 12,
+                },
+            }
+        )
+        self.calls: list[str] = []
+
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        provider: str | None = None,
+        voice_id: str | None = None,
+        options: dict | None = None,
+    ) -> dict:
+        self.calls.append(text)
+        return {
+            "provider": provider or "fake",
+            "audio": f"audio:{text}".encode(),
+            "media_type": "audio/mpeg",
+        }
+
+
+class RecordingTTSManager:
+    def __init__(self) -> None:
+        self.interrupted = False
+
+    async def interrupt(self) -> None:
+        self.interrupted = True
 
 
 @pytest.fixture
@@ -398,6 +449,39 @@ async def test_send_asr_transcript_uses_reserved_protocol() -> None:
                 "generation_id": "gen-123",
                 "is_final": True,
                 "seq": 3,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_speech_start_interrupt_cancels_active_tts_generation() -> None:
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    manager = RecordingTTSManager()
+    vad_state.current_tts_generation_id = "tts-gen"
+    vad_state.current_tts_manager = manager  # type: ignore[assignment]
+
+    snapshot, generation_id, cancelled = await _send_speech_start_interrupt(
+        websocket,
+        vad_state,
+        chat_id="test_chat_123",
+        character_id="atri",
+    )
+
+    assert snapshot is None
+    assert generation_id == "tts-gen"
+    assert cancelled is False
+    assert manager.interrupted is True
+    assert vad_state.current_tts_generation_id is None
+    assert websocket.messages == [
+        {
+            "type": "control:interrupt",
+            "data": {
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "reason": "speech_start",
+                "generation_id": "tts-gen",
             },
         }
     ]
@@ -968,6 +1052,56 @@ async def test_websocket_text_input_streaming(
         {"role": "human", "content": "你好", "name": "default"},
         {"role": "ai", "content": "你好，主人！", "name": "atri"},
     )
+
+
+@pytest.mark.asyncio
+async def test_text_input_streaming_tts_emits_audio_events(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(
+        side_effect=lambda text, **_kwargs: _mock_chat_stream(["第一句。", "第二句。"])
+    )
+    tts_service = FakeStreamingTTSService()
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-streaming-tts"
+    vad_state.activate_generation(generation_id)
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        generation_id,
+        tts_service=tts_service,
+    )
+
+    audio_segments = [
+        message for message in websocket.messages if message["type"] == "output:audio:segment"
+    ]
+    audio_complete = next(
+        message for message in websocket.messages if message["type"] == "output:audio:complete"
+    )
+
+    assert tts_service.calls == ["第一句。", "第二句。"]
+    assert [message["data"]["sequence"] for message in audio_segments] == [0, 1]
+    assert [
+        base64.b64decode(message["data"]["audio"]).decode("utf-8") for message in audio_segments
+    ] == ["audio:第一句。", "audio:第二句。"]
+    assert audio_segments[0]["data"]["generation_id"] == generation_id
+    assert audio_complete["data"]["generation_id"] == generation_id
+    assert audio_complete["data"]["last_sequence"] == 1
 
 
 @pytest.mark.asyncio
