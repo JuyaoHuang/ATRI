@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.44.0",
     "websockets>=16.0",
     "psycopg[pool]>=3.2.8",
+    "pysbd>=0.3.4",
 ]
 
 [dependency-groups]

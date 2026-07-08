@@ -30,6 +30,7 @@ Reference: docs/Phase5_执行规格.md §US-SRV-006, docs/OLV架构文档.md
 """
 
 import asyncio
+import base64
 import io
 import json
 import uuid
@@ -45,8 +46,16 @@ from starlette.websockets import WebSocketState
 from src.asr.exceptions import ASRConfigError, ASRProviderUnavailableError, ASRTranscriptionError
 from src.auth import get_websocket_user_id
 from src.llm.exceptions import LLMError
+from src.tts.segment_manager import (
+    TTSAudioComplete,
+    TTSAudioError,
+    TTSAudioSegment,
+    TTSSegmentManager,
+)
 from src.vad import VADEvent, VADEventType, VADService, VADState
 from src.vad.exceptions import VADConfigError, VADProcessingError, VADProviderUnavailableError
+
+_TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
 
 
 @dataclass(frozen=True)
@@ -73,6 +82,8 @@ class WebSocketVADState:
     current_generation_character_id: str | None = None
     current_generation_user_text: str | None = None
     current_generation_reply_chunks: list[str] = field(default_factory=list)
+    current_tts_generation_id: str | None = None
+    current_tts_manager: TTSSegmentManager | None = None
     audio_buffer: list[float] = field(default_factory=list)
     pre_buffer: list[float] = field(default_factory=list)
     last_chat_id: str | None = None
@@ -157,6 +168,59 @@ class WebSocketVADState:
         if self.is_generation_active(generation_id):
             self.invalidate_current_generation()
 
+    def is_tts_generation_active(self, generation_id: str) -> bool:
+        """Return whether a TTS generation can still emit audio events."""
+
+        return self.current_tts_generation_id == generation_id
+
+    async def set_tts_manager(
+        self,
+        generation_id: str,
+        manager: TTSSegmentManager,
+    ) -> None:
+        """Track the active segmented TTS manager for this connection."""
+
+        await self.interrupt_tts_generation()
+        self.current_tts_generation_id = generation_id
+        self.current_tts_manager = manager
+
+    async def feed_tts_text(self, generation_id: str, chunk: str) -> None:
+        """Forward emitted chat text to the active TTS manager."""
+
+        manager = self.current_tts_manager
+        if manager is None or not self.is_tts_generation_active(generation_id):
+            return
+        await manager.feed_text(chunk)
+
+    async def finish_tts_generation(self, generation_id: str) -> None:
+        """Flush and complete the active TTS manager for a normal generation."""
+
+        manager = self.current_tts_manager
+        if manager is None or not self.is_tts_generation_active(generation_id):
+            return
+        await manager.finish()
+
+    async def interrupt_tts_generation(self, generation_id: str | None = None) -> str | None:
+        """Interrupt the active TTS manager and return its generation id."""
+
+        if generation_id is not None and not self.is_tts_generation_active(generation_id):
+            return None
+
+        manager = self.current_tts_manager
+        interrupted_generation_id = self.current_tts_generation_id
+        self.current_tts_generation_id = None
+        self.current_tts_manager = None
+        if manager is not None:
+            await manager.interrupt()
+        return interrupted_generation_id
+
+    def complete_tts_generation(self, generation_id: str) -> None:
+        """Release TTS manager tracking after output:audio:complete."""
+
+        if self.is_tts_generation_active(generation_id):
+            self.current_tts_generation_id = None
+            self.current_tts_manager = None
+
     def cancel_current_chat_task(self) -> bool:
         """Cancel the active chat task if it is still running."""
 
@@ -223,6 +287,8 @@ class WebSocketVADState:
         self.clear_pre_buffer()
         self.current_chat_task = None
         self.invalidate_current_generation()
+        self.current_tts_generation_id = None
+        self.current_tts_manager = None
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -250,6 +316,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     storage = websocket.app.state.storage
     vad_service = websocket.app.state.vad_service
     asr_service = websocket.app.state.asr_service
+    tts_service = getattr(websocket.app.state, "tts_service", None)
     vad_state = WebSocketVADState(session_id=f"ws:{uuid.uuid4().hex}")
 
     try:
@@ -292,6 +359,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         user_id,
                         vad_state,
                         generation_id,
+                        tts_service=tts_service,
                     ),
                 )
                 if not started:
@@ -310,6 +378,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     service_context=service_context,
                     storage=storage,
                     user_id=user_id,
+                    tts_service=tts_service,
                 )
             elif msg_type == "input:audio:end":
                 await _handle_audio_end(websocket, message, vad_service, vad_state)
@@ -331,6 +400,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         except Exception:
             pass  # Connection already closed
     finally:
+        await vad_state.interrupt_tts_generation()
         vad_state.release()
         vad_service.reset_session(vad_state.session_id)
         logger.info("WebSocket connection cleanup complete")
@@ -413,6 +483,91 @@ async def _send_generation_complete(
         return True
 
 
+async def _send_tts_audio_segment(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    segment: TTSAudioSegment,
+) -> None:
+    """Send one TTS audio segment if its generation is still active."""
+
+    message = {
+        "type": "output:audio:segment",
+        "data": {
+            "chat_id": segment.chat_id,
+            "character_id": segment.character_id,
+            "generation_id": segment.generation_id,
+            "segment_id": segment.segment_id,
+            "sequence": segment.sequence,
+            "audio": base64.b64encode(segment.audio).decode("ascii"),
+            "media_type": segment.media_type,
+            "display_text": segment.display_text,
+            "tts_text": segment.tts_text,
+        },
+    }
+    await _send_tts_generation_event(websocket, vad_state, segment.generation_id, message)
+
+
+async def _send_tts_audio_complete(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    complete: TTSAudioComplete,
+) -> None:
+    """Send TTS audio completion if its generation is still active."""
+
+    message = {
+        "type": "output:audio:complete",
+        "data": {
+            "chat_id": complete.chat_id,
+            "character_id": complete.character_id,
+            "generation_id": complete.generation_id,
+            "last_sequence": complete.last_sequence,
+        },
+    }
+    await _send_tts_generation_event(websocket, vad_state, complete.generation_id, message)
+    vad_state.complete_tts_generation(complete.generation_id)
+
+
+async def _send_tts_audio_error(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    error: TTSAudioError,
+) -> None:
+    """Send a per-segment TTS error if its generation is still active."""
+
+    message = {
+        "type": "output:audio:error",
+        "data": {
+            "chat_id": error.chat_id,
+            "character_id": error.character_id,
+            "generation_id": error.generation_id,
+            "segment_id": error.segment_id,
+            "sequence": error.sequence,
+            "code": error.code,
+            "message": error.message,
+        },
+    }
+    await _send_tts_generation_event(websocket, vad_state, error.generation_id, message)
+
+
+async def _send_tts_generation_event(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+    message: dict[str, Any],
+) -> None:
+    """Send a TTS event with a stale-generation check under the send lock."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if vad_state.is_tts_generation_active(generation_id):
+            await websocket.send_json(message)
+        return
+
+    async with send_lock:
+        if vad_state.is_tts_generation_active(generation_id):
+            await websocket.send_json(message)
+
+
 async def _send_speech_start_interrupt(
     websocket: Any,
     vad_state: WebSocketVADState,
@@ -450,14 +605,16 @@ async def _send_speech_start_interrupt_unlocked(
     interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
     stale_generation_id = vad_state.invalidate_current_generation()
     cancelled = vad_state.cancel_current_chat_task()
+    interrupted_tts_generation_id = await vad_state.interrupt_tts_generation()
+    control_generation_id = stale_generation_id or interrupted_tts_generation_id
 
     data: dict[str, Any] = {
         "chat_id": chat_id,
         "character_id": character_id,
         "reason": "speech_start",
     }
-    if stale_generation_id is not None:
-        data["generation_id"] = stale_generation_id
+    if control_generation_id is not None:
+        data["generation_id"] = control_generation_id
 
     await websocket.send_json(
         {
@@ -465,7 +622,7 @@ async def _send_speech_start_interrupt_unlocked(
             "data": data,
         }
     )
-    return interrupted_snapshot, stale_generation_id, cancelled
+    return interrupted_snapshot, control_generation_id, cancelled
 
 
 def _start_tracked_chat_task(
@@ -502,6 +659,52 @@ def _finalize_tracked_chat_task(
         logger.error(f"Tracked chat task failed: {exc}")
 
 
+def _start_tts_finish_task(vad_state: WebSocketVADState, generation_id: str) -> None:
+    """Finish TTS after chat completion without holding the chat task open."""
+
+    task = asyncio.create_task(_finish_tts_generation_safely(vad_state, generation_id))
+    _TTS_FINISH_TASKS.add(task)
+    task.add_done_callback(_finalize_tts_finish_task)
+
+
+def _finalize_tts_finish_task(task: asyncio.Task[None]) -> None:
+    """Release a background TTS finish task and consume terminal exceptions."""
+
+    _TTS_FINISH_TASKS.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.debug("TTS finish task cancelled")
+    except Exception as exc:
+        logger.warning(f"TTS finish task failed unexpectedly: {exc}")
+
+
+async def _finish_tts_generation_safely(
+    vad_state: WebSocketVADState,
+    generation_id: str,
+) -> None:
+    """Flush TTS in the background and clean up on recoverable failures."""
+
+    try:
+        await vad_state.finish_tts_generation(generation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "TTS finish task failed | generation_id={} | error={!r}",
+            generation_id,
+            exc,
+        )
+        try:
+            await vad_state.interrupt_tts_generation(generation_id)
+        except Exception as cleanup_exc:  # noqa: BLE001
+            logger.warning(
+                "TTS finish cleanup failed | generation_id={} | error={!r}",
+                generation_id,
+                cleanup_exc,
+            )
+
+
 def _discard_generation_if_active(vad_state: WebSocketVADState, generation_id: str) -> None:
     """Invalidate a generation only if it is still the connection's active one."""
 
@@ -515,6 +718,81 @@ def _interrupted_metadata(snapshot: InterruptedGenerationSnapshot) -> dict[str, 
         "interrupted": True,
         "interrupt_reason": snapshot.reason,
     }
+
+
+async def _maybe_start_tts_segment_manager(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    tts_service: Any | None,
+    *,
+    chat_id: str,
+    character_id: str,
+    generation_id: str,
+) -> TTSSegmentManager | None:
+    """Create and track a TTS segment manager when streaming auto-play is enabled."""
+
+    if tts_service is None:
+        return None
+
+    config = _read_tts_config(tts_service)
+    streaming_config = config.get("streaming")
+    if not isinstance(streaming_config, dict):
+        streaming_config = {}
+    if not (
+        _config_enabled(config.get("enabled"))
+        and _config_enabled(config.get("auto_play"))
+        and _config_enabled(streaming_config.get("enabled"))
+    ):
+        return None
+
+    async def send_segment(segment: TTSAudioSegment) -> None:
+        await _send_tts_audio_segment(websocket, vad_state, segment)
+
+    async def send_complete(complete: TTSAudioComplete) -> None:
+        await _send_tts_audio_complete(websocket, vad_state, complete)
+
+    async def send_error(error: TTSAudioError) -> None:
+        await _send_tts_audio_error(websocket, vad_state, error)
+
+    try:
+        manager = TTSSegmentManager(
+            tts_service=tts_service,
+            chat_id=chat_id,
+            character_id=character_id,
+            generation_id=generation_id,
+            config=streaming_config,
+            send_segment=send_segment,
+            send_complete=send_complete,
+            send_error=send_error,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to initialize TTS segment manager | chat_id={} | generation_id={} | error={!r}",
+            chat_id,
+            generation_id,
+            exc,
+        )
+        return None
+
+    await vad_state.set_tts_manager(generation_id, manager)
+    return manager
+
+
+def _read_tts_config(tts_service: Any) -> dict[str, Any]:
+    config_store = getattr(tts_service, "config_store", None)
+    if config_store is not None and hasattr(config_store, "read"):
+        config = config_store.read()
+    elif hasattr(tts_service, "get_config"):
+        config = tts_service.get_config()
+    else:
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def _config_enabled(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 async def _persist_interrupted_generation(
@@ -596,6 +874,7 @@ async def _handle_text_input(
     user_id: str,
     vad_state: WebSocketVADState,
     generation_id: str,
+    tts_service: Any | None = None,
 ) -> None:
     """Handle text input message and stream ChatAgent response.
     处理文本输入消息并流式传输 ChatAgent 响应。
@@ -685,6 +964,15 @@ async def _handle_text_input(
         _discard_generation_if_active(vad_state, generation_id)
         return
 
+    tts_manager = await _maybe_start_tts_segment_manager(
+        websocket,
+        vad_state,
+        tts_service,
+        chat_id=str(chat_id),
+        character_id=str(character_id),
+        generation_id=generation_id,
+    )
+
     # Stream ChatAgent response
     # 流式传输 ChatAgent 响应
     chunks = []
@@ -727,6 +1015,8 @@ async def _handle_text_input(
                     generation_id,
                 )
                 return
+            if tts_manager is not None:
+                await vad_state.feed_tts_text(generation_id, chunk)
 
         if not vad_state.is_generation_active(generation_id):
             logger.info(
@@ -820,6 +1110,8 @@ async def _handle_text_input(
             )
             return
         vad_state.complete_generation(generation_id)
+        if tts_manager is not None:
+            _start_tts_finish_task(vad_state, generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
 
@@ -834,6 +1126,7 @@ async def _handle_text_input(
             generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
+        await vad_state.interrupt_tts_generation(generation_id)
     except Exception as e:
         logger.error(f"Unexpected error during chat: {e}")
         await _send_error(
@@ -843,6 +1136,7 @@ async def _handle_text_input(
             generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
+        await vad_state.interrupt_tts_generation(generation_id)
 
 
 async def _handle_audio_chunk(
@@ -854,6 +1148,7 @@ async def _handle_audio_chunk(
     service_context: Any | None = None,
     storage: Any | None = None,
     user_id: str | None = None,
+    tts_service: Any | None = None,
 ) -> None:
     """Handle realtime microphone audio chunks for backend VAD."""
 
@@ -985,6 +1280,7 @@ async def _handle_audio_chunk(
                 character_id=str(character_id),
                 text=asr_result["text"],
                 generation_id=asr_result["generation_id"],
+                tts_service=tts_service,
             )
 
 
@@ -1270,6 +1566,7 @@ async def _start_asr_chat_task(
     character_id: str,
     text: str,
     generation_id: str,
+    tts_service: Any | None = None,
 ) -> None:
     """Start a backend-owned chat turn from a completed ASR transcript."""
 
@@ -1302,6 +1599,7 @@ async def _start_asr_chat_task(
             user_id,
             vad_state,
             generation_id,
+            tts_service=tts_service,
         ),
     )
     if not started:
