@@ -29,17 +29,10 @@ DEFAULT_SILICONFLOW_VOICE = f"{DEFAULT_SILICONFLOW_MODEL}:claire"
 
 DEFAULT_TTS_CONFIG: dict[str, Any] = {
     "tts_model": "edge_tts",
-    "enabled": False,
+    "enabled": True,
     "auto_play": False,
     "show_player_on_home": False,
     "volume": 1.0,
-    "streaming": {
-        "enabled": False,
-        "segment_method": "pysbd",
-        "faster_first_response": True,
-        "max_concurrent_synthesis": 2,
-        "max_pending_segments": 12,
-    },
     "edge_tts": {
         "rate": "+0%",
     },

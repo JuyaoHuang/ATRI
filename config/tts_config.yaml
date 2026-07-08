@@ -1,13 +1,13 @@
 # 文本转语音（TTS）配置
 # tts_model 可选：edge_tts、gpt_sovits_tts、siliconflow_tts、cosyvoice3_tts。
 tts_model: siliconflow_tts # 当前使用的文本转语音模型
-enabled: false # 是否启用 TTS 模块
+enabled: true # 是否启用 TTS 模块
 auto_play: true # 是否自动朗读 AI 回复
 show_player_on_home: false # 是否在 / 页面显示播放控制组件
 volume: 1 # 浏览器播放音量，范围通常为 0.0-1.0
 
 streaming:
-  enabled: false # 是否启用 ATRI 应用层 TTS 分段流式化
+  enabled: true # 是否启用 ATRI 应用层 TTS 分段流式化
   segment_method: pysbd # 文本分段方法；第一版使用 pysbd
   faster_first_response: true # 是否允许第一段按短停顿提前切出
   max_concurrent_synthesis: 2 # 同一 generation 的最大并发合成任务数
