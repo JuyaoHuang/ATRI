@@ -146,6 +146,8 @@ class SentenceDivider:
 5. `flush()` 在 LLM 完成或任务取消前调用，输出剩余 buffer。
 6. 空白文本、纯标点文本不生成 segment。
 
+句末边界字符在中文子集基础上增加英文、日文常用符号：`。！？!?…．.｡`。短停顿字符为 `，,、､；;：:`，只用于 `faster_first_response=true` 时的第一段提前切出。
+
 第一版不做长度兜底切分。若 provider 对单段长度敏感，后续再增加 `max_segment_chars`。
 
 ## 5. segment_manager.py
@@ -467,6 +469,7 @@ VAD interrupt 到来时复用现有 `vadInterruptPlayback(generationId)`，停�
 3. `faster_first_response=false` 时等待完整句子。
 4. `flush()` 输出剩余 buffer。
 5. 空白 chunk 不产生 segment。
+6. 英文、日文常用句末符号可作为完整句边界。
 
 `tests/tts/test_segment_manager.py`：
 

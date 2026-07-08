@@ -31,6 +31,26 @@ def test_sentence_divider_can_wait_for_full_sentence_before_first_response() -> 
     assert [segment.sequence for segment in segments] == [0]
 
 
+def test_sentence_divider_accepts_english_sentence_boundaries() -> None:
+    divider = SentenceDivider(faster_first_response=False)
+
+    segments = divider.feed("Hello world. Next sentence")
+
+    assert [segment.tts_text for segment in segments] == ["Hello world."]
+    assert [segment.sequence for segment in segments] == [0]
+    assert divider.buffer == "Next sentence"
+
+
+def test_sentence_divider_accepts_japanese_sentence_boundaries() -> None:
+    divider = SentenceDivider(faster_first_response=False)
+
+    segments = divider.feed("こんにちは。次です．まだ途中")
+
+    assert [segment.tts_text for segment in segments] == ["こんにちは。", "次です．"]
+    assert [segment.sequence for segment in segments] == [0, 1]
+    assert divider.buffer == "まだ途中"
+
+
 def test_sentence_divider_flush_emits_remaining_buffer() -> None:
     divider = SentenceDivider(faster_first_response=False)
     assert divider.feed("还有半句") == []
@@ -46,5 +66,5 @@ def test_sentence_divider_ignores_blank_and_punctuation_only_text() -> None:
     divider = SentenceDivider(faster_first_response=True)
 
     assert divider.feed("   ") == []
-    assert divider.feed("！！！") == []
+    assert divider.feed("！！！．．｡") == []
     assert divider.flush() == []

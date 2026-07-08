@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import pysbd
 
-SENTENCE_END_CHARS = frozenset("。！？!?…")
-FIRST_RESPONSE_BREAK_CHARS = frozenset("，,、；;：:")
-NON_SPEECH_CHARS = frozenset(" \t\r\n，,、。！？!?；;：:…“”\"'‘’（）()[]【】{}<>《》-_—~·.")
+SENTENCE_END_CHARS = frozenset("。！？!?…．.｡")
+FIRST_RESPONSE_BREAK_CHARS = frozenset("，,、､；;：:")
+NON_SPEECH_CHARS = frozenset(" \t\r\n　，,、､。｡！？!?；;：:…‥“”\"'‘’（）()[]【】{}<>《》-_—~·.．")
 
 
 @dataclass(frozen=True)
