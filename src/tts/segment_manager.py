@@ -133,6 +133,7 @@ class TTSSegmentManager:
         self._skipped_sequences: set[int] = set()
         self._next_sequence_to_send = 0
         self._last_sequence_seen: int | None = None
+        self._draining = False
         self._interrupted = False
         self._closed = False
         self._complete_sent = False
@@ -162,21 +163,27 @@ class TTSSegmentManager:
             await self._schedule_or_skip(segment)
 
         await self._wait_for_pending_tasks()
+        await self._drain_ready()
         async with self._lock:
             if self.interrupted or self._complete_sent:
                 return
-            await self._drain_ready_locked()
-            if self.interrupted or self._complete_sent:
-                return
-            await self._send_complete(
-                TTSAudioComplete(
-                    chat_id=self.chat_id,
-                    character_id=self.character_id,
-                    generation_id=self.generation_id,
-                    last_sequence=self._last_sequence_seen,
-                )
+            complete = TTSAudioComplete(
+                chat_id=self.chat_id,
+                character_id=self.character_id,
+                generation_id=self.generation_id,
+                last_sequence=self._last_sequence_seen,
             )
             self._complete_sent = True
+        try:
+            await self._send_complete(complete)
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "TTS audio completion delivery failed | chat_id={} | generation_id={} | error={!r}",
+                self.chat_id,
+                self.generation_id,
+                error,
+            )
+            await self._stop(interrupted=True)
 
     async def interrupt(self) -> None:
         """Invalidate this generation and cancel queued segment work."""
@@ -260,7 +267,7 @@ class TTSSegmentManager:
             if self.interrupted:
                 return
             self._completed_segments[segment.sequence] = audio_segment
-            await self._drain_ready_locked()
+        await self._drain_ready()
 
     async def _skip_segment(self, segment: TTSTextSegment, *, code: str, message: str) -> None:
         async with self._lock:
@@ -276,34 +283,60 @@ class TTSSegmentManager:
                 code=code,
                 message=message,
             )
+        try:
             await self._send_error(error)
-            await self._drain_ready_locked()
+        except Exception as send_error:  # noqa: BLE001
+            logger.warning(
+                "TTS segment error delivery failed | chat_id={} | generation_id={} "
+                "| sequence={} | error={!r}",
+                self.chat_id,
+                self.generation_id,
+                segment.sequence,
+                send_error,
+            )
+            await self._stop(interrupted=True)
+            return
+        await self._drain_ready()
 
-    async def _drain_ready_locked(self) -> None:
-        while not self.interrupted:
-            if self._next_sequence_to_send in self._skipped_sequences:
-                self._skipped_sequences.remove(self._next_sequence_to_send)
-                self._next_sequence_to_send += 1
-                continue
-
-            segment = self._completed_segments.pop(self._next_sequence_to_send, None)
-            if segment is None:
+    async def _drain_ready(self) -> None:
+        async with self._lock:
+            if self._draining:
                 return
+            self._draining = True
 
-            try:
+        current_sequence: int | None = None
+        try:
+            while True:
+                async with self._lock:
+                    if self.interrupted:
+                        return
+
+                    if self._next_sequence_to_send in self._skipped_sequences:
+                        self._skipped_sequences.remove(self._next_sequence_to_send)
+                        self._next_sequence_to_send += 1
+                        continue
+
+                    segment = self._completed_segments.pop(self._next_sequence_to_send, None)
+                    if segment is None:
+                        return
+
+                current_sequence = segment.sequence
                 await self._send_segment(segment)
-            except Exception as error:  # noqa: BLE001
-                logger.warning(
-                    "TTS segment delivery failed | chat_id={} | generation_id={} "
-                    "| sequence={} | error={!r}",
-                    self.chat_id,
-                    self.generation_id,
-                    segment.sequence,
-                    error,
-                )
-                await self._stop_locked(interrupted=True)
-                return
-            self._next_sequence_to_send += 1
+                async with self._lock:
+                    self._next_sequence_to_send += 1
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "TTS segment delivery failed | chat_id={} | generation_id={} "
+                "| sequence={} | error={!r}",
+                self.chat_id,
+                self.generation_id,
+                current_sequence,
+                error,
+            )
+            await self._stop(interrupted=True)
+        finally:
+            async with self._lock:
+                self._draining = False
 
     async def _wait_for_pending_tasks(self) -> None:
         while self._pending_tasks:
