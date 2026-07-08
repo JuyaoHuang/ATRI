@@ -62,6 +62,40 @@ def test_sentence_divider_flush_emits_remaining_buffer() -> None:
     assert divider.buffer == ""
 
 
+def test_sentence_divider_filters_parenthetical_tts_text_only() -> None:
+    divider = SentenceDivider(faster_first_response=False)
+
+    segments = divider.feed("（微笑）你好。[whisper]Hello.【动作】继续。")
+
+    assert [segment.display_text for segment in segments] == [
+        "（微笑）你好。",
+        "[whisper]Hello.",
+        "【动作】继续。",
+    ]
+    assert [segment.tts_text for segment in segments] == ["你好。", "Hello.", "继续。"]
+    assert [segment.sequence for segment in segments] == [0, 1, 2]
+
+
+def test_sentence_divider_filters_nested_parenthetical_tts_text() -> None:
+    divider = SentenceDivider(faster_first_response=False)
+
+    segments = divider.feed("（轻轻（歪头））你好。")
+
+    assert [segment.display_text for segment in segments] == ["（轻轻（歪头））你好。"]
+    assert [segment.tts_text for segment in segments] == ["你好。"]
+    assert [segment.sequence for segment in segments] == [0]
+
+
+def test_sentence_divider_skips_parenthetical_only_tts_segment() -> None:
+    divider = SentenceDivider(faster_first_response=False)
+
+    assert divider.feed("（微笑）。") == []
+    segments = divider.feed("你好。")
+
+    assert [segment.tts_text for segment in segments] == ["你好。"]
+    assert [segment.sequence for segment in segments] == [0]
+
+
 def test_sentence_divider_ignores_blank_and_punctuation_only_text() -> None:
     divider = SentenceDivider(faster_first_response=True)
 

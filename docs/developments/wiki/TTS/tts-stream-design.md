@@ -118,6 +118,8 @@ LLM chunk
 
 句子边界字符以中文常用句末符号为基础，同时兼容英文和日文常用句末符号，例如 `。！？!?…．.｡`。`pysbd` 仍负责实际边界识别，字符集合只作为 ATRI 判断“该片段是否可发出”的收口条件。
 
+每个 segment 保留两份文本：`display_text` 是已经发送给前端的原始文本，`tts_text` 是进入 TTS 合成的清洗文本。`tts_text` 会移除 `（...）`、`(...)`、`[...]`、`【...】` 包裹的动作或注释文本；如果清洗后没有可朗读内容，该 segment 不进入 TTS 合成。
+
 ### 5.1 faster_first_response
 
 `faster_first_response` 是可选能力。

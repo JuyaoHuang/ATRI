@@ -148,6 +148,13 @@ class SentenceDivider:
 
 句末边界字符在中文子集基础上增加英文、日文常用符号：`。！？!?…．.｡`。短停顿字符为 `，,、､；;：:`，只用于 `faster_first_response=true` 时的第一段提前切出。
 
+`SentenceDivider` 生成 segment 时必须区分：
+
+1. `display_text`：保留原始文本，用于前端展示和调试。
+2. `tts_text`：进入 TTS 合成的文本，需移除 `（...）`、`(...)`、`[...]`、`【...】` 包裹内容。
+
+如果清洗后的 `tts_text` 没有可朗读内容，则跳过该 TTS segment，不占用 `sequence`。
+
 第一版不做长度兜底切分。若 provider 对单段长度敏感，后续再增加 `max_segment_chars`。
 
 ## 5. segment_manager.py

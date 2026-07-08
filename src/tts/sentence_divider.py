@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pysbd
 
+from .text_filter import clean_ai_reply_text_for_tts
+
 SENTENCE_END_CHARS = frozenset("。！？!?…．.｡")
 FIRST_RESPONSE_BREAK_CHARS = frozenset("，,、､；;：:")
 NON_SPEECH_CHARS = frozenset(" \t\r\n　，,、､。｡！？!?；;：:…‥“”\"'‘’（）()[]【】{}<>《》-_—~·.．")
@@ -69,7 +71,8 @@ class SentenceDivider:
         self._buffer = ""
         if not _has_speakable_text(text):
             return []
-        return [self._make_segment(text)]
+        segment = self._make_segment(text)
+        return [segment] if segment is not None else []
 
     def reset(self) -> None:
         """Clear buffered text and restart sequence numbering."""
@@ -119,15 +122,23 @@ class SentenceDivider:
         if consumed_chars > 0:
             self._buffer = self._buffer[consumed_chars:].lstrip()
 
-        return [self._make_segment(segment) for segment in emitted]
+        return [
+            tts_segment
+            for segment in emitted
+            if (tts_segment := self._make_segment(segment)) is not None
+        ]
 
-    def _make_segment(self, text: str) -> TTSTextSegment:
+    def _make_segment(self, text: str) -> TTSTextSegment | None:
+        tts_text = clean_ai_reply_text_for_tts(text)
+        if not _has_speakable_text(tts_text):
+            return None
+
         self._first_segment_emitted = True
         segment = TTSTextSegment(
             segment_id=uuid4().hex,
             sequence=self._next_sequence,
             display_text=text,
-            tts_text=text,
+            tts_text=tts_text,
         )
         self._next_sequence += 1
         return segment
