@@ -6,6 +6,13 @@ auto_play: true # 是否自动朗读 AI 回复
 show_player_on_home: false # 是否在 / 页面显示播放控制组件
 volume: 1 # 浏览器播放音量，范围通常为 0.0-1.0
 
+streaming:
+  enabled: false # 是否启用 ATRI 应用层 TTS 分段流式化
+  segment_method: pysbd # 文本分段方法；第一版使用 pysbd
+  faster_first_response: true # 是否允许第一段按短停顿提前切出
+  max_concurrent_synthesis: 2 # 同一 generation 的最大并发合成任务数
+  max_pending_segments: 12 # 后端允许排队等待下发的最大 segment 数
+
 edge_tts:
   # 查看文档：https://github.com/rany2/edge-tts
   # 可用 `edge-tts --list-voices` 列出所有可用语音。
