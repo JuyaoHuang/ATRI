@@ -61,6 +61,7 @@ class FakeStreamingTTSService:
         *,
         streaming_enabled: bool = True,
         failures: set[str] | None = None,
+        block_until: asyncio.Event | None = None,
     ) -> None:
         self.config_store = FakeTTSConfigStore(
             {
@@ -76,6 +77,8 @@ class FakeStreamingTTSService:
             }
         )
         self.failures = failures or set()
+        self.block_until = block_until
+        self.synthesis_started = asyncio.Event()
         self.calls: list[str] = []
 
     async def synthesize(
@@ -87,6 +90,9 @@ class FakeStreamingTTSService:
         options: dict | None = None,
     ) -> dict:
         self.calls.append(text)
+        self.synthesis_started.set()
+        if self.block_until is not None:
+            await self.block_until.wait()
         if text in self.failures:
             raise RuntimeError(f"boom: {text}")
         return {
@@ -119,6 +125,7 @@ def mock_config() -> dict:
         "auth": {"enabled": False},
         "llm": {},
         "memory": {},
+        "tts": {"enabled": False, "auto_play": False, "streaming": {"enabled": False}},
     }
 
 
@@ -1095,12 +1102,10 @@ async def test_text_input_streaming_tts_emits_audio_events(
         tts_service=tts_service,
     )
 
+    audio_complete = await _wait_for_message_type(websocket, "output:audio:complete")
     audio_segments = [
         message for message in websocket.messages if message["type"] == "output:audio:segment"
     ]
-    audio_complete = next(
-        message for message in websocket.messages if message["type"] == "output:audio:complete"
-    )
 
     assert tts_service.calls == ["第一句。", "第二句。"]
     assert [message["data"]["sequence"] for message in audio_segments] == [0, 1]
@@ -1110,6 +1115,52 @@ async def test_text_input_streaming_tts_emits_audio_events(
     assert audio_segments[0]["data"]["generation_id"] == generation_id
     assert audio_complete["data"]["generation_id"] == generation_id
     assert audio_complete["data"]["last_sequence"] == 1
+
+
+@pytest.mark.asyncio
+async def test_text_input_streaming_tts_finish_does_not_block_chat_complete(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(
+        side_effect=lambda text, **_kwargs: _mock_chat_stream(["pending audio"])
+    )
+    release_synthesis = asyncio.Event()
+    tts_service = FakeStreamingTTSService(block_until=release_synthesis)
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-background-tts-finish"
+    vad_state.activate_generation(generation_id)
+
+    await asyncio.wait_for(
+        _handle_text_input(
+            websocket,
+            {
+                "type": "input:text",
+                "data": {
+                    "text": "hello",
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            },
+            mock_context,
+            mock_storage,
+            "default",
+            vad_state,
+            generation_id,
+            tts_service=tts_service,
+        ),
+        timeout=0.2,
+    )
+
+    assert any(message["type"] == "output:chat:complete" for message in websocket.messages)
+    await asyncio.wait_for(tts_service.synthesis_started.wait(), timeout=0.2)
+    assert not any(message["type"] == "output:audio:complete" for message in websocket.messages)
+
+    release_synthesis.set()
+    audio_complete = await _wait_for_message_type(websocket, "output:audio:complete")
+    assert audio_complete["data"]["generation_id"] == generation_id
 
 
 @pytest.mark.asyncio
@@ -1181,6 +1232,7 @@ async def test_text_input_streaming_tts_error_keeps_chat_complete(
         tts_service=tts_service,
     )
 
+    await _wait_for_message_type(websocket, "output:audio:complete")
     audio_errors = [
         message for message in websocket.messages if message["type"] == "output:audio:error"
     ]

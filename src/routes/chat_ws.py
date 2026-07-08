@@ -55,6 +55,8 @@ from src.tts.segment_manager import (
 from src.vad import VADEvent, VADEventType, VADService, VADState
 from src.vad.exceptions import VADConfigError, VADProcessingError, VADProviderUnavailableError
 
+_TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
+
 
 @dataclass(frozen=True)
 class InterruptedGenerationSnapshot:
@@ -657,6 +659,52 @@ def _finalize_tracked_chat_task(
         logger.error(f"Tracked chat task failed: {exc}")
 
 
+def _start_tts_finish_task(vad_state: WebSocketVADState, generation_id: str) -> None:
+    """Finish TTS after chat completion without holding the chat task open."""
+
+    task = asyncio.create_task(_finish_tts_generation_safely(vad_state, generation_id))
+    _TTS_FINISH_TASKS.add(task)
+    task.add_done_callback(_finalize_tts_finish_task)
+
+
+def _finalize_tts_finish_task(task: asyncio.Task[None]) -> None:
+    """Release a background TTS finish task and consume terminal exceptions."""
+
+    _TTS_FINISH_TASKS.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.debug("TTS finish task cancelled")
+    except Exception as exc:
+        logger.warning(f"TTS finish task failed unexpectedly: {exc}")
+
+
+async def _finish_tts_generation_safely(
+    vad_state: WebSocketVADState,
+    generation_id: str,
+) -> None:
+    """Flush TTS in the background and clean up on recoverable failures."""
+
+    try:
+        await vad_state.finish_tts_generation(generation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "TTS finish task failed | generation_id={} | error={!r}",
+            generation_id,
+            exc,
+        )
+        try:
+            await vad_state.interrupt_tts_generation(generation_id)
+        except Exception as cleanup_exc:  # noqa: BLE001
+            logger.warning(
+                "TTS finish cleanup failed | generation_id={} | error={!r}",
+                generation_id,
+                cleanup_exc,
+            )
+
+
 def _discard_generation_if_active(vad_state: WebSocketVADState, generation_id: str) -> None:
     """Invalidate a generation only if it is still the connection's active one."""
 
@@ -1063,7 +1111,7 @@ async def _handle_text_input(
             return
         vad_state.complete_generation(generation_id)
         if tts_manager is not None:
-            await vad_state.finish_tts_generation(generation_id)
+            _start_tts_finish_task(vad_state, generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
 
