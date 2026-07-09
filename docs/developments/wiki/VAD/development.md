@@ -1623,3 +1623,100 @@ uv run python -m py_compile src/routes/chat_ws.py
 3. 后续如需避免 200+ 字长句 segment，需要新增 `max_segment_chars` 或“长句按短停顿兜底切分”策略。
 4. 当前没有 `heard_response`，也不计划让 TTS 播放进度回写聊天历史。
 5. 临时 WS 验收日志已回退；如果后续仍需要更直观的 WS payload 验收，可以增加受配置开关控制的 debug 级结构化日志，而不是长期保留 INFO 级临时日志。
+
+## 2026-07-08: TTS 流式边界补丁
+
+### 1. 背景
+
+TTS 分段流式化验收后，又补充确认了两个和 VAD/多会话边界有关的小问题：
+
+1. 后端 `output:chat:complete` 已经发给前端后，`_handle_text_input()` 仍然会等待 `finish_tts_generation()` 完成。此时如果 TTS 还在合成，`current_chat_task` 没有释放，用户切换会话或角色后立刻发送新消息，后端会拒绝新的 `input:text`，返回 `Chat task already running`。
+2. 前端 audio player 是全局播放队列。切换会话、切换角色或开始新一轮聊天时，如果旧 generation 的 TTS 仍在播放或稍后到达，旧音频可能继续在新的聊天上下文中播放。
+
+这两个问题都不改变核心原则：TTS 是 LLM 文本回复的下游消费者，不反向控制聊天历史、记忆或 LLM generation。切换会话/角色也不等同于 VAD interrupt，它只意味着旧音频不应继续属于当前前端上下文。
+
+### 2. 后端：TTS finish 不再阻塞 chat task
+
+原先 `_handle_text_input()` 在发送 `output:chat:complete` 后执行：
+
+```python
+vad_state.complete_generation(generation_id)
+if tts_manager is not None:
+    await vad_state.finish_tts_generation(generation_id)
+```
+
+这会让聊天主任务一直等到所有 TTS segment 合成和下发结束。补丁将其改为后台执行：
+
+```python
+vad_state.complete_generation(generation_id)
+if tts_manager is not None:
+    _start_tts_finish_task(vad_state, generation_id)
+```
+
+新增的辅助逻辑位于 `src/routes/chat_ws.py`：
+
+1. `_start_tts_finish_task()` 创建后台 task。
+2. `_finish_tts_generation_safely()` 执行 `finish_tts_generation(generation_id)`。
+3. `_finalize_tts_finish_task()` 消费 task 终态异常，避免后台异常无人读取。
+4. 如果 finish 过程中出现可恢复异常，记录 warning，并尝试 `interrupt_tts_generation(generation_id)` 清理旧 TTS manager。
+
+这样 `output:chat:complete` 仍只表示文本回复完成；TTS 音频完成仍由独立的 `output:audio:complete` 表示。聊天主任务会在文本完成后释放，后续新聊天不再被旧 TTS 合成占用。
+
+### 3. 前端：上下文变化时停止并丢弃旧音频
+
+前端在 `frontend/src/composables/useAudioPlayer.ts` 中把原先偏 VAD 的 tombstone 逻辑抽象为更通用的 discarded generation 逻辑：
+
+1. `discardGenerationAudio(generationId)`：丢弃指定 generation 的当前播放、排队音频和后续迟到结果。
+2. `discardActiveAudio(generationId?)`：内部通用核心；没有传入 generation 时，会把当前播放器已知的活跃 generation 都标记为 discarded，并停止播放。
+3. `stopBecauseContextChanged()`：外部语义入口，用于会话或角色变化。旁边注释说明：`Chat or character changed; queued TTS belongs to the previous context.`
+4. `vadInterruptPlayback(generationId?)`：继续保留 VAD interrupt 语义，但复用同一套 discard 核心。
+5. `trackAudioGeneration(generationId)`：在可见会话完成时记录本轮 audio generation，便于后续上下文变化时统一丢弃。
+
+调用点：
+
+1. `frontend/src/composables/useChat.ts`
+   - 新消息成功通过 WebSocket 发送后、`beginStreaming()` 前调用 `audioPlayer.stopBecauseContextChanged()`。
+   - 这保证“开始新一轮聊天”会立即停止旧音频。
+2. `frontend/src/components/chat/ChatArea.vue`
+   - 监听 `[currentChatId, currentCharacterId]` 变化，变化时调用 `stopBecauseContextChanged()`。
+3. `frontend/src/components/live2d/StageChatShell.vue`
+   - Stage 模式下使用同样的上下文变化监听。
+4. `frontend/src/composables/useWebSocket.ts`
+   - `chat:complete` 如果不是当前可见上下文，会丢弃对应 generation 的音频。
+   - `audio:segment` 如果 `chat_id` 或 `character_id` 不匹配当前上下文，会丢弃对应 generation，并且不入队播放。
+
+因此：
+
+1. 切换会话/角色时，前端立即停止旧音频并清空队列。
+2. 开始新一轮聊天时，旧音频也会立即停止。
+3. 旧 generation 后续迟到的 WebSocket TTS segment 或 REST TTS 结果不会重新入队播放。
+4. 这不会生成 interrupted 历史，也不会改变后端 LLM 或 memory 语义。
+
+### 4. 边界行为
+
+1. 只切换会话/角色、不发送新消息时，前端会丢弃旧音频；后端旧 TTS 可能仍会自然完成并发送事件，但前端会按 `chat_id`、`character_id` 和 discarded generation 规则忽略。
+2. 切换后发送新消息时，新 generation 创建 TTS manager 前会通过 `set_tts_manager()` interrupt 旧 TTS manager，旧后端 TTS 链路会被清理。
+3. 页面刷新会销毁前端 JS 上下文，当前播放自然停止；WebSocket 关闭后，后端 `finally` 会执行 `interrupt_tts_generation()` 和连接状态释放。
+4. 第一版没有新增“前端切换会话时主动通知后端取消旧 TTS”的 client -> server 协议。如果后续要进一步节省 provider 请求成本，可以单独设计 `input:tts:cancel` 或类似控制事件。
+
+### 5. 验证
+
+本次补丁验证命令：
+
+```bash
+uv run pytest tests/routes/test_chat_ws.py tests/tts -v
+uv run python -m mypy src/ --ignore-missing-imports
+uv run ruff check src/routes/chat_ws.py tests/routes/test_chat_ws.py
+npm run type-check
+npm run build
+npm run lint
+```
+
+结果：
+
+1. `tests/routes/test_chat_ws.py tests/tts`：52 passed。
+2. `mypy src/`：通过。
+3. `ruff check src/routes/chat_ws.py tests/routes/test_chat_ws.py`：通过。
+4. 前端 `type-check`：通过。
+5. 前端 `build`：通过。
+6. 前端 `lint`：0 errors；保留既有 `TransitionVertical.vue` 中 2 个 `any` warning，与本次改动无关。

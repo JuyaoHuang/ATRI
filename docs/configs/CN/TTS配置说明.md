@@ -7,6 +7,11 @@
 
 本文说明 TTS（Text-to-Speech，文本转语音）的配置结构、Provider 选择、前端设置页对应关系和常见排障方法。
 
+开发侧配置边界、回写白名单和运行链路见：
+
+- [TTS 配置与运行边界](../../developments/modules/tts/config.zh-CN.md)
+- [TTS 分段流式化设计](../../developments/modules/tts/streaming-design.zh-CN.md)
+
 ---
 
 ## 1. 快速开始
@@ -267,7 +272,7 @@ cosyvoice3_tts:
 更详细说明见：
 
 ```text
-atri/docs/CosyVoice3_TTS使用说明.md
+docs/developments/modules/tts/cosyvoice3-provider.zh-CN.md
 ```
 
 ---

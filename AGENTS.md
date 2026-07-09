@@ -8,20 +8,26 @@
 - **技术栈**: Python 3.11+ / FastAPI / uv / loguru
 - **Python 环境**: 当前工作目录存在 uv 创建的 `.venv`，执行 Python、测试、格式化、类型检查时优先使用 `uv run ...`
 - **正式设计文档位置**: `docs/`
-  - `developments/项目架构设计.md` — 目录结构、技术选型、日志方案
-  - `developments/module-design/CN/记忆系统设计讨论.md` — 记忆系统的完整设计蓝本
-  - `developments/module-design/CN/LLM调用层设计讨论.md` — LLM 调用层的接口、工厂、配置设计
-  - `developments/module-design/CN/ASR模块设计文档.md` — ASR 模块接口、工厂、配置设计
-  - `developments/module-design/CN/TTS模块设计文档.md` — TTS 模块接口、工厂、配置设计
-  - `developments/module-design/CN/VAD语音唤醒模块设计.md` — VAD 模块参考设计
-- **VAD 文档位置**: `docs/developments/wiki/VAD/`
-  - `vad-design.md` — VAD、ASR、TTS 链路设计
-  - `vad-implement.md` — VAD 开发边界与架构说明
-  - `vad-implementation-plan.md` — VAD 分阶段实施计划
-- **TTS 文档位置**: `docs/developments/wiki/TTS/`
-  - `tts-stream-design.md` — TTS 流式链路设计
-  - `tts-stream-implement.md` — TTS 开发边界与架构说明
-- **实现前必读**: 修改某个模块前，先阅读对应的设计文档章节
+  - `developments/README.md` — 开发文档导航和阅读入口
+  - `developments/architecture/` — 项目级架构、分层和跨模块数据流
+  - `developments/api/` — REST API、WebSocket 和事件协议
+  - `developments/modules/` — 长期模块设计，目录尽量对齐 `src/`
+  - `developments/features/` — 某次 feature 的设计、计划、日志和验收
+  - `developments/wiki/` — GitHub Wiki 本地预发布稿
+  - `developments/decisions/` — ADR 技术决策记录
+- **旧设计文档位置**: `docs/developments/module-design/`
+  - 该目录仍可作为历史设计来源；新增长期结论应逐步迁移到 `developments/modules/`
+- **TTS 文档位置**:
+  - `developments/modules/tts/README.zh-CN.md` — TTS 长期设计入口
+  - `developments/modules/tts/streaming-design.zh-CN.md` — TTS 分段流式化长期设计
+  - `developments/modules/tts/config.zh-CN.md` — TTS 配置与运行边界
+  - `developments/features/2026-07-tts-segment-streaming/README.zh-CN.md` — TTS 分段流式化 feature 过程入口
+- **VAD 文档位置**:
+  - `developments/features/2026-06-vad-realtime-interrupt/README.zh-CN.md` — VAD 实时打断 feature 过程入口
+  - `developments/features/2026-06-vad-realtime-interrupt/dev-log.zh-CN.md` — VAD 实时打断开发日志
+  - `developments/wiki/development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md` — VAD Wiki 发布稿
+  - `developments/wiki/VAD/` — 旧设计、旧计划和原始长日志的过渡来源
+- **实现前必读**: 修改某个模块前，先读 `docs/developments/README.md`，再读对应 `developments/modules/<module>/` 和相关 feature 文档。
 
 ---
 
@@ -192,52 +198,27 @@ module/
 6. 每个 point 完成后，按“代码编写后的检查清单”执行当前改动范围内的 basic check，然后提交。
 7. 验收结束后再执行 `git push`，并使用 `gh pr` 提交 PR。
 
-当前主线任务为 TTS 分段流式化。按 `docs/developments/wiki/TTS/tts-stream-design.md` 和 `docs/developments/wiki/TTS/tts-stream-implement.md` 的 steps 计划推进：
+当前文档整理任务按 `docs/文档构建思路.md` 推进。新增或迁移文档时遵守：
 
 ```text
-Step 0: 文档与范围冻结
-  ├── 明确 TTS 是 LLM 文本回复的下游消费者
-  ├── 明确第一版不引入 heard_response
-  ├── 明确第一版不做 provider 原生 synthesize_stream()
-  └── 明确应用层分段合成 + WebSocket 音频段下发路线
-
-Step 1: 配置与依赖
-  ├── 新增 pysbd 依赖
-  ├── 在 config/tts_config.yaml 增加 streaming 顶层配置
-  ├── 在 src/tts/config.py 增加默认 streaming 配置
-  └── 保证 streaming disabled 时现有 REST TTS 行为不变
-
-Step 2: 文本分段器
-  ├── 新增 src/tts/sentence_divider.py
-  ├── 使用 pysbd 进行句子边界检测
-  ├── 支持可选 faster_first_response
-  └── 增加 tests/tts/test_sentence_divider.py
-
-Step 3: TTS 分段管理器
-  ├── 新增 src/tts/segment_manager.py
-  ├── 调用现有 TTSService.synthesize() 合成完整小音频
-  ├── 管理 segment_id、sequence、generation_id
-  ├── 控制并发和 ordered delivery
-  └── 增加 tests/tts/test_segment_manager.py
-
-Step 4: 后端 WebSocket 音频事件
-  ├── 在 src/routes/chat_ws.py 接入 TTSSegmentManager
-  ├── 发送 output:audio:segment
-  ├── 发送 output:audio:complete
-  ├── 发送 output:audio:error
-  └── VAD interrupt 时取消旧 generation 的 TTS manager
-
-Step 5: 前端音频段播放
-  ├── 在 frontend/src/utils/websocket.ts 分发 audio 事件
-  ├── 在 useWebSocket.ts 接收 audio segment
-  ├── 扩展 useAudioPlayer.ts 支持 generation + sequence 队列
-  ├── streaming enabled 时停止 complete 后 REST auto TTS
-  └── 保持手动历史消息播放继续走 REST TTS
-
-Step 6: 测试、文档与验收
-  ├── 补充 tests/tts/test-exe.md
-  ├── 扩展 WebSocket 集成测试
-  ├── 运行后端 mypy、ruff、pytest
-  ├── 运行前端构建或类型检查
-  └── 完成人工验收场景
+docs/developments/
+├── README.md                         # 开发文档总入口
+├── architecture/                     # 项目级长期架构
+├── api/                              # 稳定接口和协议
+├── modules/<module>/                 # 长期模块设计
+├── features/YYYY-MM-feature-slug/    # feature 过程文档
+├── wiki/                             # GitHub Wiki 预发布稿
+├── decisions/                        # ADR 技术决策记录
+├── templates/                        # 文档模板
+└── archive/                          # 历史归档
 ```
+
+整理规则：
+
+1. 用户教程和配置步骤继续留在 `docs/configs/`。
+2. 长期有效的模块边界沉淀到 `docs/developments/modules/<module>/`。
+3. 某次 feature 的设计、实施计划、开发日志和验收放入 `docs/developments/features/YYYY-MM-feature-slug/`。
+4. 准备发布到 GitHub Wiki 的文章放入 `docs/developments/wiki/`。
+5. 原始长日志、旧草稿和会话备份不要直接删除；需要迁移时先保留旧入口或放入 `archive/`。
+6. 旧 `docs/developments/wiki/TTS/` 和 `docs/developments/wiki/VAD/` 作为过渡来源保留；新增长期设计不要继续写入这些旧目录。
+7. TTS 分段流式化已完成第一版，后续以 `docs/developments/modules/tts/streaming-design.zh-CN.md` 作为长期设计依据。
