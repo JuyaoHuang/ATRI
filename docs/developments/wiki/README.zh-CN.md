@@ -39,6 +39,8 @@ Wiki 文档应面向读者，而不是保留原始开发流水。写作时优先
 | 主题 | 文档 |
 |---|---|
 | VAD 实时打断开发复盘 | [development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md](development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md) |
+| TTS 分段流式化开发复盘 | [development-blogs/2026-07-09-tts-segment-streaming.zh-CN.md](development-blogs/2026-07-09-tts-segment-streaming.zh-CN.md) |
+| Frontend WebSocket Session 重构复盘 | [development-blogs/2026-07-09-frontend-websocket-session-refactor.zh-CN.md](development-blogs/2026-07-09-frontend-websocket-session-refactor.zh-CN.md) |
 | 实时语音模式排障 | [troubleshooting/realtime-voice-mode.zh-CN.md](troubleshooting/realtime-voice-mode.zh-CN.md) |
 | 聊天历史与记忆修复 | [troubleshooting/chat-history-memory-repair.zh-CN.md](troubleshooting/chat-history-memory-repair.zh-CN.md) |
 | 聊天历史清理 | [troubleshooting/chat-history-cleanup.zh-CN.md](troubleshooting/chat-history-cleanup.zh-CN.md) |

@@ -4,10 +4,6 @@
 > 当前正式入口请优先阅读 [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md)、[../../modules/vad/README.zh-CN.md](../../modules/vad/README.zh-CN.md) 和 [../development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md](../development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md)。
 > 本文档保留为历史实施来源与迁移参考。
 
-状态：设计准备中  
-日期：2026-06-15  
-适用范围：`atri/` 后端与 `atri/frontend` 前端子模块
-
 文档职责：本文件记录具体开发说明、协议解释和模块边界；M0-M7 的职责划分与验收以 `docs/developments/wiki/VAD/vad-implementation-plan.md` 为准，开发过程流水记录写入 `docs/developments/wiki/VAD/development.md`。
 
 ## 1. 当前没有阻塞性疑惑

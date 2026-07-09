@@ -4,8 +4,6 @@
 > 当前正式入口请优先阅读 [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md) 和 [../../modules/vad/realtime-interrupt-boundary.zh-CN.md](../../modules/vad/realtime-interrupt-boundary.zh-CN.md)。
 > 本文档保留为历史实施计划来源与迁移参考。
 
-状态：待执行  
-日期：2026-06-15  
 前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-implement.md`
 
 文档职责：本文件是 VAD M0-M6 第一版 MVP 的唯一实施步骤与验收来源；`vad-implement.md` 用于记录具体开发说明，`development.md` 仅作为开发 blog。

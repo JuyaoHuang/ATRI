@@ -4,7 +4,6 @@
 > 当前正式入口请优先阅读 [../../features/2026-07-tts-segment-streaming/README.zh-CN.md](../../features/2026-07-tts-segment-streaming/README.zh-CN.md) 和 [../../modules/tts/streaming-design.zh-CN.md](../../modules/tts/streaming-design.zh-CN.md)。
 > 本文档保留为历史实施来源与迁移参考。
 
-状态：待实施  
 日期：2026-07-08  
 前置设计：`docs/developments/wiki/TTS/tts-stream-design.md`
 
