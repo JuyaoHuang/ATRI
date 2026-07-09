@@ -1,5 +1,9 @@
 # ATRI VAD 实时打断设计说明
 
+> 历史设计稿说明：
+> 当前正式入口请优先阅读 [../../modules/vad/README.zh-CN.md](../../modules/vad/README.zh-CN.md) 和 [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md)。
+> 本文档保留为历史设计来源与迁移参考。
+
 ## 1. 这份文档要解决什么问题
 
 atri 当前已经有 ASR 和 TTS，但它们不是一个统一的实时语音对话链路。

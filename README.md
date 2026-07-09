@@ -68,7 +68,7 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 ### 🎨 界面与交互
 
 - **Live2D 舞台**：后端托管模型资源，前端 PixiJS 渲染，支持表情和待机动画
-- **双布局**：
+- **双布局**：支持普通聊天模式与 Live2D 舞台模式，两种布局共享同一套聊天、语音和播放器运行时
 - **双主题**：深色 / 浅色一键切换
 - **自定义背景**：上传喜欢的图片，调节透明度
 - **AIRI 风格 UI**：参考 [AIRI](https://github.com/moeru-ai/airi) 的青绿色调设计语言
@@ -76,7 +76,7 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 ### 🎙️ 语音链路
 
 - **ASR 语音输入**：支持 Sherpa-ONNX SenseVoice / Faster Whisper / Whisper.cpp / OpenAI Whisper / 浏览器原生 Web Speech API
-- **TTS 语音输出**：支持 Edge TTS / GPT-SoVITS / SiliconFlow / CosyVoice3
+- **TTS 流式语音输出**：支持 Edge TTS / GPT-SoVITS / SiliconFlow / CosyVoice3
 - **VAD 实时打断**：通过 WebSocket 持续上传麦克风音频，支持用户开口打断 LLM 流式回复和当前 TTS 播放
 - **自动语音接管**：用户说完后可由后端 ASR 自动转写，并直接进入新一轮聊天
 - **浮动播放器**：自定义进度条、拖动 seek、队列显示
@@ -85,16 +85,18 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 ### 🔐 部署与认证
 
 - **本地友好**：关闭认证即可单机使用，零配置上手
-- **公网就绪**：GitHub OAuth + JWT + 白名单，开启后多用户数据隔离
+- **公网就绪**：GitHub OAuth + HttpOnly Cookie 会话 + 白名单，开启后多用户数据隔离
 - **配置分层**：`config.yaml` 引用各子配置，模块化管理
 - **OAuth 状态校验**：防止 OAuth 登录流程被 CSRF、旧回调或跨账号串号混淆
-- **JWT 保护**：使用 HttpOnly Cookie 承载会话，避免 JWT 暴露在 URL、日志或前端可读存储中
+- **会话保护**：使用后端签发的 JWT 会话并放入 HttpOnly Cookie，避免令牌暴露在 URL、日志或前端可读存储中
 
 ---
 
 ## 🚀 快速上手
 
 请阅读 [快速上手指南](docs/quickstart.md) 开始安装和配置。
+
+欢迎参与 ATRI 的开发，请先阅读 [开发文档导航](docs/developments/README.md)。
 
 后端启动后也可以访问自动生成的 API 文档：
 
@@ -111,7 +113,7 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 | **LLM** | OpenAI 兼容接口（DeepSeek、SiliconFlow 等） |
 | **记忆** | 三层压缩 + mem0（SaaS / Qdrant 本地部署） |
 | **存储** | 本地 JSON（可扩展数据库） |
-| **认证** | GitHub OAuth + JWT |
+| **认证** | GitHub OAuth + JWT 会话 + HttpOnly Cookie |
 | **前端框架** | Vue 3 + TypeScript + Vite |
 | **状态管理** | Pinia |
 | **样式** | UnoCSS |
@@ -124,13 +126,16 @@ ATRI 同时也是一个功能完整的 AI 角色伴侣平台 —— Live2D 形�
 
 | 文档 | 说明 |
 |---|---|
-| [架构文档](docs/developments/项目架构设计.md) | ATRI 的项目整体架构和开发文档入口 |
+| [快速上手指南](docs/quickstart.md) | 安装、启动、基础配置与常见问题 |
+| [开发文档导航](docs/developments/README.md) | 开发侧总入口：架构、模块、feature、wiki、归档 |
+| [项目架构文档](docs/developments/项目架构设计.md) | 项目级架构、核心数据流与当前实现事实 |
 | [认证系统使用指南](docs/configs/CN/认证系统使用指南.md) | GitHub OAuth 配置与白名单管理 |
 | [ASR 配置说明](docs/configs/CN/ASR配置说明.md) | 语音识别提供商配置 |
 | [TTS 配置说明](docs/configs/CN/TTS配置说明.md) | 语音合成提供商配置 |
 | [VAD 配置说明](docs/configs/CN/VAD配置说明.md) | 实时语音活动检测、Silero 参数和 ASR 衔接说明 |
 | [实时语音模式使用说明](docs/configs/CN/实时语音模式使用说明.md) | VAD button 使用、WebSocket 联调和验收路径 |
 | [角色创建指南](docs/configs/CN/角色创建指南.md) | 角色人设、头像与问候语 |
+| [Wiki 开发复盘入口](docs/developments/wiki/development-blogs/README.zh-CN.md) | 已整理的开发 blog，适合后续迁移到 GitHub Wiki |
 
 ---
 
@@ -166,25 +171,23 @@ ATRI 当前已经具备完整的 Web 对话体验：持久化记忆、角色管�
 
 - 三层记忆压缩与持久化存储：支持会话历史、短期记忆、长期记忆和角色隔离。
 - Web 端基础体验：支持聊天、角色切换、设置页、Live2D 舞台和普通聊天模式。
-- 语音链路：已接入 ASR 与 TTS，并支持多提供商配置。
-- VAD 实时语音打断：支持实时麦克风输入、打断 LLM 流式输出、停止当前 TTS 播放和 ASR 自动接管。
+- 语音链路：已接入 ASR 与 TTS 多提供商配置，并完成 WebSocket 分段流式 TTS 输出。
+- VAD 实时语音打断：支持实时麦克风输入、打断 LLM 流式输出、停止当前 TTS 播放、ASR 自动接管。
+- TTS 分段流式化：自动朗读已升级为“文本切段 -> 小音频段 -> WebSocket 下发 -> 前端按序播放”，并保留 REST fallback 与历史消息手动播放路径。
 - 部署与认证基础：支持本地部署、云端部署、GitHub OAuth、JWT 和白名单访问控制。
 
-**近期计划**
+**下一方向**
 
-- 新增"插件式"翻译模块，作用于 llm calling 层与 TTS/前端消费之间
-- 优化移动端 Web 适配，提升云部署后的手机访问体验。
-- 增强 TTS 流式播放链路，减少长回复的语音等待时间。
-- 继续调优 VAD 实时语音参数和弱网环境下的联调体验。
-- 完善 Live2D 与普通聊天模式下的界面一致性和交互细节。
-- 持续打磨 UI。目前前端设计参考 AIRI，感谢 AIRI 项目的优秀设计基础。
+- 开发 PC 客户端，提供更稳定的桌面端使用体验。
+- 添加视觉理解能力，让 ATRI 可以接收并理解图像、屏幕或摄像头输入。
+- 接入 MCP 工具调用能力，为 ATRI 连接外部工具、文件和自动化能力。
+- 增加实时获取外部知识的能力，让对话可以在保持角色体验的同时接入更新鲜的外部信息。
+- 持续完善 Live2D 与普通聊天模式下的界面一致性和交互细节。
 
 **长期方向**
 
-- 视觉理解能力，让 ATRI 可以“看见”图像、屏幕或摄像头输入。
-- MCP 集成，为 ATRI 接入外部工具、文件、搜索和自动化能力。
-- PC 客户端，提供更稳定的桌面端使用体验。
 - Android 移动端，补齐移动设备上的原生体验。
+- 更完整的多模态链路与外部能力编排，在角色体验、记忆系统和工具调用之间建立更自然的协同。
 
 ---
 
@@ -195,7 +198,7 @@ ATRI 当前已经具备完整的 Web 对话体验：持久化记忆、角色管�
 - 开发环境搭建
 - 分支与 PR 流程
 - 代码规范
-- **开发文档导读** — 根据你参与的模块（后端 / 前端 / TTS / ASR / Live2D）选择性阅读 `docs/developments/` 下的设计文档
+- **开发文档导读** — 根据你参与的模块（后端 / 前端 / TTS / ASR / Live2D）优先从 [docs/developments/README.md](docs/developments/README.md) 进入，再定位到对应 `modules/`、`features/` 或 `wiki/`
 
 ---
 

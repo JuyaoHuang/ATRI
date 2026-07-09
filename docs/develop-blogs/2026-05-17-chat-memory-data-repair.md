@@ -1,5 +1,9 @@
 # 手工修改聊天历史后的短期记忆修复指南
 
+> 历史文章说明：
+> 当前正式入口请优先阅读 [../developments/wiki/troubleshooting/chat-history-memory-repair.zh-CN.md](../developments/wiki/troubleshooting/chat-history-memory-repair.zh-CN.md)。
+> 本文档保留为历史文章来源与迁移参考。
+
 ## 适用场景
 
 当你手工删除或改写某个角色的聊天历史后，需要同步修复短期记忆文件。

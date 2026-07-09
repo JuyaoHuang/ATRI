@@ -1,5 +1,9 @@
 # Backend Project Architecture and Directory Structure Design
 
+> Legacy design note:
+> Prefer the current implementation docs under [../../project-architecture-design.en.md](../../project-architecture-design.en.md), [../../modules/README.zh-CN.md](../../modules/README.zh-CN.md), and [../../modules/routes/README.zh-CN.md](../../modules/routes/README.zh-CN.md).
+> This file is kept as historical design source and migration reference, not as the authoritative entry point for the current implementation.
+
 > **Project**: emotion-robot
 > **Created**: 2026-04-18
 > **Status**: Finalized

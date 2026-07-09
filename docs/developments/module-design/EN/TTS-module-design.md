@@ -1,5 +1,9 @@
 # TTS Module Design Document
 
+> Legacy design note:
+> Prefer the current implementation docs under [../../modules/tts/README.zh-CN.md](../../modules/tts/README.zh-CN.md).
+> This file is kept as historical design source and migration reference, not as the authoritative entry point for the current implementation.
+
 > **Document Version**: v1.0  
 > **Created**: 2026-04-22  
 > **Last Updated**: 2026-04-22

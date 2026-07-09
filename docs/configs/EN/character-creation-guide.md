@@ -8,6 +8,10 @@
 
 ## Table of Contents
 
+Development-side Persona loading flow, API output, and avatar hosting boundaries:
+
+- [Persona Technical Notes](../../developments/modules/agent/persona.en-US.md)
+
 1. [Quick Start](#quick-start)
 2. [Character File Format](#character-file-format)
 3. [Field Descriptions](#field-descriptions)

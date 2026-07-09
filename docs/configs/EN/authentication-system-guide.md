@@ -7,6 +7,11 @@ This document describes the usage of the Phase 11 authentication system. The cur
 
 The authentication toggle is controlled in the backend configuration. The frontend automatically reads the backend authentication status and decides whether to require login.
 
+Development-side design and protocol notes:
+
+- [Authentication Module Design](../../developments/modules/auth/design.en-US.md)
+- [Authentication API and Authorization Protocol](../../developments/api/auth.en-US.md)
+
 ## Quick Conclusion
 
 Keep the default configuration for local development:

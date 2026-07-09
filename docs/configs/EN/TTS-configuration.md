@@ -7,6 +7,11 @@
 
 This document describes the TTS (Text-to-Speech) configuration structure, Provider selection, frontend settings page mapping, and common troubleshooting methods.
 
+Development-side configuration boundaries, write-back rules, and runtime pipeline notes:
+
+- [TTS Configuration and Runtime Boundaries](../../developments/modules/tts/config.en-US.md)
+- [TTS Segmented Streaming Design](../../developments/modules/tts/streaming-design.en-US.md)
+
 ---
 
 ## 1. Quick Start
@@ -267,7 +272,7 @@ cosyvoice3_tts:
 For more detailed instructions, see:
 
 ```text
-atri/docs/CosyVoice3_TTS使用说明.en.md
+docs/developments/modules/tts/cosyvoice3-provider.en-US.md
 ```
 
 ---

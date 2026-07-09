@@ -1,5 +1,9 @@
 # ASR 模块设计文档
 
+> 旧设计稿说明：
+> 当前实现请优先阅读 [../../modules/asr/README.zh-CN.md](../../modules/asr/README.zh-CN.md)。
+> 本文档保留为历史设计来源与迁移参考，不再作为当前实现的权威入口。
+
 ## 📚 参考文档
 
 - **设计讨论历史**：`docs/developments/总结_前端对话历史.md` - Round 10-16
