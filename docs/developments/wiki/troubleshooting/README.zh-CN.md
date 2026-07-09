@@ -16,3 +16,5 @@ updated: 2026-07-09
 | 文档 | 内容 |
 | --- | --- |
 | [realtime-voice-mode.zh-CN.md](realtime-voice-mode.zh-CN.md) | 实时语音模式的 WebSocket、VAD、ASR 自动提交和浏览器采集排障。 |
+| [realtime-voice-mode.en-US.md](realtime-voice-mode.en-US.md) | English realtime voice mode troubleshooting note. |
+| [chat-history-cleanup.en-US.md](chat-history-cleanup.en-US.md) | English chat history cleanup and batch deletion guide. |

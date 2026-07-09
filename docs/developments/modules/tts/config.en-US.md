@@ -51,7 +51,7 @@ cosyvoice3_tts:
 | `siliconflow_tts` | Cloud service | Calls a speech synthesis API. |
 | `cosyvoice3_tts` | Local service | ATRI uses `gradio-client` to call an external CosyVoice WebUI. |
 
-Providers synthesize complete audio from complete text. Segmented playback is managed at the application layer. See [streaming-design.zh-CN.md](streaming-design.zh-CN.md) until an English streaming design is added.
+Providers synthesize complete audio from complete text. Segmented playback is managed at the application layer. See [streaming-design.en-US.md](streaming-design.en-US.md).
 
 ## Frontend Write-Back Allowlist
 
@@ -114,4 +114,4 @@ It should not retry configuration-related `4xx` errors. Provider implementations
 
 - [TTS Configuration Guide](../../../configs/EN/TTS-configuration.md)
 - [CosyVoice3 Provider Design](cosyvoice3-provider.en-US.md)
-- [TTS Segmented Streaming Design](streaming-design.zh-CN.md)
+- [TTS Segmented Streaming Design](streaming-design.en-US.md)

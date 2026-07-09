@@ -6,6 +6,10 @@
 
 This document explains how to use realtime voice mode, how to verify the pipeline, and how to troubleshoot common issues.
 
+For a more troubleshooting-oriented Wiki pre-publish note, see:
+
+- [Realtime Voice Mode Troubleshooting](../../developments/wiki/troubleshooting/realtime-voice-mode.en-US.md)
+
 ---
 
 ## 1. Feature Boundary

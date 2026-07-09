@@ -10,7 +10,7 @@ This document describes the TTS (Text-to-Speech) configuration structure, Provid
 Development-side configuration boundaries, write-back rules, and runtime pipeline notes:
 
 - [TTS Configuration and Runtime Boundaries](../../developments/modules/tts/config.en-US.md)
-- [TTS Segmented Streaming Design](../../developments/modules/tts/streaming-design.zh-CN.md)
+- [TTS Segmented Streaming Design](../../developments/modules/tts/streaming-design.en-US.md)
 
 ---
 

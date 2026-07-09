@@ -14,3 +14,4 @@ updated: 2026-07-09
 | 文档 | 内容 |
 | --- | --- |
 | [persona.zh-CN.md](persona.zh-CN.md) | Persona 文件格式、加载流程、API 输出和头像托管边界。 |
+| [persona.en-US.md](persona.en-US.md) | English version of Persona file format, loading flow, API output, and avatar hosting boundaries. |

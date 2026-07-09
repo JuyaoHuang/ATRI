@@ -18,6 +18,7 @@ updated: 2026-07-08
 | [cosyvoice3-provider.zh-CN.md](cosyvoice3-provider.zh-CN.md) | CosyVoice3 Provider 实现说明，覆盖 Gradio WebUI 调用方式、音色机制、参数含义和当前限制。 |
 | [cosyvoice3-provider.en-US.md](cosyvoice3-provider.en-US.md) | English version of the CosyVoice3 Provider implementation notes. |
 | [streaming-design.zh-CN.md](streaming-design.zh-CN.md) | TTS 应用层分段流式化设计，覆盖模块定位、分段策略、`TTSSegmentManager`、WebSocket audio 协议、播放丢弃策略和后续扩展边界。 |
+| [streaming-design.en-US.md](streaming-design.en-US.md) | English summary of the application-level segmented TTS streaming design. |
 
 ## 阅读路径
 
