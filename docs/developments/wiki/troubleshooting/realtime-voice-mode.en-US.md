@@ -26,7 +26,7 @@ The business WebSocket is:
 If DevTools shows:
 
 ```text
-ws://localhost:5200/?token=...
+ws://localhost:5200/
 ```
 
 that is usually the Vite HMR channel, not the chat business WebSocket.
@@ -118,11 +118,11 @@ You can also increase `required_hits` to make speech-start detection more conser
 
 A browser console warning about `ScriptProcessorNode` does not mean the feature failed.
 
-The current frontend capture path may still use that API. Migrating to `AudioWorklet` is a later optimization, not a requirement for the realtime voice MVP.
+The current frontend capture path may still use that API. Migrating to `AudioWorklet` is a later optimization, not a requirement for deciding whether realtime voice is usable.
 
 ## Current Limitations
 
-- TTS may still use REST complete audio unless the later segmented streaming path is enabled.
+- TTS may still use REST complete audio unless segmented streaming is enabled.
 - VAD interruption stops old TTS playback and discards later TTS results from the old generation.
 - Already-sent REST TTS API requests are not cancelled at the Provider level.
 - `web_speech_api` cannot be used for backend VAD-triggered automatic ASR.

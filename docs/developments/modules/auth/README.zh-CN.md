@@ -13,15 +13,15 @@ updated: 2026-07-09
 
 | 文档 | 内容 |
 | --- | --- |
-| [design.zh-CN.md](design.zh-CN.md) | GitHub OAuth、JWT、本地模式、部署模式、前端路由守卫和 WebSocket token 的模块设计。 |
+| [design.zh-CN.md](design.zh-CN.md) | GitHub OAuth、JWT、本地模式、部署模式、Cookie 会话、前端路由守卫和 WebSocket 鉴权边界。 |
 | [design.en-US.md](design.en-US.md) | English version of the authentication module design. |
 
 ## 相关协议
 
 | 文档 | 内容 |
 | --- | --- |
-| [../../api/auth.zh-CN.md](../../api/auth.zh-CN.md) | 认证 REST API、鉴权规则和 WebSocket token 约定。 |
-| [../../api/auth.en-US.md](../../api/auth.en-US.md) | English version of authentication REST API and WebSocket token conventions. |
+| [../../api/auth.zh-CN.md](../../api/auth.zh-CN.md) | 认证 REST API、Cookie/Bearer 鉴权规则和 WebSocket Cookie 约定。 |
+| [../../api/auth.en-US.md](../../api/auth.en-US.md) | English version of authentication REST API. |
 
 ## 收录规则
 

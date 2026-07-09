@@ -26,9 +26,14 @@ modules/<module>/
 | 模块 | 文档 |
 |---|---|
 | Agent | [agent/README.zh-CN.md](agent/README.zh-CN.md) |
+| ASR | [asr/README.zh-CN.md](asr/README.zh-CN.md) |
 | Auth | [auth/README.zh-CN.md](auth/README.zh-CN.md) |
+| Frontend | [frontend/README.zh-CN.md](frontend/README.zh-CN.md) |
+| Live2D | [live2d/README.zh-CN.md](live2d/README.zh-CN.md) |
+| LLM | [llm/README.zh-CN.md](llm/README.zh-CN.md) |
 | Memory | [memory/README.zh-CN.md](memory/README.zh-CN.md) |
 | Storage | [storage/README.zh-CN.md](storage/README.zh-CN.md) |
 | TTS | [tts/README.zh-CN.md](tts/README.zh-CN.md) |
+| VAD | [vad/README.zh-CN.md](vad/README.zh-CN.md) |
 
 开发过程、验收记录和临时讨论应放入 `../features/`，不要堆进模块长期设计。

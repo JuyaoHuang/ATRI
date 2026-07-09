@@ -55,10 +55,13 @@ user visits /
   -> backend fetches GitHub user profile
   -> backend checks whitelist.users
   -> backend signs JWT
-  -> backend redirects to frontend /auth/callback?token=...
-  -> frontend stores token
+  -> backend writes HttpOnly Cookie atri_session
+  -> backend redirects to frontend /auth/callback?success=1
+  -> frontend calls GET /api/auth/me
   -> frontend redirects back to original target
 ```
+
+JWT 仍是服务端会话载体，但浏览器主路径不把 JWT 暴露给前端 JavaScript。当前浏览器端依赖 `atri_session` Cookie；URL 中不会携带 `token` 或 `access_token`。
 
 ## 前端行为
 
@@ -66,8 +69,9 @@ user visits /
 
 - `/login` 和 `/auth/callback` 是公开页面。
 - `/`、`/settings` 和业务页面需要登录。
-- API 返回 `401` 时，前端清除 token 并跳转登录页。
-- WebSocket URL 会追加 `?token=JWT_TOKEN`。
+- HTTP API 使用 `withCredentials` 自动携带 `atri_session` Cookie。
+- API 返回 `401` 时，前端清理认证状态并跳转登录页。
+- WebSocket 连接使用同站 Cookie 鉴权，URL 不追加 token。
 
 认证关闭时：
 
@@ -86,12 +90,16 @@ JWT 中的用户身份用于：
 
 本地模式下，所有读写都落到 `default` 用户空间。部署模式下，应以认证后的 GitHub 用户身份作为用户隔离依据。
 
+HTTP 路由兼容 `Authorization: Bearer <JWT>`，用于脚本、测试或非浏览器调用方。浏览器请求若同时携带 Cookie 和 Bearer，后端以 Cookie 为准。WebSocket 当前只读取 Cookie。
+
 ## 安全约束
 
 - 生产环境必须使用 HTTPS 和 WSS。
 - `.env` 不得提交到 Git。
 - `JWT_SECRET_KEY` 泄露后必须轮换。
 - GitHub OAuth callback URL 必须指向后端 `/api/auth/callback`。
+- 前端回调页只把 `success=1` 视为登录成功，并在之后调用 `/api/auth/me`。
+- 不要把 JWT 写入 URL、LocalStorage 或普通前端状态。
 - 白名单应尽量短。
 - 公网部署必须启用认证。
 

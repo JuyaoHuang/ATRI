@@ -10,3 +10,9 @@
 - 仅用于追溯历史的资料
 
 归档文档不作为开发前必读材料。若某份归档仍包含长期有效结论，应先提炼到 `../modules/`、`../architecture/` 或 `../decisions/`。
+
+## 当前归档入口
+
+| 分类 | 文档 | 说明 |
+|---|---|---|
+| 会话备份 | [session-backups/2026-04-18_to_2026-04-25-project-context-log.md](session-backups/2026-04-18_to_2026-04-25-project-context-log.md) | 早期项目上下文长备份的归档摘要，正式设计入口已经迁移到 `../modules/`、`../api/` 和 `../wiki/`。 |

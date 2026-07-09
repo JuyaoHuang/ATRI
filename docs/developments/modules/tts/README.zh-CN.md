@@ -2,7 +2,7 @@
 status: active
 owner: tts
 created: 2026-07-08
-updated: 2026-07-08
+updated: 2026-07-09
 ---
 
 # TTS 模块长期设计
@@ -13,6 +13,7 @@ updated: 2026-07-08
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | TTS 模块总览，说明当前 Provider 注册表、REST 完整音频路径、WebSocket 分段音频路径和与聊天/VAD 的长期边界。 |
 | [config.zh-CN.md](config.zh-CN.md) | TTS 配置的开发侧边界，覆盖 Provider 块、前端回写白名单、敏感配置、REST 完整音频链路和错误处理。 |
 | [config.en-US.md](config.en-US.md) | English version of the TTS configuration and runtime boundary notes. |
 | [cosyvoice3-provider.zh-CN.md](cosyvoice3-provider.zh-CN.md) | CosyVoice3 Provider 实现说明，覆盖 Gradio WebUI 调用方式、音色机制、参数含义和当前限制。 |
@@ -24,11 +25,12 @@ updated: 2026-07-08
 
 修改 TTS 分段流式化相关设计或实现前，建议按以下顺序阅读：
 
-1. 配置边界：`config.zh-CN.md`
-2. 长期模块设计：`streaming-design.zh-CN.md`
-3. feature 范围与完成状态：`../../features/2026-07-tts-segment-streaming/README.zh-CN.md`
-4. 原始设计来源：`../../wiki/TTS/tts-stream-design.md`
-5. 原始实施来源：`../../wiki/TTS/tts-stream-implement.md`
+1. 模块总览：`design.zh-CN.md`
+2. 配置边界：`config.zh-CN.md`
+3. 长期流式设计：`streaming-design.zh-CN.md`
+4. feature 范围与完成状态：`../../features/2026-07-tts-segment-streaming/README.zh-CN.md`
+5. 原始设计来源：`../../wiki/TTS/tts-stream-design.md`
+6. 原始实施来源：`../../wiki/TTS/tts-stream-implement.md`
 
 相关实现入口：
 

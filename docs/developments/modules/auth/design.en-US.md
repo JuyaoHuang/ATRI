@@ -55,10 +55,13 @@ user visits /
   -> backend fetches GitHub user profile
   -> backend checks whitelist.users
   -> backend signs JWT
-  -> backend redirects to frontend /auth/callback?token=...
-  -> frontend stores token
+  -> backend writes HttpOnly Cookie atri_session
+  -> backend redirects to frontend /auth/callback?success=1
+  -> frontend calls GET /api/auth/me
   -> frontend redirects back to the original target
 ```
+
+JWT is still the server-side session payload, but the browser path does not expose it to frontend JavaScript. The frontend relies on the `atri_session` Cookie; the URL does not carry `token` or `access_token`.
 
 ## Frontend Behavior
 
@@ -66,8 +69,9 @@ When authentication is enabled:
 
 - `/login` and `/auth/callback` are public pages.
 - `/`, `/settings`, and business pages require login.
-- When an API returns `401`, the frontend clears the token and redirects to login.
-- The WebSocket URL appends `?token=JWT_TOKEN`.
+- HTTP APIs use `withCredentials` so the browser sends `atri_session`.
+- When an API returns `401`, the frontend clears auth state and redirects to login.
+- WebSocket connections use same-site Cookie authorization. The URL does not append a token.
 
 When authentication is disabled:
 
@@ -86,12 +90,16 @@ JWT user identity is used for:
 
 In local mode, all reads and writes use the `default` user space. In deployment mode, storage and memory code should use the authenticated GitHub user identity as the isolation key.
 
+HTTP routes also accept `Authorization: Bearer <JWT>` for scripts, tests, or non-browser clients. If a browser request carries both Cookie and Bearer, the backend prefers the Cookie. WebSocket currently reads Cookie only.
+
 ## Security Constraints
 
 - Production deployments must use HTTPS and WSS.
 - `.env` must not be committed.
 - Rotate `JWT_SECRET_KEY` if it leaks.
 - The GitHub OAuth callback URL must point to backend `/api/auth/callback`.
+- The frontend callback page treats only `success=1` as login success and then calls `/api/auth/me`.
+- Do not place JWT values in URLs, LocalStorage, or ordinary frontend state.
 - Keep the whitelist as short as practical.
 - Public deployments must enable authentication.
 

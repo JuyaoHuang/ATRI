@@ -33,3 +33,12 @@ Wiki 文档应面向读者，而不是保留原始开发流水。写作时优先
 |---|---|
 | 开发 blog | [development-blogs/README.zh-CN.md](development-blogs/README.zh-CN.md) |
 | 问题排查 | [troubleshooting/README.zh-CN.md](troubleshooting/README.zh-CN.md) |
+
+## 重点文章
+
+| 主题 | 文档 |
+|---|---|
+| VAD 实时打断开发复盘 | [development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md](development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md) |
+| 实时语音模式排障 | [troubleshooting/realtime-voice-mode.zh-CN.md](troubleshooting/realtime-voice-mode.zh-CN.md) |
+| 聊天历史与记忆修复 | [troubleshooting/chat-history-memory-repair.zh-CN.md](troubleshooting/chat-history-memory-repair.zh-CN.md) |
+| 聊天历史清理 | [troubleshooting/chat-history-cleanup.zh-CN.md](troubleshooting/chat-history-cleanup.zh-CN.md) |

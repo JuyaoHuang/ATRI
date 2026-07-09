@@ -26,7 +26,7 @@ related_code:
 如果 DevTools 中看到：
 
 ```text
-ws://localhost:5200/?token=...
+ws://localhost:5200/
 ```
 
 那通常是 Vite HMR 通道，不是聊天业务 WebSocket。
@@ -118,11 +118,11 @@ silero_vad:
 
 浏览器控制台出现 `ScriptProcessorNode` 弃用警告，不代表功能失败。
 
-当前前端采集实现仍可能使用该 API。迁移到 `AudioWorklet` 是后续优化，不是实时语音 MVP 的必要条件。
+当前前端采集实现仍可能使用该 API。迁移到 `AudioWorklet` 是后续优化，不是判断实时语音是否可用的必要条件。
 
 ## 当前限制
 
-- TTS 仍可走 REST 完整音频，除非启用后续分段流式链路。
+- TTS 仍可走 REST 完整音频，除非启用分段流式链路。
 - VAD 打断会停止旧 TTS 播放，并丢弃旧 generation 的后续 TTS 结果。
 - 已发出的 REST TTS API 请求不做 Provider 级取消。
 - `web_speech_api` 不能用于后端 VAD 自动 ASR。

@@ -26,15 +26,24 @@
 
 | 主题 | 推荐入口 |
 |---|---|
+| 项目级架构 | [项目架构设计.md](项目架构设计.md) |
+| API、WebSocket 与事件协议 | [api/README.zh-CN.md](api/README.zh-CN.md) |
+| LLM 调用层 | [modules/llm/README.zh-CN.md](modules/llm/README.zh-CN.md) |
+| Agent 与角色 Persona | [modules/agent/README.zh-CN.md](modules/agent/README.zh-CN.md) |
+| 记忆系统 | [modules/memory/README.zh-CN.md](modules/memory/README.zh-CN.md) |
+| 对话历史与角色存储 | [modules/storage/README.zh-CN.md](modules/storage/README.zh-CN.md) |
+| ASR 模块 | [modules/asr/README.zh-CN.md](modules/asr/README.zh-CN.md) |
+| VAD 实时控制模块 | [modules/vad/README.zh-CN.md](modules/vad/README.zh-CN.md) |
+| TTS 模块总览 | [modules/tts/README.zh-CN.md](modules/tts/README.zh-CN.md) |
 | TTS 分段流式化长期设计 | [modules/tts/streaming-design.zh-CN.md](modules/tts/streaming-design.zh-CN.md) |
-| TTS 配置与 CosyVoice3 Provider | [modules/tts/README.zh-CN.md](modules/tts/README.zh-CN.md) |
+| Live2D 模块 | [modules/live2d/README.zh-CN.md](modules/live2d/README.zh-CN.md) |
+| Frontend 运行时 | [modules/frontend/README.zh-CN.md](modules/frontend/README.zh-CN.md) |
 | TTS 分段流式化 feature 过程 | [features/2026-07-tts-segment-streaming/README.zh-CN.md](features/2026-07-tts-segment-streaming/README.zh-CN.md) |
 | VAD 实时打断 feature 过程 | [features/2026-06-vad-realtime-interrupt/README.zh-CN.md](features/2026-06-vad-realtime-interrupt/README.zh-CN.md) |
 | VAD 实时打断 Wiki 发布稿 | [wiki/development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md](wiki/development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md) |
-| 认证模块与协议 | [modules/auth/README.zh-CN.md](modules/auth/README.zh-CN.md) |
-| 对话历史存储与记忆归档 | [modules/storage/README.zh-CN.md](modules/storage/README.zh-CN.md) |
-| 角色 Persona 技术说明 | [modules/agent/README.zh-CN.md](modules/agent/README.zh-CN.md) |
 | 实时语音模式排障 | [wiki/troubleshooting/realtime-voice-mode.zh-CN.md](wiki/troubleshooting/realtime-voice-mode.zh-CN.md) |
+| 聊天历史与记忆修复 | [wiki/troubleshooting/chat-history-memory-repair.zh-CN.md](wiki/troubleshooting/chat-history-memory-repair.zh-CN.md) |
+| 历史会话备份归档 | [archive/session-backups/2026-04-18_to_2026-04-25-project-context-log.md](archive/session-backups/2026-04-18_to_2026-04-25-project-context-log.md) |
 
 ## 迁移原则
 

@@ -6,144 +6,118 @@ updated: 2026-07-09
 source: docs/configs/EN/chat-history-storage-batch-deletion.md
 related_code:
   - src/routes/chats.py
+  - src/routes/data.py
   - src/storage/json_storage.py
-  - src/memory/chat_history.py
+  - src/memory/manager.py
+  - frontend/src/pages/settings/data.vue
 ---
 
-# Chat History Storage and Batch Deletion Guide
+# Chat History Cleanup and Memory Deletion
 
-This document describes the storage locations of character chat history in the backend and how to batch delete history records.
+This GitHub Wiki draft explains how to clean chat titles, short-term memory, and long-term memory without mixing their storage boundaries.
 
-Development-side structure notes:
+Development-side storage notes:
 
-- [Chat History Storage Structure](../../modules/storage/chat-history-storage.en-US.md)
-- [MemoryManager Character Memory Archive](../../modules/memory/chat-history-archive.en-US.md)
+- [Chat History Storage Structure](../../modules/storage/chat-history-storage.zh-CN.md)
+- [MemoryManager Chat Archive](../../modules/memory/chat-history-archive.zh-CN.md)
 
-The current project has two types of easily confused "history":
+## Distinguish Three Kinds of Deletion
 
-- Frontend chat list history: Read/written by `/api/chats`, determines which chat titles and messages are visible in the sidebar.
-- MemoryManager character memory archive: Read/written by `src/memory/chat_history.py`, used for short-term memory recovery, compression, and long-term memory writing.
+| Operation | Scope | Result |
+| --- | --- | --- |
+| Delete chat title | `data/chats` | The frontend sidebar no longer shows the chat, and the matching message session file is removed. |
+| Clear short-term memory | `data/characters/{user_id}/{character_id}/chats/{chat_id}` | The chat-level `short_term_memory.json` is removed and the running cache is reset. |
+| Clear long-term memory | mem0 / Qdrant | Long-term facts for the current user and character are deleted or deletion is submitted. |
 
-## Frontend Chat List History
+Deleting a chat title does not automatically delete short-term memory. Clearing short-term memory does not remove the chat title from the frontend history.
 
-The chat titles and message details in the frontend sidebar come from `src/routes/chats.py` and `src/storage/json_storage.py`.
+## Prefer `/settings/data`
 
-Default configuration is in `config/storage_config.yaml`:
-
-```yaml
-mode: json
-
-json:
-  base_path: data/chats
-```
-
-When the backend is started from the `atri` directory as usual, the actual path is:
+For routine maintenance, use the frontend data management page first:
 
 ```text
-atri/data/chats/default/{character_id}/index.json
-atri/data/chats/default/{character_id}/sessions/{chat_id}.json
+/settings/data
 ```
 
-Description:
+It currently provides three actions:
 
-- `default` is the hardcoded `user_id` in the current Phase 5.
-- `{character_id}` is the character ID, e.g., `atri` or a custom character ID.
-- `index.json` stores chat list metadata, including `id`, `title`, `created_at`, `updated_at`, `message_count`.
-- `sessions/{chat_id}.json` stores the message array for that chat, in the format `{"messages": [...]}`.
-- When the frontend deletes a chat, it calls `POST /api/chats/{chat_id}/delete`, and the backend simultaneously removes the index entry from `index.json` and the corresponding `sessions/{chat_id}.json`.
+1. Delete one chat title.
+2. Clear short-term memory for a selected chat title through `DELETE /api/data/characters/{character_id}/chats/{chat_id}/short-term-memory`.
+3. Clear long-term memory for the current user and character through `DELETE /api/data/characters/{character_id}/long-term-memory`.
 
-If the backend is started from a different working directory, the relative path `data/chats` will be resolved relative to the startup directory. If unsure, check the working directory of the backend startup command.
+The long-term memory endpoint submits the deletion request. External mem0 backends may finish asynchronously.
 
-## MemoryManager Character Memory Archive
+## Prepare Before Manual Cleanup
 
-The chat agent also writes each conversation turn to the MemoryManager's character directory. Default configuration is in `config/memory_config.yaml`:
+Stop the backend before deleting files by hand. Runtime deletion can race with atomic `.tmp` writes, and in-memory caches may still hold old state.
 
-```yaml
-storage:
-  characters_dir: ./data/characters
-```
-
-The usual path is:
-
-```text
-atri/data/characters/{character_id}/short_term_memory.json
-atri/data/characters/{character_id}/sessions/{session_id}.json
-```
-
-Description:
-
-- `sessions/{session_id}.json` is an append-only archive written by `src/memory/chat_history.py`.
-- `short_term_memory.json` stores the current character's short-term memory state, including compressed blocks and recent turns.
-- Deleting frontend chat list history does not automatically clean up these MemoryManager files.
-- If mem0 long-term memory is enabled, local mode may also write to `atri/data/qdrant`; SaaS mode writes to the external mem0 service. The current repository does not have a unified long-term memory batch deletion interface.
-
-## Preparation Before Deletion
-
-Before batch deleting files, it is recommended to stop the backend service first. Deleting files while the backend is running may conflict with the `.tmp` atomic replacement process being written.
-
-It is recommended to backup first:
+Back up first from the repository root:
 
 ```powershell
 Compress-Archive -Path .\data\chats, .\data\characters -DestinationPath .\data-history-backup.zip -Force
 ```
 
-The above command should be executed in the `atri` directory.
+## Current Path Conventions
 
-## Delete Frontend Chat History for a Single Character
+### Chat Titles and Messages
 
-Delete all chats visible in the frontend sidebar for a specific character:
+Default chat history paths:
+
+```text
+data/chats/{user_id}/{character_id}/index.json
+data/chats/{user_id}/{character_id}/sessions/{chat_id}.json
+```
+
+In local mode, `{user_id}` is usually `default`:
+
+```text
+data/chats/default/{character_id}/...
+```
+
+When authentication is enabled, `default` becomes the authenticated user directory.
+
+### Short-Term Memory and Archive
+
+Current chat-level memory paths:
+
+```text
+data/characters/{user_id}/{character_id}/chats/{chat_id}/short_term_memory.json
+data/characters/{user_id}/{character_id}/chats/{chat_id}/sessions/{session_id}.json
+```
+
+During compatibility migration, old character-level paths such as `data/characters/{character_id}/` may still exist. They are not the source of truth for new chat-level writes.
+
+## Delete All Chat Titles for One Character
+
+Delete all frontend-visible chats for one character:
 
 ```powershell
 Remove-Item -LiteralPath ".\data\chats\default\CHARACTER_ID" -Recurse -Force
 ```
 
-Replace `CHARACTER_ID` with the character ID.
+Replace `CHARACTER_ID` with the character ID. If you are not using the local default user, replace `default` with the real user directory.
 
-After deletion, restart the backend or refresh the frontend chat list.
+## Delete All Chat Titles for the Current User
 
-## Delete All Frontend Chat History
-
-Delete all frontend chat history for the current default user:
+Delete all frontend chat history for the default local user:
 
 ```powershell
 Remove-Item -LiteralPath ".\data\chats\default" -Recurse -Force
 ```
 
-If you only want to clear all JSON chat data, you can also delete the entire `data/chats`:
+To clear the whole JSON chat root:
 
 ```powershell
 Remove-Item -LiteralPath ".\data\chats" -Recurse -Force
 ```
 
-The next time a chat is created, the backend will recreate the directory and index files.
+The backend recreates directories and indexes when new chats are created.
 
-## Delete Character Memory Archive
+## Delete Chats by Title Manually
 
-Only delete a character's session archive, preserving short-term memory state:
+The current backend does not provide a batch-delete-by-title REST API. Stop the backend, edit `index.json`, and delete the matching `sessions/{chat_id}.json` files.
 
-```powershell
-Remove-Item -LiteralPath ".\data\characters\CHARACTER_ID\sessions" -Recurse -Force
-```
-
-Also reset the character's short-term memory:
-
-```powershell
-Remove-Item -LiteralPath ".\data\characters\CHARACTER_ID\short_term_memory.json" -Force
-```
-
-Completely delete a character's MemoryManager local memory files:
-
-```powershell
-Remove-Item -LiteralPath ".\data\characters\CHARACTER_ID" -Recurse -Force
-```
-
-Note: This does not delete the character Persona file. The character card file is at `prompts/persona/{character_id}.md`, maintained by the character management feature.
-
-## Batch Delete Frontend Chats by Title
-
-The current backend does not have a "batch delete by title" REST API. You can modify `index.json` and delete matching session files via PowerShell after stopping the backend.
-
-The following example deletes chats with titles exactly equal to `TITLE_TO_DELETE` under a specified character:
+Example for an exact title match:
 
 ```powershell
 $characterId = "CHARACTER_ID"
@@ -164,25 +138,67 @@ $index.chats = @($index.chats | Where-Object { $_.title -ne $title })
 $index | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $indexPath -Encoding UTF8
 ```
 
-For fuzzy matching by title, change the match condition to:
+For fuzzy matching:
 
 ```powershell
 Where-Object { $_.title -like "*keyword*" }
 ```
 
-## Post-Deletion Verification
+## Clear Only Short-Term Memory
 
-Check the remaining number of chats for a character:
+If you only want a chat's short-term memory to rebuild from scratch, prefer `/settings/data`.
+
+Manual path:
+
+```text
+data/characters/{user_id}/{character_id}/chats/{chat_id}/short_term_memory.json
+```
+
+Also check the temporary file when needed:
+
+```text
+data/characters/{user_id}/{character_id}/chats/{chat_id}/short_term_memory.json.tmp
+```
+
+Notes:
+
+- This does not delete the chat title.
+- This does not delete archive sessions.
+- Restart the backend after manual deletion to avoid stale in-memory cache.
+
+## Clear Long-Term Memory
+
+Use `/settings/data` for long-term memory deletion.
+
+Reasons:
+
+- mem0 may run as an external service.
+- Local mode may also use extra stores such as `data/qdrant`.
+- Deleting `data/characters` is not the same as deleting long-term memory.
+
+Treat long-term memory deletion as a submitted request, not as a single local-directory removal.
+
+## Verify After Deletion
+
+Check the chat title index:
 
 ```powershell
 $index = Get-Content -Raw ".\data\chats\default\CHARACTER_ID\index.json" | ConvertFrom-Json
 $index.chats.Count
 ```
 
-Check if there are any remaining session files:
+Check remaining session files:
 
 ```powershell
 Get-ChildItem ".\data\chats\default\CHARACTER_ID\sessions" -Filter "*.json"
 ```
 
-If you manually deleted `index.json` but kept the `sessions` files, the frontend will no longer display these orphaned sessions. The backend reads by list based on `index.json`.
+For short-term memory, re-enter the chat and send one message, then check whether `short_term_memory.json` is rebuilt as expected.
+
+For long-term memory, check the API result and, if using external mem0, confirm completion from the backend logs or service dashboard.
+
+## Related Documents
+
+- [chat-history-cleanup.zh-CN.md](chat-history-cleanup.zh-CN.md)
+- [../../modules/storage/chat-history-storage.zh-CN.md](../../modules/storage/chat-history-storage.zh-CN.md)
+- [../../modules/memory/chat-history-archive.zh-CN.md](../../modules/memory/chat-history-archive.zh-CN.md)
