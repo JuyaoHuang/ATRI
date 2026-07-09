@@ -1,5 +1,9 @@
 # ATRI VAD 实时打断实施计划
 
+> 历史计划稿说明：
+> 当前正式入口请优先阅读 [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md) 和 [../../modules/vad/realtime-interrupt-boundary.zh-CN.md](../../modules/vad/realtime-interrupt-boundary.zh-CN.md)。
+> 本文档保留为历史实施计划来源与迁移参考。
+
 状态：待执行  
 日期：2026-06-15  
 前置文档：`docs/developments/wiki/VAD/vad-design.md`、`docs/developments/wiki/VAD/vad-implement.md`

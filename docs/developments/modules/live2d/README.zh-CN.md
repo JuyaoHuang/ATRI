@@ -18,6 +18,7 @@ related_code:
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | Live2D 模块总设计，串起资源管理、前端舞台运行时、表情控制和近期演化边界。 |
 | [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) | 后端模型存储、ZIP 校验、静态资源挂载和 `/api/live2d/models` REST 边界。 |
 | [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) | 前端 `live2d` store、Pixi/`pixi-live2d-display` 运行时、OPFS 缓存和本地持久化边界。 |
 | [expression-control.zh-CN.md](expression-control.zh-CN.md) | 当前表情名称来源、前端切换逻辑、消息标签解析和未接通的 LLM 工具边界。 |
@@ -25,8 +26,9 @@ related_code:
 ## 阅读顺序
 
 1. 先读 [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md)，确认后端到底维护什么。
-2. 再读 [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md)，确认“当前模型、位置、动作、缓存”都在哪里。
-3. 最后读 [expression-control.zh-CN.md](expression-control.zh-CN.md)，确认表情系统目前是标签驱动和本地 UI 驱动，而不是后端工具系统。
+2. 再读 [design.zh-CN.md](design.zh-CN.md)，确认整体职责划分和当前真实能力边界。
+3. 再读 [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md)，确认“当前模型、位置、动作、缓存”都在哪里。
+4. 最后读 [expression-control.zh-CN.md](expression-control.zh-CN.md)，确认表情系统目前是标签驱动和本地 UI 驱动，而不是后端工具系统。
 
 ## 文档关系
 

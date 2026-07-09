@@ -1,5 +1,9 @@
 # Backend API Documentation
 
+> Legacy API note:
+> Prefer the current implementation docs under [../../api/README.zh-CN.md](../../api/README.zh-CN.md) and [../../modules/routes/README.zh-CN.md](../../modules/routes/README.zh-CN.md).
+> This file is kept as historical API source and migration reference, not as the authoritative entry point for the current implementation.
+
 > Project: emotion-robot / atri
 > Backend address: `http://localhost:8430`
 > Document status: Updated per Phase 11 authentication system and current backend routes

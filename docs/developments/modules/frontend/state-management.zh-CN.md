@@ -1,0 +1,283 @@
+---
+status: active
+owner: frontend
+created: 2026-07-09
+updated: 2026-07-09
+source:
+  - ../../module-design/CN/前端设计文档.md
+  - ../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md
+  - ../../features/2026-07-frontend-websocket-session-refactor/dev-log.zh-CN.md
+related_code:
+  - frontend/src/stores/chat.ts
+  - frontend/src/stores/chats.ts
+  - frontend/src/stores/characters.ts
+  - frontend/src/stores/user.ts
+  - frontend/src/stores/websocket.ts
+  - frontend/src/stores/live2d.ts
+  - frontend/src/stores/settings.ts
+  - frontend/src/stores/asr.ts
+  - frontend/src/stores/tts.ts
+  - frontend/src/utils/websocketSessionController.ts
+  - frontend/src/composables/useWebSocket.ts
+  - frontend/src/composables/useChat.ts
+---
+
+# Frontend 状态管理设计
+
+本文沉淀 `frontend/src/stores/` 和 WebSocket 会话层的长期状态设计。目标不是罗列所有字段，而是说明：
+
+1. 哪些状态属于后端真相的前端投影。
+2. 哪些状态属于浏览器本地偏好。
+3. 哪些状态是页面级运行时临时态，不能持久化成业务真相。
+
+## 状态分层
+
+当前前端状态可以稳定分成三类：
+
+| 类别 | 典型 store / 对象 | 真相来源 |
+| --- | --- | --- |
+| 业务投影 | `chat` `chats` `characters` `user` `asr` `tts` | 后端 REST / WebSocket |
+| 浏览器偏好 | `live2d` `settings` `user.settings` 局部字段 | `localStorage` / OPFS |
+| 运行时会话 | `websocketSessionController`、`chat.activeStream` | 页面生命周期内的内存状态 |
+
+长期原则：
+
+- 后端拥有的业务状态，不在前端做第二份长期缓存。
+- 浏览器偏好只保存展示和设备选择，不保存业务数据。
+- 会话临时态一旦刷新页面即可丢失，不应被当作持久事实。
+
+## Store 拓扑
+
+### `chat` store
+
+`chat` store 是当前聊天页的运行时真相，负责：
+
+- `currentChatId`
+- `currentCharacterId`
+- `messages`
+- `streamingText`
+- `activeStream`
+- `pendingInterruptedStream`
+- `draftChatId`
+- deferred title 相关标记
+
+它有两个关键特点：
+
+1. `messages` 只表示当前打开聊天的消息视图，不是聊天列表总仓库。
+2. `activeStream` 是“当前等待或正在接收的 AI generation”，不是网络连接状态。
+
+### `chats` store
+
+`chats` store 管理聊天标题列表和草稿聊天生命周期，负责：
+
+- 拉取某角色下聊天列表；
+- 创建真实聊天；
+- 插入 `draft_*` 草稿；
+- 替换草稿为真实 `chat_id`；
+- 轮询 deferred title；
+- 删除与改名。
+
+它不负责：
+
+- 当前聊天消息正文；
+- WebSocket 流式文本；
+- TTS/VAD 事件。
+
+### `characters` store
+
+`characters` store 负责角色列表、详情缓存和当前选中角色 ID。
+
+它的职责边界是：
+
+- 对角色卡 CRUD 做前端投影；
+- 为聊天消息补角色名和头像；
+- 为首页和设置页提供角色选择状态。
+
+### `user` store
+
+`user` store 分成两块状态：
+
+1. `auth`
+   - 是否启用认证
+   - 当前用户资料
+   - 登录态初始化状态
+   - 登录时间戳
+2. `settings`
+   - 本地昵称
+   - 本地头像文件名
+
+长期边界：
+
+- 认证会话凭据不存这里。
+- `signedInAt` 只是 UX 辅助字段，不是权限判断依据。
+- 真正的鉴权仍以后端 Cookie 会话和 `/api/auth/me` 为准。
+
+### `websocket` store
+
+`websocket` store 现在故意做得很薄，只保留：
+
+- `connectionStatus`
+- `error`
+
+这是近期 WebSocket session refactor 的稳定结论：`wsStore` 只承担 UI projection，不再承担发送 authority。
+
+### `live2d` store
+
+`live2d` store 是最重的本地偏好 store，负责：
+
+- 是否启用舞台；
+- 当前模型 ID；
+- 位置、缩放、FPS、render scale；
+- 动作、表情、LLM 暴露模式；
+- OPFS 缓存版本。
+
+这里保存的是“如何展示模型”，不是“模型资源真相”。模型列表和表达列表仍来自后端 API。
+
+### `settings` store
+
+`settings` store 当前只管理背景设置：
+
+- `imageUrl`
+- `opacity`
+- `blur`
+
+它不承担通用全局设置仓库的职责。其他模块偏好各自保存在对应 store。
+
+### `asr` / `tts` store
+
+这两个 store 都属于“后端模块配置的前端投影”：
+
+- 通过 REST 加载当前配置和 Provider 列表；
+- 维护少量前端专属开关或设备选择；
+- 对配置写入做白名单过滤。
+
+它们不自己定义后端模块真相。
+
+## WebSocket 会话层
+
+近期前端重构后，WebSocket 有一个清晰的三层结构：
+
+| 层 | 代码 | 职责 |
+| --- | --- | --- |
+| 传输层 | `WebSocketManager` | 原生 socket、heartbeat、reconnect timer、原始 `send()` |
+| 会话层 | `WebSocketSessionController` | 当前 active manager、session epoch、事件总线、发送入口 |
+| facade 层 | `useWebSocket()` | 暴露业务事件、统一默认 handler、副作用汇总 |
+
+长期约束：
+
+1. `readyState === OPEN` 是唯一底层发送事实来源。
+2. `wsStore.connected` 不能再作为发送阻塞条件。
+3. 文本和实时音频发送都必须走 `useWebSocket().send*()`。
+4. 事件协议分发只保留一处默认处理器。
+
+## 聊天发送状态机
+
+`useChat.sendMessage()` 和 `chat/chats` 两个 store 共同维护当前聊天发送状态机：
+
+```text
+no current chat
+  -> insertDraftChat()
+  -> createChat(defer_title=true)
+  -> replaceDraftChat()
+  -> beginStreaming()
+  -> sendText()
+  -> pending deferred title poll
+```
+
+这里有三个长期边界：
+
+1. 草稿聊天是前端 UI 过渡态，不是后端资源。
+2. `beginStreaming()` 发生在 `sendText()` 前，用来先建立本地等待态。
+3. deferred title 轮询只在 `sendText()` 成功后启动，避免前端自造假 pending 状态。
+
+## 流式回复状态机
+
+`chat` store 里最核心的两个运行时对象是：
+
+- `activeStream`
+- `pendingInterruptedStream`
+
+它们负责表达：
+
+- 当前 generation 是否等待中、流式中、已被 interrupt；
+- 中断消息回来前，前端是否需要暂存一次“应该被 interrupt 收口”的流。
+
+这套状态机的意义在于：
+
+- `chat:chunk` 只能追加到当前 active stream；
+- `chat:complete` 只能收口匹配中的 stream；
+- `chat:interrupted` 可以把半截消息落地，但不能错绑到新聊天或新角色。
+
+## 运行时丢弃规则
+
+当前前端有三类“宁可丢弃也不串上下文”的保护：
+
+1. WebSocket 会话层：
+   - `sessionEpoch` 用来丢弃 stale manager 事件。
+2. 聊天层：
+   - `chatId + characterId + generationId` 共同决定消息是否还能落地。
+3. 音频层：
+   - `generation_id + sequence` 决定音频段是否还能入队。
+
+这三层缺一不可。只保留其中一层，会出现：
+
+- 旧连接事件写回新页面；
+- 旧聊天 chunk 混入新聊天；
+- 旧 generation 的 TTS 在切换聊天后继续播放。
+
+## 本地持久化规则
+
+当前前端本地持久化的边界如下：
+
+| 键 | 语义 |
+| --- | --- |
+| `atri-background-settings` | 背景偏好 |
+| `atri-live2d-settings` | 舞台偏好 |
+| `settings/hearing/enabled` | 前端 ASR 总开关 |
+| `settings/hearing/audio-input` | 当前麦克风设备 |
+| `atri_user_settings` | 本地昵称和头像文件名 |
+| `atri_auth_signed_in_at` | 登录完成时间 |
+| `atri_auth_redirect` | 登录成功后的目标路由 |
+
+这些键只服务于浏览器 UX，不服务于业务真相。
+
+不应在本地存的内容：
+
+- bearer token
+- 聊天列表与消息历史
+- 短期记忆或长期记忆
+- Provider 密钥
+- 后端模块完整配置镜像
+
+## 初始化顺序
+
+当前前端启动和进入聊天页时，稳定顺序是：
+
+1. `router.beforeEach()` 执行 `userStore.initializeAuth()`。
+2. `/` 页面 `onMounted()` 调 `connect()`。
+3. 首页同时拉角色列表和 Live2D 模型列表。
+4. `useWebSocket()` 默认 handler 在首次使用时注册一次。
+5. 各组件只消费 facade，不重复创建连接。
+
+这条顺序的意义是：
+
+- 路由守卫先确认认证模式；
+- 页面进入后只建立一条业务 WebSocket；
+- 组件层不再偷偷创建第二条连接。
+
+## 扩展约束
+
+后续扩展前端状态时，应保持以下规则：
+
+1. 新 store 先判断它属于业务投影、浏览器偏好，还是运行时临时态。
+2. 需要跨刷新持久化时，必须先说明为什么后端不拥有这份真相。
+3. 任何发送逻辑都不能再读 `wsStore.connected` 做 authority 判断。
+4. 若新增 WebSocket 业务事件，先补 `types/websocket.ts`，再经 controller 分发。
+5. 若新增聊天运行时状态，优先落到 `chat` store，而不是散在多个 composable 的局部 ref。
+
+## 相关文档
+
+- [README.zh-CN.md](README.zh-CN.md)
+- [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md)
+- [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md)
+- [../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md](../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md)

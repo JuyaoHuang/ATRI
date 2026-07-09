@@ -1,5 +1,9 @@
 # ASR Module Design Document
 
+> Legacy design note:
+> Prefer the current implementation docs under [../../modules/asr/README.zh-CN.md](../../modules/asr/README.zh-CN.md).
+> This file is kept as historical design source and migration reference, not as the authoritative entry point for the current implementation.
+
 ## Reference Documents
 
 - **Design Discussion History**: `docs/developments/总结_前端对话历史.md` - Round 10-16

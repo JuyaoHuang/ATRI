@@ -1,5 +1,9 @@
 # Emotion-Robot Memory System Design Document
 
+> Legacy design note:
+> Prefer the current implementation docs under [../../modules/memory/README.zh-CN.md](../../modules/memory/README.zh-CN.md).
+> This file is kept as historical design source and migration reference, not as the authoritative entry point for the current implementation.
+
 > This document serves as the design blueprint for the memory system, based on a comprehensive analysis of three reference projects (Open-LLM-VTuber / Neuro / airi) + the mem0 framework + Claude Code context compression strategies, determined through multiple rounds of discussion. Subsequent implementation should follow this document as the authoritative reference.
 
 ---

@@ -35,6 +35,8 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | Frontend 模块总设计，串起首页双态、状态分层、传输面设计、WebSocket session 和设置页边界。 |
+| [state-management.zh-CN.md](state-management.zh-CN.md) | 前端 store 拓扑、WebSocket 会话层、聊天运行时状态机和本地持久化边界。 |
 | [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md) | 文本聊天、单次语音输入、实时语音、WebSocket 事件消费和自动 TTS 播放的运行时设计。 |
 | [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md) | 首页双态布局、Live2D 舞台、设置系统、路由守卫和本地偏好持久化边界。 |
 
@@ -62,9 +64,11 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 建议按以下顺序阅读：
 
 1. 本 README，确认前端边界和文档分工。
-2. [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md)，理解聊天、ASR、VAD 和 TTS 的运行时主链路。
-3. [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md)，理解首页双态布局、设置入口和本地偏好。
-4. 交叉核对相关后端模块文档：
+2. [design.zh-CN.md](design.zh-CN.md)，理解前端整体结构与传输面。
+3. [state-management.zh-CN.md](state-management.zh-CN.md)，理解 store 拓扑、发送 authority 和本地持久化规则。
+4. [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md)，理解聊天、ASR、VAD 和 TTS 的运行时主链路。
+5. [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md)，理解首页双态布局、设置入口和本地偏好。
+6. 交叉核对相关后端模块文档：
    - [../../modules/auth/README.zh-CN.md](../../modules/auth/README.zh-CN.md)
    - [../../modules/storage/README.zh-CN.md](../../modules/storage/README.zh-CN.md)
    - [../../modules/memory/README.zh-CN.md](../../modules/memory/README.zh-CN.md)

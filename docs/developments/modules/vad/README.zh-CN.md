@@ -18,15 +18,17 @@ related_code:
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | VAD 模块总设计，串起 Provider、session、防抖、连接态和实时打断链路的分工。 |
 | [architecture.zh-CN.md](architecture.zh-CN.md) | VAD 的模块定位、Provider/session/service 分层和聊天 WebSocket 集成。 |
 | [config.zh-CN.md](config.zh-CN.md) | `config/vad_config.yaml` 的结构、Provider 参数和防抖归属。 |
 | [realtime-interrupt-boundary.zh-CN.md](realtime-interrupt-boundary.zh-CN.md) | `speech_start`/`speech_end` 的长期语义、协议边界，以及与 ASR/TTS/记忆的交界。 |
 
 ## 阅读顺序
 
-1. 先读 [architecture.zh-CN.md](architecture.zh-CN.md)，确认 VAD 不是独立 REST 子系统。
-2. 再读 [config.zh-CN.md](config.zh-CN.md)，确认根参数和 Provider 参数各自控制什么。
-3. 最后读 [realtime-interrupt-boundary.zh-CN.md](realtime-interrupt-boundary.zh-CN.md)，核对打断、ASR 接管和旧音频丢弃的长期契约。
+1. 先读 [design.zh-CN.md](design.zh-CN.md)，确认 Provider、session、chat_ws 连接态如何分工。
+2. 再读 [architecture.zh-CN.md](architecture.zh-CN.md)，确认 VAD 不是独立 REST 子系统。
+3. 再读 [config.zh-CN.md](config.zh-CN.md)，确认根参数和 Provider 参数各自控制什么。
+4. 最后读 [realtime-interrupt-boundary.zh-CN.md](realtime-interrupt-boundary.zh-CN.md)，核对打断、ASR 接管和旧音频丢弃的长期契约。
 
 ## 文档关系
 

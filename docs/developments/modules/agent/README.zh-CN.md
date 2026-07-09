@@ -13,6 +13,7 @@ updated: 2026-07-09
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | Agent 模块总设计，串起 Persona、ChatAgent、ServiceContext、缓存键和与记忆/LLM 的协同关系。 |
 | [chat-agent.zh-CN.md](chat-agent.zh-CN.md) | `ChatAgent` 的成功路径、错误路径、`runtime_context` 注入、raw/cleaned 语义和 `ServiceContext` 缓存边界。 |
 | [persona.zh-CN.md](persona.zh-CN.md) | Persona 文件格式、加载流程、API 输出和头像托管边界。 |
 | [persona.en-US.md](persona.en-US.md) | English version of Persona file format, loading flow, API output, and avatar hosting boundaries. |
@@ -35,12 +36,13 @@ Agent 模块主要由两层组成：
 
 建议按下面顺序阅读：
 
-1. [persona.zh-CN.md](persona.zh-CN.md)
-2. [chat-agent.zh-CN.md](chat-agent.zh-CN.md)
-3. `src/agent/persona.py`
-4. `src/agent/chat_agent.py`
-5. `src/service_context.py`
-6. `src/routes/chat_ws.py`
+1. [design.zh-CN.md](design.zh-CN.md)
+2. [persona.zh-CN.md](persona.zh-CN.md)
+3. [chat-agent.zh-CN.md](chat-agent.zh-CN.md)
+4. `src/agent/persona.py`
+5. `src/agent/chat_agent.py`
+6. `src/service_context.py`
+7. `src/routes/chat_ws.py`
 
 ## 相关实现入口
 

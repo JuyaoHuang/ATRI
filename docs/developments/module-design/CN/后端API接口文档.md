@@ -1,5 +1,9 @@
 # 后端 API 接口文档
 
+> 旧接口稿说明：
+> 当前实现请优先阅读 [../../api/README.zh-CN.md](../../api/README.zh-CN.md) 和 [../../modules/routes/README.zh-CN.md](../../modules/routes/README.zh-CN.md)。
+> 本文档保留为历史接口来源与迁移参考，不再作为当前实现的权威入口。
+
 > 项目: emotion-robot / atri
 > 后端地址: `http://localhost:8430`
 > 文档状态: 已按 Phase 11 认证系统与当前后端路由更新

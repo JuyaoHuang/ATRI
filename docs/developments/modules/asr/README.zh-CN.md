@@ -19,15 +19,19 @@ related_code:
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | ASR 模块总设计，串起三条链路、Provider 能力模型、WAV 上传契约和本地实例常驻缓存。 |
 | [architecture.zh-CN.md](architecture.zh-CN.md) | ASR 的模块定位、分层结构、上传转录链路和与 VAD/WebSocket 的交界。 |
+| [interface.zh-CN.md](interface.zh-CN.md) | ASR 接口、工厂、服务层、上传 WAV 契约、常驻本地 Provider 缓存和异常映射。 |
 | [config.zh-CN.md](config.zh-CN.md) | `config/asr_config.yaml` 的结构、前后端可写边界、敏感字段和遗留配置说明。 |
 | [provider-matrix.zh-CN.md](provider-matrix.zh-CN.md) | 当前已注册 Provider 的能力矩阵、健康前提、输入格式和注意事项。 |
 
 ## 阅读顺序
 
-1. 先读 [architecture.zh-CN.md](architecture.zh-CN.md)，确认 ASR 在系统中的职责。
-2. 再读 [provider-matrix.zh-CN.md](provider-matrix.zh-CN.md)，确认当前代码真正注册了哪些 Provider。
-3. 最后读 [config.zh-CN.md](config.zh-CN.md)，核对 YAML、前端设置页和后端运行边界。
+1. 先读 [design.zh-CN.md](design.zh-CN.md)，确认三条链路和模块总边界。
+2. 再读 [architecture.zh-CN.md](architecture.zh-CN.md)，确认 ASR 在系统中的职责。
+3. 再读 [interface.zh-CN.md](interface.zh-CN.md)，确认 Provider 契约、工厂和上传转录边界。
+4. 再读 [provider-matrix.zh-CN.md](provider-matrix.zh-CN.md)，确认当前代码真正注册了哪些 Provider。
+5. 最后读 [config.zh-CN.md](config.zh-CN.md)，核对 YAML、前端设置页和后端运行边界。
 
 ## 文档关系
 

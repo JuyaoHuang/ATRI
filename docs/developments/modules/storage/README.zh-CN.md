@@ -18,6 +18,7 @@ updated: 2026-07-09
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | Storage 模块总设计，串起聊天存储抽象、JSON 实现、角色存储、用户隔离和与 memory 的边界。 |
 | [chat-history-storage.zh-CN.md](chat-history-storage.zh-CN.md) | 聊天列表与聊天消息的 JSON 存储结构、REST/API 边界、消息元数据和删除语义。 |
 | [chat-history-storage.en-US.md](chat-history-storage.en-US.md) | English version of the frontend chat history storage structure. |
 | [character-storage.zh-CN.md](character-storage.zh-CN.md) | 角色 markdown、托管头像、系统角色保护和 `/api/characters` 存储边界。 |
@@ -40,9 +41,11 @@ Storage 模块负责：
 
 建议按下面顺序阅读：
 
-1. [chat-history-storage.zh-CN.md](chat-history-storage.zh-CN.md)
-2. [character-storage.zh-CN.md](character-storage.zh-CN.md)
-3. `src/storage/json_storage.py`
-4. `src/storage/character_storage.py`
-5. `src/routes/chats.py`
-6. `src/routes/characters.py`
+1. [design.zh-CN.md](design.zh-CN.md)
+2. [chat-history-storage.zh-CN.md](chat-history-storage.zh-CN.md)
+3. [character-storage.zh-CN.md](character-storage.zh-CN.md)
+4. `src/storage/interface.py`
+5. `src/storage/json_storage.py`
+6. `src/storage/character_storage.py`
+7. `src/routes/chats.py`
+8. `src/routes/characters.py`

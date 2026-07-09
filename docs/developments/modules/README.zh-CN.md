@@ -32,6 +32,7 @@ modules/<module>/
 | Live2D | [live2d/README.zh-CN.md](live2d/README.zh-CN.md) |
 | LLM | [llm/README.zh-CN.md](llm/README.zh-CN.md) |
 | Memory | [memory/README.zh-CN.md](memory/README.zh-CN.md) |
+| Routes | [routes/README.zh-CN.md](routes/README.zh-CN.md) |
 | Storage | [storage/README.zh-CN.md](storage/README.zh-CN.md) |
 | TTS | [tts/README.zh-CN.md](tts/README.zh-CN.md) |
 | VAD | [vad/README.zh-CN.md](vad/README.zh-CN.md) |

@@ -1,5 +1,9 @@
 # LLM 调用层设计讨论
 
+> 旧设计稿说明：
+> 当前实现请优先阅读 [../../modules/llm/README.zh-CN.md](../../modules/llm/README.zh-CN.md)。
+> 本文档保留为历史设计来源与迁移参考，不再作为当前实现的权威入口。
+
 > **项目**: emotion-robot
 > **创建日期**: 2026-04-XX
 > **状态**: 设计中

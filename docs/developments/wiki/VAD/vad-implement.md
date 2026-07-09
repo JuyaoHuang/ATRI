@@ -1,5 +1,9 @@
 # ATRI VAD 实时打断开发文档
 
+> 历史开发稿说明：
+> 当前正式入口请优先阅读 [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md)、[../../modules/vad/README.zh-CN.md](../../modules/vad/README.zh-CN.md) 和 [../development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md](../development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md)。
+> 本文档保留为历史实施来源与迁移参考。
+
 状态：设计准备中  
 日期：2026-06-15  
 适用范围：`atri/` 后端与 `atri/frontend` 前端子模块

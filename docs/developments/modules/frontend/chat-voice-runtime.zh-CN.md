@@ -70,6 +70,24 @@ related_code:
 - `input:audio:end`
 - `ping`
 
+## WebSocket 会话控制层
+
+近期前端会话重构后，聊天运行时不再把“连接中”“UI 已连接”“允许发送”混为一谈。当前稳定结构是：
+
+| 层 | 代码 | 职责 |
+| --- | --- | --- |
+| 传输层 | `frontend/src/utils/websocket.ts` | 原生 socket、heartbeat、重连 timer、原始 `send()` |
+| 会话层 | `frontend/src/utils/websocketSessionController.ts` | 当前 active manager、session epoch、协议事件分发、统一发送入口 |
+| facade 层 | `frontend/src/composables/useWebSocket.ts` | 对业务暴露 `connect()`、`disconnect()`、`canSend()`、`send*()` 和统一默认 handler |
+| UI 投影层 | `frontend/src/stores/websocket.ts` | 只保留 `connectionStatus` 与 `error` |
+
+长期约束：
+
+1. `readyState === OPEN` 是唯一底层发送事实来源。
+2. `wsStore.connected` 只用于 UI，不再阻塞文本或音频发送。
+3. 页面内所有文本和实时音频发送都必须经过 `useWebSocket()` facade。
+4. 默认协议 handler 只注册一次，避免多处调用 `useWebSocket()` 造成重复副作用。
+
 ## 连接生命周期
 
 `useWebSocket()` 是聊天页级别的连接入口，内部使用 `WebSocketManager` 维护单连接实例。
@@ -83,6 +101,14 @@ related_code:
 5. `disconnect()` 与 `destroy()` 都会停止心跳、关闭 socket，并移除监听器。
 
 前端不维护多路聊天 WebSocket，也不按聊天标题创建独立连接。
+
+页面级连接入口目前固定在 `frontend/src/pages/index.vue`：
+
+- 首页 `onMounted()` 建立连接；
+- 首页 `onUnmounted()` 断开连接；
+- `ChatArea` 与 `StageChatShell` 不再各自 `connect()`。
+
+这是近期 git log 和 feature 文档已经确认下来的稳定结论。
 
 ## 文本聊天链路
 
@@ -122,6 +148,16 @@ related_code:
 ```
 
 6. 发送成功后，`chatStore.beginStreaming()` 创建当前流式状态。
+
+需要补充一个近期稳定约束：
+
+- `beginStreaming()` 在发送前建立本地等待态；
+- deferred title 的 pending 标记与轮询只在 `sendText()` 成功后启动。
+
+这样可以避免：
+
+- chunk 到达时前端还没进入 streaming 结构；
+- 发送失败时前端自己保留一份假的 pending title 状态。
 
 ### 接收链路
 

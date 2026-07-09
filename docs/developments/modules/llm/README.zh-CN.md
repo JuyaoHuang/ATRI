@@ -13,6 +13,7 @@ updated: 2026-07-09
 
 | 文档 | 内容 |
 | --- | --- |
+| [design.zh-CN.md](design.zh-CN.md) | LLM 模块总设计，串起无状态调用层、角色映射、Provider 池、错误所有权和上游调用关系。 |
 | [call-layer.zh-CN.md](call-layer.zh-CN.md) | LLM 调用层的接口、工厂、角色映射、Provider、异常层次和 `tools` 预留说明。 |
 
 ## 模块边界
@@ -34,11 +35,12 @@ LLM 模块负责三件事：
 建议按下面顺序阅读：
 
 1. `config/llm_config.yaml`
-2. [call-layer.zh-CN.md](call-layer.zh-CN.md)
-3. `src/llm/interface.py`
-4. `src/llm/factory.py`
-5. `src/llm/providers/`
-6. `src/service_context.py`
+2. [design.zh-CN.md](design.zh-CN.md)
+3. [call-layer.zh-CN.md](call-layer.zh-CN.md)
+4. `src/llm/interface.py`
+5. `src/llm/factory.py`
+6. `src/llm/providers/`
+7. `src/service_context.py`
 
 ## 相关实现入口
 

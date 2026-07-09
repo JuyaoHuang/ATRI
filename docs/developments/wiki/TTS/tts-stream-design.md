@@ -1,5 +1,9 @@
 # ATRI TTS 分段流式化设计
 
+> 历史设计稿说明：
+> 当前正式入口请优先阅读 [../../modules/tts/README.zh-CN.md](../../modules/tts/README.zh-CN.md) 和 [../../features/2026-07-tts-segment-streaming/README.zh-CN.md](../../features/2026-07-tts-segment-streaming/README.zh-CN.md)。
+> 本文档保留为历史设计来源与迁移参考。
+
 状态：设计冻结前草案  
 日期：2026-07-08  
 适用范围：VAD 第一版完成后的独立 TTS streaming 开发
