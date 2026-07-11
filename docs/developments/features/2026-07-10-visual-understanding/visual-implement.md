@@ -2,7 +2,7 @@
 status: planned
 owner: vision
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-12
 design_document: ./design-docs.md
 backend_branch: feat/visual-understanding
 frontend_branch: feat/visual-understanding
@@ -736,7 +736,7 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
 - 缺少必填协议字段；
 - 与 generation 调用无关的连接级错误。
 
-新前端为每个 `input:text` 附带短生命周期 `request_id`。后端在明确拒绝该输入时通过顶层 `error` 原样返回；前端只清理 `chatId + characterId + requestId` 匹配且仍为 pending 的 submission。已经 streaming 的 generation 和不相关顶层错误不得被该路径终止。
+新前端为每个 `input:text` 附带短生命周期 `request_id`。后端在明确拒绝该输入时通过顶层 `error` 原样返回；前端只清理 `chatId + requestId` 匹配且仍为 pending 的 submission。事件若携带 `characterId`，还必须与本地角色一致。已经 streaming 的 generation 和不相关顶层错误不得被该路径终止。
 
 它不得无条件清理前端 active generation。前端事件映射必须与 `output:chat:error` 分开。
 

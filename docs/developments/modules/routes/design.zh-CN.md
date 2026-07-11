@@ -2,7 +2,7 @@
 status: active
 owner: routes
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 source:
   - ../../module-design/CN/后端设计.md
   - ../../module-design/CN/后端API接口文档.md
@@ -215,7 +215,7 @@ WebSocket 路径则使用：
 
 `output:chat:error` 只能携带固定安全文案。Provider 原始错误、完整请求参数和图片 payload 不得跨越路由边界。
 
-新客户端的 `input:text.request_id` 只服务于“generation 建立前的请求拒绝”。顶层 `error` 可以回显 `chat_id + character_id + request_id`；前端据此只清理匹配且仍为 pending 的 submission。它不能替代 `generation_id`，也不能让通用协议错误终止正在 streaming 的 generation。
+新客户端的 `input:text.request_id` 只服务于“generation 建立前的请求拒绝”。顶层 `error` 回显 `chat_id + request_id`，并在可识别时回显 `character_id`。前端只清理 `chat_id + request_id` 匹配且仍为 pending 的 submission；事件若携带 `character_id`，还必须与本地角色一致。`request_id` 不能替代 `generation_id`，也不能让通用协议错误终止正在 streaming 的 generation。
 
 ## 视觉路由与 WebSocket 协作
 

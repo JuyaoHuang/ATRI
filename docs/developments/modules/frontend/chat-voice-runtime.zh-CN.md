@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 source_documents:
   - ../../module-design/CN/前端设计文档.md
   - ../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md
@@ -188,7 +188,7 @@ related_code:
 - `chat:complete`：结束流式状态，落入一条最终 AI 消息。
 - `chat:interrupted`：把半截回复以 `interrupted=true` 的消息形态落到前端消息列表。
 - `chat:generation-error`：严格匹配 `chat_id + character_id + generation_id` 后，终止当前流式状态并追加瞬态错误 notice。
-- `chat:error`：投影到 `wsStore.error`；若 `chat_id + character_id + request_id` 精确匹配 pending submission，则清理该 pending，其他错误不终止 active generation。
+- `chat:error`：投影到 `wsStore.error`；若 `chat_id + request_id` 匹配 pending submission，则清理该 pending。事件若携带 `character_id`，还必须与本地角色一致；其他错误不终止 active generation。
 
 AI 文本在进入消息列表前，会先经过 `extractLive2dExpression()`：
 

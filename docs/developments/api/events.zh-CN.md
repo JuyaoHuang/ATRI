@@ -2,7 +2,7 @@
 status: active
 owner: api
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 related_code:
   - src/routes/chat_ws.py
   - frontend/src/utils/websocket.ts
@@ -460,7 +460,7 @@ related_code:
 }
 ```
 
-顶层 `error` 不等价于 `output:chat:error`。前端可以展示连接/协议错误，但不能据此终止当前 streaming generation。只有当 `chat_id + character_id + request_id` 精确匹配且本地 stream 仍为 pending 时，前端才清理这次被明确拒绝的 submission；generation 终态仍由完整关联的 `output:chat:error` 管理。
+顶层 `error` 不等价于 `output:chat:error`。前端可以展示连接/协议错误，但不能据此终止当前 streaming generation。只有当 `chat_id + request_id` 匹配且本地 stream 仍为 pending 时，前端才清理这次被明确拒绝的 submission；事件若携带 `character_id`，还必须与本地角色一致。generation 终态仍由完整关联的 `output:chat:error` 管理。
 
 ## `pong`
 

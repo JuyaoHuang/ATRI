@@ -2,7 +2,7 @@
 status: active
 owner: api
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 related_code:
   - src/routes/chat_ws.py
   - src/auth/dependencies.py
@@ -357,7 +357,7 @@ output:chat:chunk
 - `input:text` / `input:audio:*` 缺少必要字段
 - 聊天不属于当前用户或角色
 
-新前端会给 `input:text` 附带 `request_id`。当服务端明确拒绝该输入时，顶层 `error` 回显 request/chat/character；前端只清理完全匹配且仍为 pending 的 submission，不让其他协议错误终止 active generation。
+新前端会给 `input:text` 附带 `request_id`。当服务端明确拒绝该输入时，顶层 `error` 回显 `request_id` 和可识别的聊天上下文。前端只在 `chat_id + request_id` 匹配且本地 submission 仍为 pending 时清理该 submission；事件若携带 `character_id`，还必须与本地角色一致。其他协议错误不能终止 active generation。
 
 ### 连接前就失败的情况
 

@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 source:
   - ../../module-design/CN/前端设计文档.md
   - ../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md
@@ -239,7 +239,7 @@ reserveSubmission()
 - 当前聊天不可见时只结束匹配的运行时，不插入 notice；
 - failure 会清空 partial streaming text，并要求音频层丢弃同 generation 音频。
 
-顶层协议 `error` 不会调用 `failActiveGeneration()`。它始终更新 `websocket.error`；只有携带完整 `chat_id + character_id + request_id` 且匹配本地 pending stream 时，才调用 `rejectPendingSubmission()` 清理这一次被明确拒绝的输入。stale request、无 request 的通用协议错误和已经 streaming 的 generation 都保持不变。
+顶层协议 `error` 不会调用 `failActiveGeneration()`。它始终更新 `websocket.error`；只有 `chat_id + request_id` 匹配本地 pending stream 时，才调用 `rejectPendingSubmission()` 清理这一次被明确拒绝的输入。事件若携带 `character_id`，还必须与本地角色一致。stale request、无 request 的通用协议错误和已经 streaming 的 generation 都保持不变。
 
 当 `control:interrupt.preserve_chat_generation=true` 时，音频层仍执行 VAD 停播，但 `markActiveStreamInterrupted()` 返回 `ignored`。这表示后端已经认领 durable commit，前端必须保留文本 stream 等待 complete。
 
