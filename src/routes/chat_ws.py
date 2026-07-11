@@ -452,6 +452,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         websocket,
                         "Chat task already running",
                         chat_id=_message_chat_id(message),
+                        character_id=_message_character_id(message),
+                        request_id=_message_request_id(message),
+                        generation_id=generation_id,
                     )
             elif msg_type == "input:vision:state":
                 await _handle_vision_state(
@@ -528,6 +531,28 @@ def _message_chat_id(message: dict[str, Any]) -> str | None:
         return None
     chat_id = data.get("chat_id")
     return chat_id if isinstance(chat_id, str) and chat_id else None
+
+
+def _message_character_id(message: dict[str, Any]) -> str | None:
+    """Extract a safe character identifier from a message data object."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    character_id = data.get("character_id")
+    return character_id if isinstance(character_id, str) and character_id else None
+
+
+def _message_request_id(message: dict[str, Any]) -> str | None:
+    """Extract the bounded client correlation id used for input rejection."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    request_id = data.get("request_id")
+    if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+        return None
+    return request_id
 
 
 async def _handle_vision_state(
@@ -1327,6 +1352,7 @@ async def _handle_text_input(
     text = data.get("text")
     chat_id = data.get("chat_id")
     character_id = data.get("character_id")
+    request_id = _message_request_id(message)
     client_context = data.get("client_context")
     if not isinstance(client_context, dict):
         client_context = None
@@ -1334,15 +1360,35 @@ async def _handle_text_input(
     # Validate required fields
     # 验证必填字段
     if not isinstance(text, str) or not text.strip():
-        await _send_error(websocket, "Missing 'text' field", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            "Missing 'text' field",
+            chat_id=chat_id,
+            character_id=character_id if isinstance(character_id, str) else None,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
     if not chat_id:
-        await _send_error(websocket, "Missing 'chat_id' field", chat_id=None)
+        await _send_error(
+            websocket,
+            "Missing 'chat_id' field",
+            chat_id=None,
+            character_id=character_id if isinstance(character_id, str) else None,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
     if not character_id:
-        await _send_error(websocket, "Missing 'character_id' field", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            "Missing 'character_id' field",
+            chat_id=chat_id,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
 
@@ -1358,7 +1404,14 @@ async def _handle_text_input(
             character_id,
             exc,
         )
-        await _send_error(websocket, f"Invalid chat request: {exc}", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            f"Invalid chat request: {exc}",
+            chat_id=chat_id,
+            character_id=str(character_id),
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
 
@@ -1373,6 +1426,9 @@ async def _handle_text_input(
             websocket,
             f"Chat '{chat_id}' not found for character '{character_id}'",
             chat_id=chat_id,
+            character_id=str(character_id),
+            request_id=request_id,
+            generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
         return
@@ -2315,6 +2371,8 @@ async def _send_error(
     message: str,
     chat_id: str | None,
     generation_id: str | None = None,
+    character_id: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Send error message to client.
     向客户端发送错误消息。
@@ -2332,5 +2390,9 @@ async def _send_error(
         error_data["chat_id"] = chat_id
     if generation_id:
         error_data["generation_id"] = generation_id
+    if character_id:
+        error_data["character_id"] = character_id
+    if request_id:
+        error_data["request_id"] = request_id
 
     await _send_json(websocket, {"type": "error", "data": error_data})

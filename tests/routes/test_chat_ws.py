@@ -1447,6 +1447,7 @@ async def test_websocket_rejects_character_mismatch(
                     "text": "hello",
                     "chat_id": "test_chat_123",
                     "character_id": "atri",
+                    "request_id": "request-character-mismatch",
                 },
             }
         )
@@ -1454,6 +1455,10 @@ async def test_websocket_rejects_character_mismatch(
         response = websocket.receive_json()
         assert response["type"] == "error"
         assert "not found" in response["data"]["message"]
+        assert response["data"]["chat_id"] == "test_chat_123"
+        assert response["data"]["character_id"] == "atri"
+        assert response["data"]["request_id"] == "request-character-mismatch"
+        assert isinstance(response["data"]["generation_id"], str)
 
     mock_context.get_or_create_agent.assert_not_called()
     mock_storage.append_message_for_user.assert_not_called()
