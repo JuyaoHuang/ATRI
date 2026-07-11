@@ -33,7 +33,7 @@ async def test_get_vision_config_returns_complete_safe_config(client_and_config_
 
     assert response.status_code == 200
     data = response.json()
-    assert data["enabled"] is False
+    assert data["enabled"] is True
     assert data["source"] == "screen"
     assert data["capture"]["media_type"] == "image/jpeg"
     assert data["provider"]["detail"] == "auto"

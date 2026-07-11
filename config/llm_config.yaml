@@ -39,10 +39,10 @@ llm_configs:
         temperature: 0.8                   # 采样温度(DS默认0-1)
 
       siliconflow:
-        model: deepseek-ai/DeepSeek-V4-Flash     # 模型名称 
+        model: Pro/moonshotai/Kimi-K2.6          # 模型名称
         base_url: https://api.siliconflow.cn/v1 # API 基础 URL
         api_key: ${SILICONFLOW_API_KEY}         # API 密钥（从环境变量读取）
-        temperature: 0.8  
+        temperature: 0.8
       # 当增加新的 provider，可以据下面的方式增加字段
       openai:
         model: gpt-5.4

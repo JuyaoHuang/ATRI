@@ -5,7 +5,7 @@
 
 # Persistent module availability. The browser MediaStream remains runtime-only.
 # 持久化模块可用开关；浏览器 MediaStream 仍然只属于运行时。
-enabled: false
+enabled: true
 source: screen
 
 capture:

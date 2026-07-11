@@ -37,7 +37,7 @@ def test_default_config_is_complete_and_defensive(tmp_path: Path) -> None:
 def test_root_config_loads_vision_without_double_nesting() -> None:
     config = load_config("config.yaml")
 
-    assert config["vision"]["enabled"] is False
+    assert config["vision"]["enabled"] is True
     assert config["vision"]["source"] == "screen"
     assert "vision" not in config["vision"]
 
