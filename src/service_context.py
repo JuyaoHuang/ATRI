@@ -61,6 +61,7 @@ from src.memory.manager import (
     resolve_user_character_chat_dir,
     resolve_user_character_dir,
 )
+from src.vision import DEFAULT_VISION_CONFIG
 
 
 def _safe_build_long_term(mem0_config: dict[str, Any]) -> LongTermMemory | None:
@@ -154,6 +155,7 @@ class ServiceContext:
 
         llm_config = self.config.get("llm", {})
         memory_config = self.config.get("memory", {})
+        vision_config = self.config.get("vision", {})
 
         persona = load_persona(character_id)
         long_term = self._get_or_create_long_term(character_id, user_id)
@@ -169,7 +171,15 @@ class ServiceContext:
             chat_id=chat_id,
             long_term=long_term,
         )
-        chat_llm = create_from_role("chat", llm_config)
+        image_detail = vision_config.get("provider", {}).get(
+            "detail",
+            DEFAULT_VISION_CONFIG["provider"]["detail"],
+        )
+        chat_llm = create_from_role(
+            "chat",
+            llm_config,
+            provider_overrides={"image_detail": image_detail},
+        )
         agent = ChatAgent(chat_llm, mgr, persona)
 
         self._agents[key] = agent
