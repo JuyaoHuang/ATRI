@@ -1043,15 +1043,15 @@ async def _send_speech_start_interrupt_unlocked(
         committing_generation_id = vad_state.current_generation_id
         interrupted_tts_generation_id = await vad_state.interrupt_tts_generation()
         control_generation_id = committing_generation_id or interrupted_tts_generation_id
-        data: dict[str, Any] = {
+        preserved_data: dict[str, Any] = {
             "chat_id": chat_id,
             "character_id": character_id,
             "reason": "speech_start",
             "preserve_chat_generation": True,
         }
         if control_generation_id is not None:
-            data["generation_id"] = control_generation_id
-        await websocket.send_json({"type": "control:interrupt", "data": data})
+            preserved_data["generation_id"] = control_generation_id
+        await websocket.send_json({"type": "control:interrupt", "data": preserved_data})
         return None, control_generation_id, False
 
     interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
