@@ -48,13 +48,13 @@ related_code:
 | 后端主仓库 | `atri` | `feat/visual-understanding` | `ee5919b` |
 | 前端子模块 | `atri/frontend` | `feat/visual-understanding` | `5fbc967` |
 
-当前后端工作区中的 `config/tts_config.yaml` 已有与本 feature 无关的修改。后续不得覆盖、暂存或提交该文件。
+当前后端工作区可能存在用户尚未提交、且与某个实施 point 无关的修改。每次编辑和提交前都必须重新检查工作区；不得覆盖、暂存或提交不属于当前 point 的 `AGENTS.md`、配置文件或其他用户改动。
 
 ### 1.2 实施状态
 
 视觉理解的核心范围、数据流、图片传输、Memory 边界、generation 竞争规则和失败语义已经确定，可以开始实现。
 
-仍有六个产品或工程决策需要确认。它们统一列在本文“待决定事项”一节，并标明建议默认方案与最迟决策时间。除错误事件覆盖范围外，其余事项不阻塞核心链路的前四个后端步骤。
+D1 至 D6 已全部确认并写入本文“已确认决策”一节。设置页与主页运行时按钮、Vitest、静默图片交互、SiliconFlow 验收模型、GET + PUT 配置 API，以及通用 pre-success generation failure 都是本次交付的确定范围，不再作为实施中的可选项。
 
 ## 2. 首版交付边界
 
@@ -73,7 +73,10 @@ related_code:
 9. 远端 LLM 调用失败时，本轮不归档、不写 Memory，只显示当前页面瞬态错误气泡；
 10. VAD interrupt、generation complete 和 generation failed 遵守同一终态竞争规则；
 11. 页面刷新或聊天历史重新加载后，失败轮次的用户文本与错误气泡消失；
-12. Base64、data URL 和原始图片字节不进入日志、状态持久化或测试输出。
+12. Base64、data URL 和原始图片字节不进入日志、状态持久化或测试输出；
+13. `/settings/modules/vision` 提供持久化模块开关，主页 VAD 按钮右侧提供当前标签页的 `VisionInput` 运行时按钮；
+14. 后端提供 `GET /api/vision/config` 和只允许修改 `enabled` 的 `PUT /api/vision/config`；
+15. 前端建立 Vitest 测试基础设施并覆盖视觉与 generation failure 核心状态机。
 
 ### 2.2 明确不交付
 
@@ -92,6 +95,8 @@ related_code:
 - 多模态失败后的自动纯文本重试；
 - `message_count=0` 空聊天清理；
 - 前端瞬态错误的浏览器持久化。
+- 本轮附带图片的预览、缩略图、附件徽标、聊天消息或元数据显示；
+- 本地截图失败 toast 或其他用户提示。
 
 ### 2.3 实施不变量
 
@@ -414,12 +419,14 @@ class InputInform:
 
 3. 明确 `vision.enabled` 是模块可用开关，不是浏览器“当前正在共享”的持久化状态。即使配置为启用，页面加载后也必须等待用户手势才能调用 `getDisplayMedia()`。
 4. `VisionConfigStore` 负责默认值、类型范围和 YAML 读取；`VisionService` 提供安全配置视图。
-5. `GET /api/vision/config` 是前端启动视觉模块的最低必需接口。
-6. 是否实现 `PUT /api/vision/config` 由待决定事项 D5 控制。
-7. `InputImage.data` 使用 `repr=False`。任何 Pydantic API 模型也不得在错误文本中展开 `data`。
-8. `validate_input_image()` 接收原始映射并返回 `InputImage | None` 或受控校验结果，不把 Base64 写入异常文案。
-9. 编码长度检查必须先于 `base64.b64decode(..., validate=True)`。
-10. `VisionCaptureCoordinator` 以 `generation_id` 保存 pending Future，并提供：
+5. `GET /api/vision/config` 返回前端启动视觉模块所需的完整安全配置。
+6. `PUT /api/vision/config` 幂等更新现有单例配置资源，首版请求体只允许 `{ "enabled": boolean }`。
+7. 使用显式 allowlist `VISION_CONFIG_WRITE_FIELDS = {"enabled"}`；任何写入其他配置字段的请求返回 HTTP 400。
+8. REST API 只管理后端 YAML。当前浏览器 MediaStream 和连接级视觉状态都不得通过 PUT 持久化。
+9. `InputImage.data` 使用 `repr=False`。任何 Pydantic API 模型也不得在错误文本中展开 `data`。
+10. `validate_input_image()` 接收原始映射并返回 `InputImage | None` 或受控校验结果，不把 Base64 写入异常文案。
+11. 编码长度检查必须先于 `base64.b64decode(..., validate=True)`。
+12. `VisionCaptureCoordinator` 以 `generation_id` 保存 pending Future，并提供：
 
     - `register(generation_id)`；
     - `resolve(generation_id, image_or_none)`；
@@ -427,9 +434,9 @@ class InputInform:
     - `cancel_all()`；
     - 重复、未知和迟到结果的安全丢弃。
 
-11. Future 必须先注册，再发送 capture request。
-12. `src/main.py` 从视觉配置读取 `websocket_max_message_bytes` 并传给 Uvicorn 的 `ws_max_size`；路由仍保留应用层帧大小检查。
-13. `src/app.py` 初始化视觉配置服务并注册 `vision_router`。
+13. Future 必须先注册，再发送 capture request。
+14. `src/main.py` 从视觉配置读取 `websocket_max_message_bytes` 并传给 Uvicorn 的 `ws_max_size`；路由仍保留应用层帧大小检查。
+15. `src/app.py` 初始化视觉配置服务并注册 `vision_router`。
 
 ### 测试
 
@@ -444,6 +451,9 @@ class InputInform:
 - coordinator timeout/cancel/disconnect 后清理；
 - 重复、未知和迟到 generation 不改变其他 Future；
 - REST 配置返回不含运行时 MediaStream 状态。
+- GET 返回完整安全配置；PUT 可以幂等切换 `enabled` 并持久化到 YAML；
+- PUT 尝试修改 `source`、`capture`、`provider` 或 `transport` 时返回 HTTP 400；
+- PUT 不接受或持久化当前浏览器共享状态。
 
 ### 完成条件
 
@@ -686,9 +696,9 @@ release send_lock
 
 现有 `output:chat:complete` 的发送与 generation 失效也应收敛到同一临界区，避免 send 后、invalidate 前被 interrupt 抢占。
 
-#### F. LLM 失败与持久化
+#### F. pre-success generation failure 与持久化
 
-`LLMError` 发生后：
+所有发生在 durable success effects 开始之前、导致本 generation 无法完成的终态错误都走同一个 generation failure 分支，包括 `LLMError`、Provider 流式失败，以及成功持久化前不可恢复的 generation 编排失败。统一行为为：
 
 - 丢弃已累积的 partial reply；
 - 停止并丢弃该 generation 的 TTS；
@@ -698,6 +708,15 @@ release send_lock
 - 不调用 `append_system_note()`；
 - 只尝试发送一次 `output:chat:error`；
 - 若 generation 已被 VAD interrupt，迟到的错误直接丢弃。
+
+本分支严格排除：
+
+- 本地截图、编码、图片校验和等待超时；
+- JSON/协议校验错误；
+- TTS 单段失败；
+- 成功持久化或其他 durable success effects 已经开始后的辅助错误。
+
+这些错误继续使用各自既有的静默降级、顶层 `error`、`output:audio:error` 或成功后辅助错误路径。
 
 Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success 路径。
 
@@ -740,15 +759,16 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
 9. timeout 后纯文本继续；
 10. duplicate/stale/unknown result 被丢弃；
 11. disconnect 和 task cancellation 清空 coordinator；
-12. LLM 失败不写 ChatStorage；
-13. LLM 失败不写 Memory 或压缩；
-14. LLM 失败清理 partial reply 和 TTS；
+12. `LLMError`、Provider 流失败和不可恢复编排失败都不写 ChatStorage；
+13. pre-success generation failure 不写 Memory 或压缩；
+14. pre-success generation failure 清理 partial reply 和 TTS；
 15. interrupt 先获锁时，迟到 Error 被丢弃；
 16. Error 先获锁时，后续 generation 不受影响；
 17. generation B active 时，Error(A) 不影响 B；
 18. complete/interrupted/failed 只有一个终态；
 19. 通用顶层 `error` 不终止无关 generation；
-20. 日志捕获中不含 Base64、data URL 或原始 Provider 请求。
+20. 本地图片、协议、TTS 单段和 durable success 后错误不误用 `output:chat:error`；
+21. 日志捕获中不含 Base64、data URL 或原始 Provider 请求。
 
 ### 完成条件
 
@@ -771,6 +791,8 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
 - `frontend/src/composables/useVision.ts`
 - `frontend/src/utils/visionSessionController.ts`
 - `frontend/src/utils/screenCapture.ts`
+- `frontend/vitest.config.ts`
+- 与 vision store、controller、screen capture 和 submission gate 对齐的 `*.spec.ts` 文件
 
 ### 计划修改
 
@@ -781,6 +803,8 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
 - `frontend/src/composables/useChat.ts`
 - `frontend/src/stores/chat.ts` 的 submission gate
 - `frontend/src/components/chat/InputBox.vue` 的接线
+- `frontend/package.json`
+- `frontend/package-lock.json`
 
 ### 实施要点
 
@@ -812,9 +836,11 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
    })
    ```
 
-5. 用户关闭、浏览器“停止共享”、track ended、组件卸载或页面卸载时停止全部 tracks。
-6. 刷新页面后不得自动恢复共享。
-7. WebSocket 重连后，如果同一页面中的共享流仍 active，应重新发送 `input:vision:state(enabled=true)`。
+5. 只有用户显式关闭、设置页禁用模块、浏览器原生“停止共享”导致 track `ended`、页面卸载或 controller 显式销毁时，才停止全部 tracks。
+6. `vision.vue`、`VisionInput.vue`、`InputBox.vue` 等组件卸载和设置页到主页的路由切换不得停止 tracks；MediaStream 必须由跨路由单例持有。
+7. Chrome/Edge 原生共享指示器及“停止共享”按钮不能由 ATRI 定制。controller 监听 `MediaStreamTrack.ended`，清理运行时并发送 `input:vision:state(enabled=false)`；后端 YAML 的 `enabled` 保持不变。
+8. 刷新页面后不得自动恢复共享。
+9. WebSocket 重连后，如果同一页面中的共享流仍 active，应重新发送 `input:vision:state(enabled=true)`。
 
 #### B. 截图
 
@@ -867,6 +893,8 @@ idle
 4. 截图失败，`sendText()` 只发送 text；
 5. 普通 ASR 已把最终 transcript 写入 InputBox，因此继续复用 `sendMessage()`，不新增第二条聊天实现。
 
+本地截图、编码、校验或等待失败必须完全静默：不显示 toast、`ChatErrorBubble` 或图片状态消息。首版也不显示截图预览、缩略图、附件徽标或图片元数据。
+
 #### E. VAD capture request
 
 1. `websocketSessionController` 把 `control:vision:capture-request` 分发为独立事件；
@@ -879,18 +907,20 @@ idle
 
 ### 测试与检查
 
-若待决定事项 D2 选择引入 Vitest，至少增加：
+本 feature 必须建立 Vitest 基础设施，并至少增加：
 
 - screen capture 纯函数的尺寸计算测试；
 - 单次有界重压缩测试；
 - vision store 生命周期测试；
+- `visionSessionController` 启停、track `ended`、路由组件卸载不销毁测试；
 - submission gate 防重复测试；
 - capture request/result generation 关联测试；
 - Base64 不进入 store 的断言。
 
-无论是否引入测试框架，都必须通过：
+必须通过：
 
 ```bash
+npm run test
 npm run type-check
 npm run lint
 npm run build
@@ -1044,7 +1074,7 @@ ChatTimelineItem
 
 ### 测试与检查
 
-若引入 Vitest，必须覆盖：
+Vitest 必须覆盖：
 
 - generation 严格匹配；
 - 首事件绑定；
@@ -1071,62 +1101,111 @@ ChatTimelineItem
 - generation race 不误伤新回复；
 - 刷新或历史重载后瞬态内容消失。
 
-## Step 7：视觉控制与可选设置页
+## Step 7：视觉设置页与主页运行时控制
 
 ### 目标
 
-为用户提供清晰的屏幕共享启停入口，并根据 D1/D5 的决定完成最小运行时控制或完整视觉设置页。
+完成已经确认的双层控制：设置页持久化视觉模块是否可用，主页按钮控制当前浏览器标签页是否建立 MediaStream。两者语义、所有权和生命周期必须明确分离。
 
-### 必做：InputBox 运行时控制
+### 强制设计流程
 
-修改：
+实际开始开发设置页与 `VisionInput` 时，必须调用：
 
-- `frontend/src/components/chat/InputBox.vue`
-- 必要的共享按钮/提示组件
+- `design-taste-frontend`；
+- `ui-ux-pro-max`。
 
-控制至少表现以下状态：
+这两个 skill 用于贴合现有设置页、按钮工具栏、明暗主题和可访问性。编写本文以及实施非 UI 步骤时不提前调用。
+
+### A. 设置页持久化模块开关
+
+新增和修改：
+
+- `frontend/src/pages/settings/modules/vision.vue`；
+- `frontend/src/router/index.ts`，把 `/settings/modules/vision` placeholder 替换为真实页面；
+- 设置导航保持“设置 -> 机体模块 -> 视觉功能”。
+
+页面首版只有一个开关：是否启用视觉模块。页面加载时调用 `GET /api/vision/config`，切换时调用 `PUT /api/vision/config`，且 PUT 只提交：
+
+```json
+{
+  "enabled": true
+}
+```
+
+该开关写入 `vision_config.yaml` 的顶层 `enabled` 字段，不创建 MediaStream，也不把浏览器当前共享状态写回 YAML。页面不展示可编辑的截图参数，不提供摄像头、文件上传、多图或其他未来能力占位开关。
+
+如果用户在 MediaStream active 时关闭模块：
+
+```text
+PUT enabled=false succeeds
+  -> visionSessionController stops all tracks
+  -> send input:vision:state(enabled=false)
+  -> disable home VisionInput
+```
+
+只有 PUT 成功后才提交本地模块禁用状态；请求失败时保留服务器确认过的状态，并显示设置页既有风格的安全操作失败反馈。
+
+### B. 主页 `VisionInput` 运行时按钮
+
+新增：
+
+- `frontend/src/components/chat/VisionInput.vue`。
+
+修改 `frontend/src/components/chat/InputBox.vue`，让输入工具栏顺序明确为：
+
+```vue
+<VoiceInput />
+<RealtimeVoiceInput />
+<VisionInput />
+```
+
+`VisionInput` 在默认聊天和 Live2D Stage 模式都必须显示，并位于对应 VAD 麦克风按钮右侧。`InputBox` 和 `VisionInput` 只负责 UI 与调用单例 controller，不持有 MediaStream。
+
+状态优先级：
+
+```text
+backend vision.enabled=false
+  -> VisionInput disabled
+
+backend vision.enabled=true + no active MediaStream
+  -> VisionInput available and inactive
+
+backend vision.enabled=true + active MediaStream
+  -> VisionInput active
+```
+
+用户点击开启时调用 `navigator.mediaDevices.getDisplayMedia()` 并由浏览器显示共享目标选择器；成功后同步 `input:vision:state(enabled=true)`。用户点击关闭时停止全部 tracks 并同步 `input:vision:state(enabled=false)`。
+
+按钮至少表现以下状态：
 
 - 模块不可用；
-- 未共享；
+- 可用但未共享；
 - 正在请求浏览器权限；
 - 正在共享；
 - 用户拒绝；
 - 浏览器终止共享；
 - 当前浏览器不支持 `getDisplayMedia()`。
 
+Chrome/Edge 的“停止共享”按钮属于浏览器原生界面，ATRI 不能定制。监听 video track `ended` 后只清理运行时并发送连接状态关闭；YAML 中的模块开关保持开启，因此主页按钮仍可重新启动共享。
+
 要求：
 
-- 开启按钮必须由用户点击；
+- 开启必须来自用户点击；
 - 活动状态清晰可见；
-- 关闭操作会停止 tracks 并同步 `enabled=false`；
-- 不显示截图缩略图；
-- 不暗示摄像头已经支持；
-- 共享内容选择仍由浏览器原生选择器负责；
-- 页面刷新后按钮回到未共享。
-
-### 可选：视觉设置页
-
-如果 D1 选择本 feature 内完成设置页：
-
-- 新增 `frontend/src/pages/settings/modules/vision.vue`；
-- 修改 `frontend/src/router/index.ts`，替换当前 placeholder；
-- 展示模块开关和截图配置；
-- 若 D5 选择 GET-only，只读展示配置并明确配置来源；
-- 若 D5 选择 PUT，支持安全持久化可编辑字段；
-- “当前正在共享”仍只显示运行时状态，不写入 YAML；
-- 不提供摄像头、文件上传或多图配置占位开关。
-
-如果 D1 选择不做设置页：
-
-- 保留当前 `/settings/modules/vision` placeholder；
-- 本 feature 的用户入口只放在 InputBox；
-- `vision.enabled` 由 YAML 或既有配置管理方式控制。
+- 路由切换和相关 Vue 组件卸载不停止有效 tracks；
+- 页面刷新后按钮回到未共享；
+- 不显示截图预览、缩略图、附件徽标或本轮图片元数据；
+- 不显示本地截图失败 toast 或 `ChatErrorBubble`；
+- 不暗示摄像头已经支持。
 
 ### 完成条件
 
+- 设置开关只持久化 `enabled`，并能在关闭时终止现有运行时；
+- 模块开关关闭时主页按钮不可用，开启时主页按钮可用但不会自动共享；
+- 默认聊天和 Stage 均在 VAD 右侧显示独立 `VisionInput`；
 - 用户能理解当前是否正在共享；
-- 权限拒绝和浏览器停止共享后状态恢复正确；
-- 运行时状态与持久化配置没有混淆；
+- 权限拒绝、浏览器停止共享和路由切换后的状态正确；
+- 运行时状态、连接状态与持久化配置没有混淆；
 - UI 未暴露首版非目标。
 
 ## Step 8：集成、文档与验收
@@ -1153,16 +1232,23 @@ uv run pytest tests/ -v
 在 `frontend` 中运行：
 
 ```bash
+npm run test
 npm run type-check
 npm run lint
 npm run build
 ```
 
-若 D2 决定引入 Vitest，再运行新增的单元测试命令。
+`npm run test` 使用本 feature 新增的 Vitest 配置。它必须在 type-check、lint 和 build 之外独立通过；真实浏览器的 `getDisplayMedia()` 行为继续按手工验收项检查。
 
 ### 真实 Provider 验证
 
-从 `.env` 读取现有凭据，选择已经确认支持图片输入的真实 Provider/model，验证一次端到端多模态请求。
+从 `.env` 读取现有凭据，继续使用当前 `provider: siliconflow`。`deepseek-ai/DeepSeek-V4-Flash` 不支持视觉理解；真实视觉验收时，只临时把 chat role 模型改为：
+
+```yaml
+model: Pro/moonshotai/Kimi-K2.6
+```
+
+不得修改 provider、base URL、API key、`compress_light` 或 `title_gen`。该模型切换是本地验收 override，验收后恢复用户原配置，除非用户另行要求，否则不得把它作为默认配置提交。
 
 验证时只记录：
 
@@ -1209,12 +1295,12 @@ README 开发路线只在功能验收完成后更新状态。
 | `config.yaml` | 修改 | 引用视觉子配置 |
 | `config/vision_config.yaml` | 新增 | 视觉能力、截图、Provider 与传输限制 |
 | `src/vision/models.py` | 新增 | `InputText`、`InputImage`、`InputInform` |
-| `src/vision/config.py` | 新增 | 默认值、加载、校验、可选持久化 |
+| `src/vision/config.py` | 新增 | 默认值、加载、校验和 `enabled` 持久化 |
 | `src/vision/service.py` | 新增 | 配置服务与安全投影 |
 | `src/vision/validation.py` | 新增 | 图片 envelope/Base64/JPEG/尺寸校验 |
 | `src/vision/capture_coordinator.py` | 新增 | generation-keyed pending Future |
 | `src/models/vision.py` | 新增 | REST 配置响应/更新模型 |
-| `src/routes/vision.py` | 新增 | `/api/vision/config` |
+| `src/routes/vision.py` | 新增 | `GET + PUT /api/vision/config`，PUT 只写 `enabled` |
 | `src/app.py` | 修改 | 初始化视觉服务、注册路由 |
 | `src/main.py` | 修改 | 应用 WebSocket message size |
 | `src/llm/interface.py` | 修改 | 可选 `input_image` 参数 |
@@ -1241,19 +1327,23 @@ README 开发路线只在功能验收完成后更新状态。
 | `src/composables/useVision.ts` | 新增 | UI/运行时 facade |
 | `src/utils/visionSessionController.ts` | 新增 | MediaStream 生命周期 |
 | `src/utils/screenCapture.ts` | 新增 | Canvas/JPEG/Base64 一次截图 |
+| `vitest.config.ts` | 新增 | 前端单元测试运行环境与覆盖范围 |
+| `package.json`、`package-lock.json` | 修改 | 引入 Vitest 并增加 `npm run test` |
 | `src/types/websocket.ts` | 修改 | 新增视觉和 generation error payload |
 | `src/utils/websocketSessionController.ts` | 修改 | 发送图片、分发新事件 |
 | `src/composables/useWebSocket.ts` | 修改 | 截图请求与失败 handler |
 | `src/composables/useChat.ts` | 修改 | submission gate 与自动截图 |
 | `src/stores/chat.ts` | 修改 | timeline union、通用 failure action |
 | `src/types/message.ts` | 修改 | timeline message/notice 类型 |
-| `src/components/chat/InputBox.vue` | 修改 | 屏幕共享控制与发送 gate |
+| `src/components/chat/InputBox.vue` | 修改 | 在 VAD 右侧放置 `VisionInput` 并接入发送 gate |
+| `src/components/chat/VisionInput.vue` | 新增 | 当前标签页 MediaStream 运行时控制 |
 | `src/components/chat/ChatErrorBubble.vue` | 新增 | 瞬态错误气泡 |
 | `src/components/chat/ChatTimelineItem.vue` | 新增 | 统一时间线 dispatcher |
 | `src/components/chat/MessageList.vue` | 修改 | 渲染联合时间线 |
 | `src/components/live2d/StageChatHistory.vue` | 修改 | Stage 联合时间线 |
-| `src/pages/settings/modules/vision.vue` | 条件新增 | D1 决定的视觉设置页 |
-| `src/router/index.ts` | 条件修改 | 替换视觉 placeholder |
+| `src/pages/settings/modules/vision.vue` | 新增 | 只编辑后端 `vision.enabled` 的视觉设置页 |
+| `src/router/index.ts` | 修改 | 替换视觉 placeholder |
+| vision/chat 相关 `*.spec.ts` | 新增 | store、controller、capture、gate 和 failure 状态机测试 |
 
 ## 7. 测试策略
 
@@ -1378,9 +1468,10 @@ README 开发路线只在功能验收完成后更新状态。
 3. `feat(visual-understanding/step 5): answer vad capture requests`
 4. `refactor(visual-understanding/step 6): introduce chat timeline items`
 5. `feat(visual-understanding/step 6): render transient generation failures`
-6. `feat(visual-understanding/step 7): add screen sharing controls`
-7. 条件提交：视觉设置页或 Vitest 基础设施；
-8. `docs(visual-understanding/step 8): document frontend visual runtime`
+6. `feat(visual-understanding/step 7): add vision settings and runtime controls`
+7. `test(visual-understanding/step 5): add vitest vision coverage`
+8. `test(visual-understanding/step 6): cover generation failure state`
+9. `docs(visual-understanding/step 8): document frontend visual runtime`
 
 每次提交前只暂存本 point 的文件，并执行与改动范围匹配的 basic check。
 
@@ -1389,25 +1480,29 @@ README 开发路线只在功能验收完成后更新状态。
 建议按以下顺序执行，失败时容易定位所属层：
 
 1. 启动后端，确认视觉配置加载且日志不含敏感内容；
-2. 视觉关闭，验证键盘纯文本行为无回归；
-3. 视觉关闭，验证普通 ASR 和 VAD+ASR 无回归；
-4. 用户点击开启共享并选择屏幕/窗口；
-5. 键盘发送，确认一轮只截一张图；
-6. 普通 ASR 自动/手动发送，确认复用同一路径；
-7. VAD+ASR 发送，确认 receive loop 能接收 capture result；
-8. 浏览器停止共享，确认立即回到纯文本；
-9. 模拟截图失败、超限和 timeout，确认文本只发送一次；
-10. 使用支持视觉的真实模型验证成功理解；
-11. 使用不支持视觉或明确拒绝图片的请求验证 `output:chat:error`；
-12. 验证失败轮次不进入 ChatStorage、Memory、recent、compression 和 long-term；
-13. 模拟 HTTP 200 自然语言拒绝，确认仍正常归档；
-14. 在截图等待时触发 VAD interrupt，确认迟到结果丢弃；
-15. 在 LLM 即将失败时触发 VAD interrupt，分别验证两种锁顺序；
-16. 确认失败 generation 音频被丢弃；
-17. 确认错误气泡在默认聊天和 Stage 中正确显示；
-18. 刷新页面和重新加载聊天，确认瞬态用户文本/错误气泡消失；
-19. 审查后端日志、浏览器 console、Pinia 和测试输出；
-20. 运行前后端完整检查。
+2. 通过设置页 GET + PUT 开关模块，确认只持久化 `enabled`，其他字段写入被拒绝；
+3. 模块关闭时，确认主页 `VisionInput` 不可用，键盘、普通 ASR 和 VAD+ASR 纯文本行为无回归；
+4. 模块开启后，确认默认聊天和 Stage 的 VAD 右侧都出现可用但未激活的 `VisionInput`；
+5. 用户点击运行时按钮并在浏览器选择屏幕/窗口；
+6. 在设置页和主页之间切换，确认路由组件卸载不会停止共享流；
+7. 键盘发送，确认一轮只截一张图，聊天框不显示图片预览、徽标或元数据；
+8. 普通 ASR 自动/手动发送，确认复用同一路径；
+9. VAD+ASR 发送，确认 receive loop 能接收 capture result；
+10. 浏览器原生停止共享，确认立即回到纯文本，但模块开关仍开启且按钮可重新启动；
+11. 共享 active 时从设置页关闭模块，确认 tracks 被停止、连接状态关闭且主页按钮不可用；
+12. 模拟截图失败、超限和 timeout，确认文本只发送一次且没有 toast 或 `ChatErrorBubble`；
+13. 临时使用 SiliconFlow `Pro/moonshotai/Kimi-K2.6` 验证真实视觉理解，且不改动其他 role/model；
+14. 模拟 Provider 非成功响应、流式失败和 pre-success 编排失败，确认统一发送 `output:chat:error`；
+15. 验证失败轮次不进入 ChatStorage、Memory、recent、compression 和 long-term；
+16. 模拟 HTTP 200 自然语言拒绝，确认仍正常归档；
+17. 确认本地图片失败、协议错误、TTS 单段失败和 durable success 后错误不误用 `output:chat:error`；
+18. 在截图等待时触发 VAD interrupt，确认迟到结果丢弃；
+19. 在 generation 即将失败时触发 VAD interrupt，分别验证两种锁顺序；
+20. 确认失败 generation 音频被丢弃；
+21. 确认错误气泡在默认聊天和 Stage 中正确显示；
+22. 刷新页面和重新加载聊天，确认瞬态用户文本/错误气泡消失；
+23. 审查后端日志、浏览器 console、Pinia 和测试输出；
+24. 运行前后端完整检查，并在验收后恢复用户的本地模型配置。
 
 ## 11. 回滚与故障隔离
 
@@ -1420,8 +1515,9 @@ README 开发路线只在功能验收完成后更新状态。
 如果屏幕共享 API、Canvas 或编码失败：
 
 - 释放临时资源；
-- 视觉状态显示安全错误；
 - 当前合法 InputText 仍发送一次；
+- 截图/编码级失败完全静默，不显示 toast、ChatErrorBubble 或图片提示；
+- 只有影响 MediaStream 启停的权限拒绝、不支持和 track ended 才反映在运行时按钮状态；
 - 不需要清理任何持久化图片，因为图片从未持久化。
 
 ### 11.3 后端图片故障
@@ -1435,7 +1531,7 @@ README 开发路线只在功能验收完成后更新状态。
 
 ### 11.4 远端生成故障
 
-如果 LLM 在成功提交前失败：
+如果 LLM、Provider stream 或 generation 编排在 durable success effects 开始前发生不可恢复的终态失败：
 
 - generation 进入 failed；
 - 不做成功持久化；
@@ -1448,82 +1544,81 @@ README 开发路线只在功能验收完成后更新状态。
 
 新字段均为可选或新增 message type，因此后端可通过关闭视觉配置回退到纯文本。不需要数据库迁移，也不存在图片数据清理任务。
 
-## 12. 待决定事项
+## 12. 已确认决策（2026-07-11）
 
-下列事项尚未在设计讨论中最终拍板。
+D1 至 D6 已全部确认。以下内容是实施约束，不再保留备选分支。
 
-### D1：本 feature 是否实现完整视觉设置页
+### D1：完整设置页与主页运行时按钮均交付
 
-选择：
+- `/settings/modules/vision` 实现真实设置页，导航位于“设置 -> 机体模块 -> 视觉功能”；
+- 页面首版只有一个持久化模块开关，只写 `vision_config.yaml.enabled`；
+- 主页新增独立 `VisionInput.vue`，在 VAD `RealtimeVoiceInput` 右侧控制当前标签页 MediaStream；
+- 默认聊天和 Live2D Stage 都显示该按钮；
+- 模块关闭时按钮不可用，模块开启时按钮可用但不会自动请求共享权限；
+- 设置页关闭模块时停止当前流并同步连接状态；
+- 浏览器原生停止共享只关闭运行时，YAML 开关保持开启；
+- `visionSessionController` 跨路由持有流，组件卸载不停止 tracks。
 
-- 仅在 InputBox 提供屏幕共享运行时按钮，保留 `/settings/modules/vision` placeholder；
-- 同时新增真实视觉设置页并替换 placeholder。
+实际开发设置页、`VisionInput` 和 `ChatErrorBubble` 时再调用 `design-taste-frontend` 与 `ui-ux-pro-max`，文档阶段不调用。
 
-建议：首版只做 InputBox 运行时按钮，把设置页留到模块配置完善时。这样不扩大首版 UI 面积，也不阻塞核心能力。
+### D2：建立 Vitest 测试基础设施
 
-最迟决定：Step 7 开始前。
+当前 frontend 尚无单元测试 runner。本 feature 引入 Vitest、增加 `npm run test`，并覆盖：
 
-### D2：是否为前端新增 Vitest
+- vision store；
+- `visionSessionController`；
+- 截图缩放与有界压缩 helper；
+- `VisionInput` 状态；
+- submission gate；
+- VAD capture request/result 的 generation 关联；
+- `failActiveGeneration()` 与 stale generation；
+- 瞬态 history reload；
+- Base64 不进入 Pinia。
 
-当前 frontend 只有 type-check、lint 和 build，没有单元测试 runner。
+Vitest 不替代 Chrome/Edge 对真实 `getDisplayMedia()` 权限和 track `ended` 的手工验收。
 
-选择：
+### D3：首版不显示图片，图片失败静默降级
 
-- 引入 Vitest，覆盖 submission gate、generation failure 和 capture 纯函数；
-- 不新增测试框架，只做类型检查、构建与手工联调。
+沿用 OLV 的首版行为：聊天框不显示截图预览、缩略图、附件徽标、图片消息或元数据。截图、编码、校验或等待失败时，静默降级为恰好一次纯文本发送；不显示 toast、`ChatErrorBubble` 或其他提示。
 
-建议：引入 Vitest。`failActiveGeneration()` 和 VAD generation 竞态属于高风险状态机，仅靠手工测试难以稳定覆盖。
+图片可见性和审计交互属于未来独立前端扩展。远端 generation failure 的错误气泡不受此决策影响。
 
-最迟决定：Step 5 开始前。
+### D4：SiliconFlow + Kimi K2.6 做真实验收
 
-### D3：本地截图失败是否显示非聊天提示
+Provider 保持 `siliconflow`。当前 `deepseek-ai/DeepSeek-V4-Flash` 不支持视觉理解，真实验收时只临时把 chat role 模型改为 `Pro/moonshotai/Kimi-K2.6`。
 
-已经确定的是：截图失败自动降级纯文本，不显示 `ChatErrorBubble`，也不产生 `output:chat:error`。
+不修改 provider、base URL、API key、`compress_light` 或 `title_gen`。Kimi 模型修改是本地验收 override，除非用户另行要求，否则不作为默认配置提交。
 
-尚未确定：
+### D5：配置 API 使用 GET + PUT
 
-- 完全静默降级；
-- 显示短暂 toast，例如“本轮截图失败，已按纯文本发送”。
+后端拥有：
 
-建议：显示短暂、非聊天、可限频 toast；它不进入 timeline，也不持久化。若担心 VAD 连续触发造成干扰，则首版采用静默降级。
+```http
+GET /api/vision/config
+PUT /api/vision/config
+```
 
-最迟决定：Step 5 的发送交互完成前。
+前端只提供 API client wrapper。GET 返回完整安全配置；PUT 幂等更新现有单例资源，首版通过 `VISION_CONFIG_WRITE_FIELDS = {"enabled"}` 只允许 `{ "enabled": boolean }`，其他字段写入返回 HTTP 400。
 
-### D4：真实验收使用哪个 Provider/model
+三个状态层必须保持独立：
 
-单元测试全部使用 mock，但项目规范还要求从 `.env` 读取凭据做真实 API 验证。需要指定一个已知支持图片输入的当前 Provider/model。
+| 层 | 所有者 | 持久化 | 协议 |
+|---|---|---|---|
+| `vision_config.yaml.enabled` | 后端 | YAML | GET/PUT |
+| active browser MediaStream | 前端标签页 | 仅运行时 | `getDisplayMedia()` |
+| connection vision state | 后端 WebSocket 连接 | 仅连接期 | `input:vision:state` |
 
-建议：优先使用现有 chat role 中已经配置、且官方明确支持图片输入的 OpenAI-compatible 模型；若当前模型不支持，再临时选择一个已配置的多模态模型用于验收，不把密钥或真实截图写入文档。
+有效视觉输入条件是 `config.enabled AND connection state enabled AND active/valid image`。POST 不用于创建 MediaStream。
 
-最迟决定：Step 8 真实验收前。
+### D6：`output:chat:error` 覆盖所有 pre-success 终态 generation failure
 
-### D5：`/api/vision/config` 首版是只读还是支持 PUT
+`output:chat:error` 覆盖所有发生在 durable success effects 开始前、会导致本 generation 无法完成的终态错误，包括 `LLMError`、Provider stream failure 和不可恢复的 generation 编排失败。
 
-已经确定前端需要读取配置，但尚未确定是否允许前端持久化修改 `vision_config.yaml`。
-
-选择：
-
-- 只实现 GET；
-- 与 ASR/TTS 一样实现 GET + PUT。
-
-建议：若 D1 不做视觉设置页，首版只实现 GET；若 D1 做设置页，再实现受控 PUT。浏览器当前共享状态无论如何都不能通过 PUT 写入 YAML。
-
-最迟决定：Step 1 配置 route 完成前。
-
-### D6：`output:chat:error` 覆盖哪些 generation 失败
-
-选择：
-
-- 只覆盖明确的 `LLMError`；
-- 覆盖所有发生在成功持久化之前、会导致本 generation 无法完成的终态错误。
-
-建议：采用第二种。这样 `failActiveGeneration()` 保持通用，Provider、流式编排等同类失败不会再次被伪装成 AI 文本。边界必须严格限定在“durable success effects 尚未开始”之前；协议错误、TTS 单段错误和成功后的辅助模块错误不属于该事件。
-
-最迟决定：Step 4 generation failure 实现前。
+它不覆盖本地图片准备失败、JSON/协议校验错误、TTS 单段失败，以及 durable success effects 开始后的辅助错误。事件必须携带 `generation_id`，并遵守 send lock 内“第一个终态获胜”。前端统一调用通用 `failActiveGeneration()`，不得把 action 命名或实现耦合到 `ChatErrorBubble`。
 
 ## 13. 实施就绪结论
 
-除 D1 至 D6 外，首版视觉理解的关键设计已经闭合：
+首版视觉理解的关键设计已经闭合：
 
 - 输入范围闭合；
 - 图片格式与传输闭合；
@@ -1536,4 +1631,4 @@ README 开发路线只在功能验收完成后更新状态。
 - 前端瞬态时间线闭合；
 - Base64 日志与测试约束闭合。
 
-因此可以从 Step 1 开始实施。建议优先确认 D5 和 D6，因为它们分别影响第一个后端步骤的 REST 面和第四个后端步骤的终态错误边界；其余决策可以在对应前端或验收步骤前确定。
+D1 至 D6 均已确认，没有剩余的产品或工程阻塞决策。因此可以从 Step 1 开始实施；实现中如果发现需要改变上述边界，必须先更新设计文档再修改代码。

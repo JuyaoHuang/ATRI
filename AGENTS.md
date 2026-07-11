@@ -4,7 +4,7 @@
 
 ## 项目上下文
 
-- **项目名**: emotion-robot (atri)
+- **项目名**: atri
 - **技术栈**: Python 3.11+ / FastAPI / uv / loguru
 - **Python 环境**: 当前工作目录存在 uv 创建的 `.venv`，执行 Python、测试、格式化、类型检查时优先使用 `uv run ...`
 - **正式设计文档位置**: `docs/`
@@ -28,6 +28,18 @@
   - `developments/wiki/development-blogs/2026-07-08-vad-realtime-interrupt.zh-CN.md` — VAD Wiki 发布稿
   - `developments/wiki/VAD/` — 旧设计、旧计划和原始长日志的过渡来源
 - **实现前必读**: 修改某个模块前，先读 `docs/developments/README.md`，再读对应 `developments/modules/<module>/` 和相关 feature 文档。
+
+---
+
+## 代码上下文工具
+
+在本地代码库中执行开发、调试、审查或重构任务时，默认先使用原生命令获取当前事实，再按任务范围决定是否使用 GitNexus。
+
+- 优先使用 `rg`、`rg --files`、`Get-Content -Encoding UTF8 -LiteralPath`、`git status`、`git diff`、定向测试和类型检查来确认具体的文件级事实。
+- 当任务涉及调用图、依赖发现、影响范围分析、架构梳理、模块边界或大范围跨模块重构时，使用 GitNexus 作为结构化代码地图。
+- GitNexus 只作为地图和候选范围来源，不作为最终事实来源；编辑或下结论前，必须回到当前文件、diff、测试结果和运行时行为验证。
+- 不要对小任务过度索引。如果 `rg` 能快速定位相关文件，就继续使用原生命令推进。
+- 对范围大、风险高或影响面不清楚的任务，先使用 `$choose-code-context-tools` 判断应从原生命令、GitNexus，还是两者结合开始。
 
 ---
 
@@ -188,37 +200,3 @@ module/
 
 在提交 PR 前，启动内置 skill `$omc-code-review`，进行综合代码审查，按严重度分级反馈。
 
-## 实现顺序
-
-1. 在开始实现前，执行 `git checkout -b feat/...` 切换分支，在新分支上开发。分支命名必须对应本次大的功能开发，例如 `feat/tts-streaming`。
-2. 修改某个模块前，先阅读对应设计文档和实施文档；如果实现中发现设计需要调整，先更新设计文档，再改代码。
-3. 将一个大的功能开发拆成多个 step；每个 step 可以再拆成多个 point。
-4. 每完成一个 point 一个 commit，不要把多个不相关的改动混在一起。
-5. commit scope 使用 `branch-name/step N`，例如 `feat(tts-streaming/step 1): add streaming config`。
-6. 每个 point 完成后，按“代码编写后的检查清单”执行当前改动范围内的 basic check，然后提交。
-7. 验收结束后再执行 `git push`，并使用 `gh pr` 提交 PR。
-
-当前文档整理任务按 `docs/文档构建思路.md` 推进。新增或迁移文档时遵守：
-
-```text
-docs/developments/
-├── README.md                         # 开发文档总入口
-├── architecture/                     # 项目级长期架构
-├── api/                              # 稳定接口和协议
-├── modules/<module>/                 # 长期模块设计
-├── features/YYYY-MM-feature-slug/    # feature 过程文档
-├── wiki/                             # GitHub Wiki 预发布稿
-├── decisions/                        # ADR 技术决策记录
-├── templates/                        # 文档模板
-└── archive/                          # 历史归档
-```
-
-整理规则：
-
-1. 用户教程和配置步骤继续留在 `docs/configs/`。
-2. 长期有效的模块边界沉淀到 `docs/developments/modules/<module>/`。
-3. 某次 feature 的设计、实施计划、开发日志和验收放入 `docs/developments/features/YYYY-MM-feature-slug/`。
-4. 准备发布到 GitHub Wiki 的文章放入 `docs/developments/wiki/`。
-5. 原始长日志、旧草稿和会话备份不要直接删除；需要迁移时先保留旧入口或放入 `archive/`。
-6. 旧 `docs/developments/wiki/TTS/` 和 `docs/developments/wiki/VAD/` 作为过渡来源保留；新增长期设计不要继续写入这些旧目录。
-7. TTS 分段流式化已完成第一版，后续以 `docs/developments/modules/tts/streaming-design.zh-CN.md` 作为长期设计依据。

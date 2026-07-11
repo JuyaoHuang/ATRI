@@ -54,6 +54,10 @@ related_code:
 13. 错误事件必须携带 `generation_id`，并与 VAD interrupt 使用同一套 generation 失效和迟到结果丢弃规则。
 14. 通用协议错误与 generation 失败事件分离，避免无关错误误终止当前聊天。
 15. 首版不使用二进制 WebSocket 帧、不建立通用 TurnAssembler，也不自动把失败的多模态请求重试为纯文本请求。
+16. 视觉控制分为后端持久化模块开关和浏览器当前页运行时开关；只有两者都开启且图片有效时才附带图片。
+17. 后端通过 `GET /api/vision/config` 读取配置，通过幂等的 `PUT /api/vision/config` 只更新 `enabled`；浏览器 MediaStream 不写入 YAML。
+18. 首版不在聊天框、toast 或其他 UI 中展示本轮附带的截图或本地截图失败；本地失败静默降级为纯文本。
+19. 前端在本 feature 中正式引入 Vitest，覆盖视觉状态、截图、提交门、generation 竞态和瞬态历史语义；真实屏幕共享权限仍通过 Chrome/Edge 手工验收。
 
 ## 3. 背景与当前问题
 
@@ -81,6 +85,8 @@ ATRI 目前已经有三种最终文本输入来源：
 ### 4.1 功能目标
 
 - 用户可以显式开启和关闭屏幕共享视觉流。
+- 用户可以在“设置 -> 机体模块 -> 视觉功能”持久化启用或禁用视觉模块。
+- 视觉模块启用后，用户可以在主页 VAD 按钮右侧独立开启或关闭当前浏览器的屏幕共享流。
 - 视觉流开启后，键盘文本和普通 ASR 文本发送前自动截取当前屏幕的一帧。
 - VAD + ASR 得到最终文本后，后端请求浏览器截取当前屏幕的一帧。
 - 截图成功时，文本和图片作为同一轮输入交给 LLM。
@@ -229,9 +235,10 @@ InputInform
 - Canvas 缩放和 JPEG 编码；
 - 在发送前执行大小检查；
 - 响应后端的 VAD 截图请求；
-- 在用户停止共享或页面卸载时释放 tracks。
+- 监听浏览器原生停止共享产生的 video track `ended`；
+- 在用户主动停止共享、模块被禁用、track `ended`、页面卸载或运行时显式销毁时释放 tracks。
 
-MediaStream 可以由专用 service/composable 持有，但 Base64 帧不得存入 Pinia、localStorage、IndexedDB、OPFS 或 Vue devtools 可持久状态。
+MediaStream 必须由跨路由存活的单例 `visionSessionController`（或等价 service）持有，不能由设置页或主页按钮组件拥有。组件卸载和从设置页导航回主页都不得停止 tracks。Base64 帧不得存入 Pinia、localStorage、IndexedDB、OPFS 或 Vue devtools 可持久状态。
 
 ### 8.2 前端 Vision Store
 
@@ -289,7 +296,39 @@ Provider 负责：
 
 ## 9. 屏幕共享生命周期
 
-### 9.1 开启
+### 9.1 双层控制与状态优先级
+
+视觉功能有两个语义不同的控制面：
+
+1. `/settings/modules/vision` 的模块开关持久化到 `vision_config.yaml` 的顶层 `enabled` 字段，决定 ATRI 是否允许使用视觉能力；
+2. 主页 `VisionInput` 按钮只控制当前浏览器标签页是否持有活动的 `MediaStream`，不写 YAML。
+
+主页按钮放在 `InputBox.vue` 内、`RealtimeVoiceInput` 的右侧，但 `InputBox` 只负责摆放组件和转发用户操作，不持有 MediaStream。默认聊天和 Live2D Stage 模式都必须显示该按钮。
+
+优先级为：
+
+```text
+vision config enabled=false
+  -> VisionInput 不可用
+  -> 若 MediaStream 正在运行，立即停止全部 tracks
+  -> input:vision:state(enabled=false)
+
+vision config enabled=true
+  -> VisionInput 可用但默认未开启
+  -> 用户点击后才请求屏幕共享权限
+```
+
+后端实际接受图片输入还必须同时满足：
+
+```text
+vision_config.yaml.enabled
+AND current WebSocket connection vision state enabled
+AND current image is active and valid
+```
+
+这三个状态不能合并：YAML 是持久化模块能力，MediaStream 是浏览器标签页运行时资源，`input:vision:state` 是单条 WebSocket 连接的临时投影。
+
+### 9.2 开启
 
 开启屏幕共享必须由用户点击视觉控制按钮触发：
 
@@ -309,20 +348,25 @@ navigator.mediaDevices.getDisplayMedia({
 - 当前帧尺寸大于零；
 - track 未结束、未静音失效。
 
-### 9.2 关闭
+### 9.3 关闭
 
 以下情况必须关闭视觉流并停止所有 tracks：
 
 - 用户点击关闭；
+- 设置页把模块开关改为关闭；
 - 浏览器共享指示器中点击停止共享；
 - video track 触发 `ended`；
 - 页面卸载；
 - 视觉运行时显式销毁。
 
-关闭后立即同步 `input:vision:state(enabled=false)`，后续输入走纯文本路径。
+关闭后立即同步 `input:vision:state(enabled=false)`，后续输入走纯文本路径。这里的 `enabled=false` 只表示当前 WebSocket 连接没有活动视觉流，不会反向修改 YAML。
 
-### 9.3 刷新与重连
+Chrome/Edge 的“停止共享”按钮属于浏览器原生共享指示器，ATRI 不能改变其样式或位置。用户点击后，`visionSessionController` 必须通过 `MediaStreamTrack.ended` 清理运行时并同步连接状态；`vision_config.yaml.enabled` 保持 `true`，因此主页按钮仍可用于重新开始共享。
 
+### 9.4 路由、刷新与重连
+
+- 设置页和主页之间的路由切换不得停止有效 MediaStream；
+- `vision.vue`、`VisionInput.vue` 或 `InputBox.vue` 的组件卸载不得停止 tracks；
 - 页面刷新后视觉流默认为关闭；
 - 不持久化“已授权”假象；
 - WebSocket 重连时，若当前 MediaStream 仍然有效，则重新同步当前状态；
@@ -741,14 +785,20 @@ image=None
   -> 若纯文本 LLM 调用成功，正常归档和提交 Memory
 ```
 
-本地失败不产生 `output:chat:error`，因为聊天仍可继续。
+本地失败不产生 `output:chat:error`，因为聊天仍可继续。首版采用完全静默降级：不显示 toast、`ChatErrorBubble`、截图预览、缩略图、附件标记或图片元数据，也不向用户暗示本轮附带了哪张图片。
 
-### 16.2 远端 LLM 失败
+### 16.2 远端与 generation 编排终态失败
 
-任何 Provider `LLMError` 都结束本 generation：
+任何发生在 durable success effects 开始之前、导致本 generation 无法完成的终态错误都结束该 generation，包括：
+
+- `LLMError`；
+- Provider 流式请求失败；
+- 成功持久化前不可恢复的 generation 编排失败。
+
+统一行为为：
 
 ```text
-LLMError
+pre-success terminal generation failure
   -> 不再生成 AI 文本 chunk
   -> 中断并丢弃该 generation 的 TTS
   -> 发送 output:chat:error
@@ -759,6 +809,8 @@ LLMError
   -> 不更新 recent_messages / total_rounds
   -> 不触发压缩或长期记忆
 ```
+
+本规则不覆盖本地图片准备失败、JSON/协议校验错误、TTS 单段失败，以及成功持久化或其他 durable success effects 已经开始后的辅助错误。它们必须继续走各自的降级或错误路径。
 
 如果错误前已经发送过部分 chunk：
 
@@ -1071,28 +1123,30 @@ Provider SDK 异常可能回显请求体，因此：
 config/vision_config.yaml
 ```
 
-建议结构：
+`vision_config.yaml` 文件本身不包裹 `vision:`，现有配置加载器负责把它映射为运行时 `config["vision"]`。文件结构为：
 
 ```yaml
-vision:
-  enabled: false
-  source: screen
-  capture:
-    media_type: image/jpeg
-    jpeg_quality: 0.82
-    max_long_edge: 1920
-    max_decoded_bytes: 4194304
-    timeout_ms: 1500
-  provider:
-    detail: auto
-  transport:
-    websocket_max_message_bytes: 8388608
+enabled: false
+source: screen
+capture:
+  media_type: image/jpeg
+  jpeg_quality: 0.82
+  max_long_edge: 1920
+  max_decoded_bytes: 4194304
+  timeout_ms: 1500
+provider:
+  detail: auto
+transport:
+  websocket_max_message_bytes: 8388608
 ```
 
 配置职责：
 
 - YAML 定义模块能力和限制；
-- REST 配置接口向前端提供必要值；
+- 后端提供 `GET /api/vision/config`，向前端返回视觉运行需要的完整安全配置；
+- 后端提供幂等的 `PUT /api/vision/config`，请求体首版只允许 `{ "enabled": boolean }`；
+- 更新接口使用显式 allowlist `VISION_CONFIG_WRITE_FIELDS = {"enabled"}`，尝试写入其他字段时返回 HTTP 400；
+- REST API 由后端拥有，前端只实现调用该 API 的 client wrapper；
 - 前端运行时的“当前是否正在共享”不写回 YAML；
 - 敏感信息不进入该配置。
 
@@ -1124,29 +1178,17 @@ vision:
 
 ### 24.1 Base64 JSON 与二进制 WebSocket
 
-选择 Base64 JSON，因为：
-
-- 与当前单一 JSON 文本帧协议兼容；
-- 不需要设计二进制帧和文本元数据的配对协议；
-- 首版每轮只有一张图，复杂度收益不足。
+选择 Base64 JSON
 
 代价是约 33% 体积膨胀，因此必须限制图片尺寸并禁止日志输出。
 
 ### 24.2 LLM 多模态与独立 OCR
 
-选择直接交给多模态 LLM，因为：
-
-- 需求是通用画面理解，不只是文字识别；
-- 避免新增 OCR 部署、配置和数据融合链路；
-- 当前 LLM Provider 已经使用可承载图片的兼容协议。
+选择直接交给多模态 LLM
 
 ### 24.3 截图按轮触发与持续视觉分析
 
-选择按轮截图，因为：
-
-- 用户明确要求在输入文本发送时携带当前画面；
-- 降低隐私风险、带宽和 LLM 成本；
-- 保持聊天仍由用户输入驱动。
+选择按轮截图
 
 ### 24.4 VisionCaptureCoordinator 与 TurnAssembler
 
@@ -1164,13 +1206,71 @@ vision:
 - 防止错误进入 TTS、Live2D、ChatStorage 和 Memory；
 - 刷新后自然由归档重建并消失。
 
+### 24.6 持久化模块开关与浏览器运行时开关
+
+选择“设置页模块开关 + 主页运行时按钮”的双层控制，不选择只提供其中一个入口：
+
+- `/settings/modules/vision` 的唯一开关持久化 `vision_config.yaml.enabled`，语义与 ASR、TTS 等模块开关一致；
+- 主页新增独立 `VisionInput.vue`，放在 VAD 的 `RealtimeVoiceInput` 右侧，负责当前标签页的 MediaStream 启停；
+- 设置开关关闭时，主页按钮不可用，并强制停止已有流；
+- 设置开关开启时，主页按钮可用但不会自动请求权限；
+- 默认聊天与 Live2D Stage 均提供相同运行时入口。
+
+拒绝用设置页开关直接创建 MediaStream，因为 `getDisplayMedia()` 必须由当前浏览器上下文中的明确用户手势触发，且权限和流都不能由后端 YAML 表示。也拒绝只提供主页按钮，因为这会失去模块级持久化禁用能力。
+
+### 24.7 单例 MediaStream 所有权与路由组件所有权
+
+选择跨路由存活的 `visionSessionController` 持有 MediaStream，不让 `vision.vue`、`VisionInput.vue` 或 `InputBox.vue` 直接拥有流：
+
+- 用户可以先在设置页启用模块，再导航到主页开始共享；
+- 已开始的共享不会因为主页内部组件切换或路由卸载而意外停止；
+- tracks 只在显式停止、模块禁用、浏览器原生停止、track `ended`、页面卸载或运行时显式销毁时释放。
+
+### 24.8 Vitest 与真实浏览器验收
+
+选择在本 feature 中引入 Vitest，而不是仅依赖 type-check、build 和手工测试。Vitest 用于覆盖 vision store、`visionSessionController`、截图缩放/压缩、`VisionInput` 状态、submission gate、VAD capture generation 关联、`failActiveGeneration()`、stale generation、瞬态历史重载和 Base64 不进入 Pinia。
+
+Vitest 不替代真实 Chrome/Edge 验收；`getDisplayMedia()` 权限选择器、浏览器原生“停止共享”和 track `ended` 仍必须在真实浏览器中验证。
+
+### 24.9 首版图片可见性与本地失败反馈
+
+选择沿用 Open-LLM-VTuber 的首版交互：图片只作为当前请求的不可见附件，不在聊天时间线中增加截图预览、缩略图、附件徽标、图片消息或元数据。本地截图、编码、校验和超时失败完全静默并降级为恰好一次纯文本发送，不显示 toast 或 `ChatErrorBubble`。
+
+拒绝首版显示图片或失败提示，是为了不把图片审计 UI、图片生命周期和 VAD 高频提示限流扩入本次核心能力。远端 generation 失败仍按既定规则显示瞬态 `ChatErrorBubble`，两类失败不能混用。
+
+### 24.10 GET + PUT 配置资源
+
+选择后端拥有的 `GET /api/vision/config` 与 `PUT /api/vision/config`，不选择 GET-only 或 POST：
+
+- GET 读取前端运行视觉能力所需的完整安全配置；
+- PUT 幂等更新现有单例配置资源，首版显式只允许写入 `enabled`；
+- POST 不用于创建 MediaStream，因为只有浏览器可以创建当前标签页的共享流；
+- 连接运行时状态继续通过 `input:vision:state` 同步，不通过 REST 持久化。
+
+### 24.11 通用 pre-success generation failure
+
+选择让 `output:chat:error` 覆盖所有 durable success effects 开始前的终态 generation 失败，而不是只覆盖 `LLMError`。这使 `failActiveGeneration()` 保持面向 generation 生命周期，而不是与特定 Provider 异常或 UI 组件耦合。
+
+边界严格排除本地图片失败、通用协议错误、TTS 单段失败和成功持久化后的辅助错误。所有纳入该事件的失败都必须携带 `generation_id`，并遵守 send lock 内“第一个终态获胜”的规则。
+
+### 24.12 SiliconFlow 真实模型验收
+
+选择继续使用现有 `provider: siliconflow`。日常配置由用户维护；当前 `deepseek-ai/DeepSeek-V4-Flash` 不支持视觉理解，真实视觉验收时只临时把 chat role 模型改为 `Pro/moonshotai/Kimi-K2.6`。
+
+该修改只作为本地验收 override，不改变 provider、base URL、API key、`compress_light` 或 `title_gen`，也不作为默认配置提交，除非用户另行确认。
+
 ## 25. 验收标准
 
 ### 25.1 屏幕流
 
+- [ ] 设置页模块开关只持久化 `vision_config.yaml.enabled`。
+- [ ] 模块关闭时主页 `VisionInput` 不可用，且已有 MediaStream 被停止。
+- [ ] 模块开启时主页 `VisionInput` 可用但默认不自动请求共享权限。
+- [ ] `VisionInput` 在默认聊天和 Live2D Stage 中均位于 VAD 按钮右侧。
 - [ ] 用户必须通过明确操作开启屏幕共享。
 - [ ] 视觉流关闭时现有纯文本链路不变。
-- [ ] 用户停止浏览器共享后前端立即进入 disabled 状态。
+- [ ] 用户通过浏览器原生按钮停止共享后，前端立即清理运行时并同步连接状态；持久化模块开关保持开启。
+- [ ] 设置页和主页之间的路由切换、相关组件卸载不会停止有效共享流。
 - [ ] 页面刷新后不自动恢复屏幕共享。
 
 ### 25.2 输入链路
@@ -1187,6 +1287,8 @@ vision:
 - [ ] 截图、编码、超限、校验和超时失败均降级纯文本。
 - [ ] 降级时 InputText 恰好发送一次。
 - [ ] 图片校验失败不会把合法文本请求整体拒绝。
+- [ ] 首版本地图片失败不显示 toast 或 ChatErrorBubble。
+- [ ] 首版不显示截图预览、缩略图、附件徽标或图片元数据。
 
 ### 25.4 Memory 与持久化
 
@@ -1200,6 +1302,8 @@ vision:
 
 - [ ] `ChatAgent` 不再 yield 错误 sentinel。
 - [ ] `LLMError` 不调用 `append_system_note()`。
+- [ ] Provider 流失败和成功持久化前的不可恢复 generation 编排失败同样使用 `output:chat:error`。
+- [ ] 本地图片、协议、TTS 单段和 durable success 后错误不误用 `output:chat:error`。
 - [ ] 失败轮次不写 ChatStorage。
 - [ ] 失败轮次不调用 `on_round_complete()`。
 - [ ] 失败轮次不更新 recent、round count、压缩和长期记忆。
@@ -1232,9 +1336,18 @@ vision:
 - [ ] 测试失败 diff 和 snapshot 不展开 Base64。
 - [ ] WebSocket 和应用层均有大小限制。
 
+### 25.9 配置 API 与前端测试
+
+- [ ] `GET /api/vision/config` 返回完整安全配置。
+- [ ] `PUT /api/vision/config` 幂等且只允许更新 `enabled`。
+- [ ] PUT 尝试修改其他字段时返回 HTTP 400，MediaStream 状态从不写入 YAML。
+- [ ] 前端已建立 Vitest，并覆盖视觉运行时、提交门、generation failure 和瞬态历史核心路径。
+- [ ] Chrome/Edge 真实浏览器中的授权、取消和原生停止共享均通过手工验收。
+- [ ] SiliconFlow + `Pro/moonshotai/Kimi-K2.6` 的本地多模态验收通过，且模型 override 未作为默认配置提交。
+
 ## 26. 文档落地后的同步要求
 
-实现完成后，需要更新以下长期文档：
+实现完成后，需要分配 subagents gpt 5.6-terra high 获取上下文后，更新以下长期文档：
 
 - `docs/developments/modules/agent/chat-agent.zh-CN.md`
   - 删除“LLM 错误进入 memory archive”的旧语义；
