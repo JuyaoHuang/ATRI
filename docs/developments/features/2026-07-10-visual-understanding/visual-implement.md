@@ -13,6 +13,7 @@ related_code:
   - src/agent/chat_agent.py
   - src/llm/interface.py
   - src/llm/providers/openai_compatible.py
+  - src/llm/providers/siliconflow.py
   - src/llm/providers/xiaomi.py
   - src/routes/chat_ws.py
   - frontend/src/stores/chat.ts
@@ -468,9 +469,11 @@ class InputInform:
 - `src/llm/interface.py`
 - `src/llm/factory.py`
 - `src/llm/providers/openai_compatible.py`
+- `src/llm/providers/siliconflow.py`
 - `src/llm/providers/xiaomi.py`
 - `src/service_context.py`
 - `tests/llm/providers/test_openai_compatible.py`
+- `tests/llm/providers/test_siliconflow.py`
 - `tests/llm/providers/test_xiaomi.py`
 - 对应 LLM interface/factory 测试
 
@@ -504,7 +507,8 @@ class InputInform:
    ```
 
 5. system、历史 user、历史 assistant、工具消息和 Memory block 保持原样。
-6. OpenAI-compatible 与 Xiaomi Provider 复用同一个纯函数序列化器，避免两套边界逐步分叉。
+6. OpenAI-compatible 与 Xiaomi Provider 复用同一个纯函数序列化器；
+   SiliconFlow 通过独立 `SiliconFlowLLM` 继承通用序列化能力，并保留覆盖入口。
 7. `vision.provider.detail` 不能散落为硬编码。建议实施方式：
 
    - Provider 构造器接收经过验证的 `image_detail`；
@@ -522,7 +526,7 @@ class InputInform:
 - 原始 messages 深层结构未被修改；
 - data URL 只在 Provider 调用参数中临时生成；
 - `detail` 来自配置；
-- OpenAI-compatible 和 Xiaomi 使用一致结构；
+- OpenAI-compatible、SiliconFlow 和 Xiaomi 使用一致结构；
 - system/tools 参数保持兼容；
 - 标题生成和 Memory LLM 调用不传图片；
 - SDK 失败抛出现有 `LLMError`；
@@ -1217,6 +1221,7 @@ README 开发路线只在功能验收完成后更新状态。
 | `src/llm/multimodal.py` | 新增 | 无副作用的 Provider 序列化 helper |
 | `src/llm/factory.py` | 修改 | chat Provider 的 image detail override |
 | `src/llm/providers/openai_compatible.py` | 修改 | OpenAI 兼容单图请求 |
+| `src/llm/providers/siliconflow.py` | 修改 | SiliconFlow 单图请求与专用扩展边界 |
 | `src/llm/providers/xiaomi.py` | 修改 | Xiaomi 单图请求 |
 | `src/service_context.py` | 修改 | 把视觉 Provider 配置注入 chat role |
 | `src/agent/chat_agent.py` | 修改 | InputInform、文本 Memory 边界、异常传播 |

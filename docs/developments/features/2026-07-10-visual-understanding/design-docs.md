@@ -7,6 +7,7 @@ related_code:
   - src/agent/chat_agent.py
   - src/llm/interface.py
   - src/llm/providers/openai_compatible.py
+  - src/llm/providers/siliconflow.py
   - src/llm/providers/xiaomi.py
   - src/memory/manager.py
   - src/routes/chat_ws.py
@@ -711,7 +712,7 @@ def chat_completion_stream(
 ### 15.3 Provider 支持语义
 
 - ATRI 不预判当前模型是否支持视觉；
-- `OpenAICompatibleLLM` 和 `XiaomiLLM` 负责按其协议提交；
+- `OpenAICompatibleLLM`、`SiliconFlowLLM` 和 `XiaomiLLM` 负责按其协议提交；
 - 模型支持时正常返回；
 - Provider 拒绝请求时抛出现有 `LLMError`；
 - 不新增能力注册表或 Provider 能力字段。

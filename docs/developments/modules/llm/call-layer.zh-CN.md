@@ -2,13 +2,14 @@
 status: active
 owner: llm
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 related_code:
   - src/llm/__init__.py
   - src/llm/interface.py
   - src/llm/factory.py
   - src/llm/exceptions.py
   - src/llm/providers/openai_compatible.py
+  - src/llm/providers/siliconflow.py
   - src/llm/providers/xiaomi.py
   - config/llm_config.yaml
   - src/service_context.py
@@ -171,7 +172,7 @@ chat_main:
 | 注册名 | 实现类 | 说明 |
 | --- | --- | --- |
 | `openai` | `OpenAICompatibleLLM` | 复用 OpenAI 协议路径。 |
-| `siliconflow` | `OpenAICompatibleLLM` | 仍走 OpenAI 兼容实现，只是用独立注册名区分配置分支。 |
+| `siliconflow` | `SiliconFlowLLM` | 独立 Provider，继承通用 OpenAI 兼容实现。 |
 | `openai_compatible` | `OpenAICompatibleLLM` | 通用 OpenAI `/v1/chat/completions` 兼容实现。 |
 | `xiaomi` | `XiaomiLLM` | 小米 MiMo 的兼容实现，单独收口 `request_options`。 |
 
@@ -183,6 +184,18 @@ chat_main:
 - 支持 `model`、`base_url`、`api_key`、`temperature`
 - 当 `system` 存在时，会在消息列表前追加一条 `role=system`
 - 只产出非空 `delta.content`
+
+### `SiliconFlowLLM`
+
+SiliconFlow 使用 OpenAI 兼容协议，但拥有独立的模块、类和
+`@LLMFactory.register("siliconflow")` 注册入口。
+
+当前类继承 `OpenAICompatibleLLM`，因此保持原有构造参数、流式调用和异常映射
+行为。独立类为后续 SiliconFlow 专用请求参数、多模态差异或错误处理提供扩展
+位置，而不把这些差异继续堆入通用 Provider。
+
+SiliconFlow 的 endpoint、model、API key 和 temperature 仍全部来自
+`config/llm_config.yaml`，Provider 不硬编码服务地址或模型。
 
 ### `XiaomiLLM`
 

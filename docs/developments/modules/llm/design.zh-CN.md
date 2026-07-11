@@ -2,7 +2,7 @@
 status: active
 owner: llm
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/LLM调用层设计讨论.md
   - src/llm/interface.py
@@ -15,6 +15,7 @@ related_code:
   - src/llm/factory.py
   - src/llm/exceptions.py
   - src/llm/providers/openai_compatible.py
+  - src/llm/providers/siliconflow.py
   - src/llm/providers/xiaomi.py
   - src/service_context.py
   - src/routes/chats.py
@@ -173,9 +174,10 @@ create_from_role(...)
 
 ## 当前 Provider 现实
 
-当前内置 Provider 实际上只有两种实现类：
+当前内置 Provider 有三种实现类：
 
 - `OpenAICompatibleLLM`
+- `SiliconFlowLLM`
 - `XiaomiLLM`
 
 但注册名有多种：
@@ -188,8 +190,9 @@ create_from_role(...)
 这里的长期约束是：
 
 - “注册名”不等于“实现类数量”；
-- 某些 Provider 名只是为配置与语义隔离而存在；
-- 调用方只看到角色和配置池，不需要知道背后共享同一实现类。
+- SiliconFlow 通过独立类和注册模块建立扩展边界，同时继承通用 OpenAI
+  兼容协议实现；
+- 调用方只看到角色和配置池，不需要知道 Provider 之间的继承与复用关系。
 
 ## 错误所有权
 

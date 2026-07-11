@@ -2,7 +2,7 @@
 status: active
 owner: llm
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 ---
 
 # LLM 模块长期设计
@@ -49,6 +49,7 @@ LLM 模块负责三件事：
 - `src/llm/factory.py`
 - `src/llm/exceptions.py`
 - `src/llm/providers/openai_compatible.py`
+- `src/llm/providers/siliconflow.py`
 - `src/llm/providers/xiaomi.py`
 - `src/service_context.py`
 - `src/routes/chats.py`
