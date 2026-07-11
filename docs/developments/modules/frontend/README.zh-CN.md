@@ -22,7 +22,8 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 - 组织首页、登录页、设置页等路由与页面结构。
 - 渲染聊天、角色选择、聊天历史、Live2D 舞台和设置界面。
 - 通过 REST API 读取角色、聊天、模块配置和数据维护接口。
-- 通过业务 WebSocket `/ws` 消费聊天文本流、ASR/VAD 控制事件和 TTS 音频事件。
+- 通过业务 WebSocket `/ws` 消费聊天文本流、视觉截图握手、ASR/VAD 控制事件和 TTS 音频事件。
+- 管理当前浏览器标签页的屏幕共享运行时，并按轮次提供短生命周期截图。
 - 管理浏览器本地偏好，例如背景、发送快捷键、Live2D 舞台参数和部分设备选择。
 
 前端不负责：
@@ -37,7 +38,7 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 | --- | --- |
 | [design.zh-CN.md](design.zh-CN.md) | Frontend 模块总设计，串起首页双态、状态分层、传输面设计、WebSocket session 和设置页边界。 |
 | [state-management.zh-CN.md](state-management.zh-CN.md) | 前端 store 拓扑、WebSocket 会话层、聊天运行时状态机和本地持久化边界。 |
-| [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md) | 文本聊天、单次语音输入、实时语音、WebSocket 事件消费和自动 TTS 播放的运行时设计。 |
+| [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md) | 文本聊天、单次/实时语音、屏幕视觉、generation failure 和自动 TTS 的运行时设计。 |
 | [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md) | 首页双态布局、Live2D 舞台、设置系统、路由守卫和本地偏好持久化边界。 |
 
 ## 前后端边界
@@ -49,6 +50,7 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 | 角色 | 角色列表、表单、导入导出 UI | Persona 文件、头像托管、`/api/characters` |
 | Live2D | 舞台渲染、位置参数、OPFS 缓存、表情请求 | 模型上传、模型元数据、静态资源托管 |
 | ASR/TTS | 设置页、浏览器采集、音频播放、自动发送体验 | Provider 配置、模块开关、转写/合成、VAD 与 TTS 事件 |
+| Vision | 设置页投影、屏幕共享、截图与瞬态错误 UI | 模块配置、图片校验、VAD 截图协调、LLM 多模态调用 |
 | 数据维护 | 删除确认、清理入口、结果提示 | 聊天文件删除、短期记忆清理、长期记忆删除提交 |
 
 ## 设计原则
@@ -58,6 +60,7 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
 3. 文本流、音频流和 VAD 控制共用一条业务 WebSocket，但各自生命周期独立。
 4. `generation_id` 是自动 TTS 与实时打断的失效边界，前端必须据此丢弃旧结果。
 5. 首页布局可以切换为 Live2D 舞台模式，但不能改变聊天、记忆和认证协议。
+6. MediaStream、图片 Base64 和 generation notice 都是运行时数据，不进入前端持久化。
 
 ## 阅读路径
 
@@ -73,6 +76,7 @@ ATRI 前端是后端 FastAPI 服务之上的单页应用，负责：
    - [../../modules/storage/README.zh-CN.md](../../modules/storage/README.zh-CN.md)
    - [../../modules/memory/README.zh-CN.md](../../modules/memory/README.zh-CN.md)
    - [../../modules/tts/README.zh-CN.md](../../modules/tts/README.zh-CN.md)
+   - [../../modules/vision/README.zh-CN.md](../../modules/vision/README.zh-CN.md)
    - [../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md](../../features/2026-06-vad-realtime-interrupt/README.zh-CN.md)
 
 ## 收录规则

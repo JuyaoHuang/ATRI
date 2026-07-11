@@ -246,7 +246,7 @@ The backend uses a **layered modular architecture**, with clear responsibilities
 **Design Features**:
 - **Dual interface**: `chat()` streaming generator + `chat_collect()` default collecting implementation
 - **Automatic memory**: After stream ends, automatically calls `mgr.on_round_complete(raw_user, reply)`
-- **Error handling**: `LLMError` -> `append_system_note` writes `role=system` lines to chat_history, does not count rounds, does not trigger L3
+- **Error handling**: `LLMError` propagates to the route orchestrator; a pre-success WebSocket generation sends transient `output:chat:error` and does not enter chat history or Memory
 
 **Detailed Design**: `D:\Coding\GitHub_Resuorse\emotion-robot\docs\后端设计.md` Section 2.5
 
@@ -517,7 +517,7 @@ ChatAgent (Phase 4 composition layer)
           |
           +-- chat_history.append_human(cleaned.content, raw_input=raw_input?)
           +-- chat_history.append_ai(reply)
-          |     (error rounds S4 use append_system_note instead of append_ai)
+          |     (failed generations bypass this success pipeline entirely)
           |
           +-- recent_messages += [{human: cleaned}, {ai: reply}]
           |

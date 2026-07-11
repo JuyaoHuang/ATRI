@@ -2,7 +2,7 @@
 status: active
 owner: agent
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - src/agent/persona.py
   - src/agent/chat_agent.py
@@ -14,6 +14,7 @@ related_code:
   - src/service_context.py
   - src/routes/chat_ws.py
   - src/routes/chats.py
+  - src/vision/models.py
 ---
 
 # Agent 模块总设计
@@ -85,33 +86,36 @@ related_code:
 当前成功路径稳定顺序是：
 
 ```text
-user_input
-  -> memory_manager.build_llm_context(...)
-  -> llm.chat_completion_stream(...)
+InputInform(input_text, image?)
+  -> input_text -> memory_manager.build_llm_context(...)
+  -> messages + image? -> llm.chat_completion_stream(...)
   -> collect reply chunks
-  -> memory_manager.on_round_complete(...)
+  -> input_text + reply -> memory_manager.on_round_complete(...)
 ```
 
 长期约束：
 
 - Agent 自己不清洗用户输入；
-- `user_input` 原样传给 `MemoryManager`；
+- `input_text.content` 原样传给 `MemoryManager`；
+- 可选图片只传给 LLM 调用边界；
 - L1 清洗在记忆模块内部发生；
 - `Persona.system_prompt` 通过 `build_llm_context()` 注入，而不是再额外给 LLM 传第二份 system。
 
 ## 错误路径边界
 
-`ChatAgent` 当前对 `LLMError` 的稳定处理是：
+`ChatAgent` 当前对 `LLMError` 的稳定处理是保持异常控制流：
 
-- 把失败作为错误哨兵 chunk 传回调用方；
-- 调 `memory_manager.append_system_note()` 写入 archive；
+- 不生成错误哨兵 chunk；
+- 不调用 `memory_manager.append_system_note()`；
 - 不调用 `on_round_complete()`；
-- 因此失败轮次不计入正常记忆轮次。
+- 把异常传播给路由编排层。
 
 这和 VAD interrupt 的半截回复路径不同：
 
 - VAD partial reply 可能可见、可审计；
-- LLM 调用失败只写 system note，不算有效轮次。
+- LLM 调用失败由路由发送瞬态 `output:chat:error`，不进入 archive 或有效轮次。
+
+如果模型以成功响应自然生成拒绝视觉等文本，它仍是普通成功轮次。只有 Provider/SDK 异常才进入 generation failure。
 
 ## `ServiceContext` 的位置
 

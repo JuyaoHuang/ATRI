@@ -2,7 +2,7 @@
 status: active
 owner: memory
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/记忆系统设计讨论.md
   - src/memory/manager.py
@@ -126,6 +126,29 @@ related_code:
 - L1 清洗只在 `on_round_complete()` 之后影响落盘与后续轮次；
 - 这样能保留当前轮次最鲜活的表达细节。
 
+### 视觉附件边界
+
+视觉输入不会成为上下文组装的第 7 段，也不会追加到最终 user 文本。
+
+当前职责划分是：
+
+```text
+InputInform
+├── input_text.content -> MemoryManager.build_llm_context()
+└── image              -> LLMInterface(input_image=...)
+```
+
+`ChatAgent` 只把 `InputInform.input_text.content` 传入 `MemoryManager`。可选图片绕过：
+
+- 长期记忆检索 query；
+- `recent_messages`；
+- memory archive；
+- L1/L3/L4 压缩；
+- `on_round_complete()`；
+- mem0 长期事实写入。
+
+Provider 只在调用 LLM 前，把图片附加到最终的当前 user message。MemoryManager 返回的 `messages` 仍是纯文本结构。
+
 ## 长期检索策略
 
 长期记忆并不是每轮必查。`search_long_term()` 内部会先走：
@@ -180,6 +203,8 @@ related_code:
 - 对当前 `user_input` 先做 L1 再发给 LLM；
 - 在这里调用 LLM 本身；
 - 把翻译结果或 TTS 播放状态混入聊天上下文。
+- 保存、摘要、OCR 或持久化本轮图片。
+- 把图片 Base64、data URL 或元数据拼进 `user_input`。
 
 ## 与旧设计稿的对齐和差异
 
@@ -200,3 +225,4 @@ related_code:
 - [design.zh-CN.md](design.zh-CN.md)
 - [short-term-memory.zh-CN.md](short-term-memory.zh-CN.md)
 - [long-term-memory.zh-CN.md](long-term-memory.zh-CN.md)
+- [Vision 模块长期设计](../vision/README.zh-CN.md)

@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/前端设计文档.md
   - ../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md
@@ -17,7 +17,9 @@ related_code:
   - frontend/src/stores/settings.ts
   - frontend/src/stores/asr.ts
   - frontend/src/stores/tts.ts
+  - frontend/src/stores/vision.ts
   - frontend/src/utils/websocketSessionController.ts
+  - frontend/src/utils/visionSessionController.ts
   - frontend/src/composables/useWebSocket.ts
   - frontend/src/composables/useChat.ts
 ---
@@ -36,9 +38,9 @@ related_code:
 
 | 类别 | 典型 store / 对象 | 真相来源 |
 | --- | --- | --- |
-| 业务投影 | `chat` `chats` `characters` `user` `asr` `tts` | 后端 REST / WebSocket |
+| 业务投影 | `chat` `chats` `characters` `user` `asr` `tts` `vision.config` | 后端 REST / WebSocket |
 | 浏览器偏好 | `live2d` `settings` `user.settings` 局部字段 | `localStorage` / OPFS |
-| 运行时会话 | `websocketSessionController`、`chat.activeStream` | 页面生命周期内的内存状态 |
+| 运行时会话 | `websocketSessionController`、`visionSessionController`、`chat.activeStream` | 页面生命周期内的内存状态 |
 
 长期原则：
 
@@ -54,7 +56,7 @@ related_code:
 
 - `currentChatId`
 - `currentCharacterId`
-- `messages`
+- `timelineItems`
 - `streamingText`
 - `activeStream`
 - `pendingInterruptedStream`
@@ -63,8 +65,10 @@ related_code:
 
 它有两个关键特点：
 
-1. `messages` 只表示当前打开聊天的消息视图，不是聊天列表总仓库。
-2. `activeStream` 是“当前等待或正在接收的 AI generation”，不是网络连接状态。
+1. `timelineItems` 只表示当前打开聊天的运行时时间线，不是聊天列表总仓库。
+2. `messages` getter 只过滤 `kind=message`，供只接受正常消息的消费者使用。
+3. `kind=notice` 表示当前页面瞬态提示，不是 ChatStorage 消息。
+4. `activeStream` 是“当前等待或正在接收的 AI generation”，不是网络连接状态；pending 阶段还保存短生命周期 `requestId`，用于精确恢复被后端拒绝的输入。
 
 ### `chats` store
 
@@ -153,6 +157,19 @@ related_code:
 
 它们不自己定义后端模块真相。
 
+### `vision` store 与 controller
+
+视觉状态刻意拆成两层：
+
+| 层 | 保存内容 | 禁止保存 |
+| --- | --- | --- |
+| `vision` Pinia store | 后端安全配置投影、`loaded/loading/saving/error`、轻量运行时状态 | `MediaStream`、video、Canvas、Blob、图片字节、Base64、data URL |
+| `visionSessionController` | 当前标签页的 `MediaStream`、video track、隐藏 video、启动 Future | 后端持久化配置 |
+
+`vision.config.enabled` 来自后端 `GET /api/vision/config`，设置页通过 PUT 更新。`runtimeStatus` 只是 controller 的 UI 投影，不能写回 YAML，也不会跨刷新恢复。
+
+controller 是跨路由单例。设置页、`VisionInput` 或 `InputBox` 卸载不得停止有效 tracks；只有显式停止、模块禁用、track `ended` 或页面销毁才释放资源。
+
 ## WebSocket 会话层
 
 近期前端重构后，WebSocket 有一个清晰的三层结构：
@@ -169,26 +186,31 @@ related_code:
 2. `wsStore.connected` 不能再作为发送阻塞条件。
 3. 文本和实时音频发送都必须走 `useWebSocket().send*()`。
 4. 事件协议分发只保留一处默认处理器。
+5. 图片 payload 只作为 `sendText()` 或 `sendVisionCaptureResult()` 的局部参数存在，不进入事件总线的长期状态。
 
 ## 聊天发送状态机
 
 `useChat.sendMessage()` 和 `chat/chats` 两个 store 共同维护当前聊天发送状态机：
 
 ```text
-no current chat
+reserveSubmission()
+  -> no current chat
   -> insertDraftChat()
   -> createChat(defer_title=true)
   -> replaceDraftChat()
+  -> captureForSubmission()
   -> beginStreaming()
   -> sendText()
   -> pending deferred title poll
 ```
 
-这里有三个长期边界：
+这里有五个长期边界：
 
 1. 草稿聊天是前端 UI 过渡态，不是后端资源。
 2. `beginStreaming()` 发生在 `sendText()` 前，用来先建立本地等待态。
 3. deferred title 轮询只在 `sendText()` 成功后启动，避免前端自造假 pending 状态。
+4. `submissionPending` 从截图开始前持续到发送完成，防止同一段文本在截图等待期间重复提交。
+5. 截图 unavailable、编码失败或完整图片 JSON 帧超限时，只把同一段文本发送一次，不显示本地错误气泡。
 
 ## 流式回复状态机
 
@@ -208,9 +230,22 @@ no current chat
 - `chat:complete` 只能收口匹配中的 stream；
 - `chat:interrupted` 可以把半截消息落地，但不能错绑到新聊天或新角色。
 
+`output:chat:error` 使用同一 generation 关联规则进入 `failActiveGeneration()`：
+
+- 必须匹配 `chatId + characterId + generationId`；
+- 第一条完整关联事件可以给尚未绑定 ID 的 active stream 绑定 generation；
+- stale failure 返回 `ignored`，不得终止更新的 generation；
+- 当前聊天可见时追加 `kind=notice` 的错误气泡；
+- 当前聊天不可见时只结束匹配的运行时，不插入 notice；
+- failure 会清空 partial streaming text，并要求音频层丢弃同 generation 音频。
+
+顶层协议 `error` 不会调用 `failActiveGeneration()`。它始终更新 `websocket.error`；只有携带完整 `chat_id + character_id + request_id` 且匹配本地 pending stream 时，才调用 `rejectPendingSubmission()` 清理这一次被明确拒绝的输入。stale request、无 request 的通用协议错误和已经 streaming 的 generation 都保持不变。
+
+当 `control:interrupt.preserve_chat_generation=true` 时，音频层仍执行 VAD 停播，但 `markActiveStreamInterrupted()` 返回 `ignored`。这表示后端已经认领 durable commit，前端必须保留文本 stream 等待 complete。
+
 ## 运行时丢弃规则
 
-当前前端有三类“宁可丢弃也不串上下文”的保护：
+当前前端有四类“宁可丢弃也不串上下文”的保护：
 
 1. WebSocket 会话层：
    - `sessionEpoch` 用来丢弃 stale manager 事件。
@@ -218,8 +253,10 @@ no current chat
    - `chatId + characterId + generationId` 共同决定消息是否还能落地。
 3. 音频层：
    - `generation_id + sequence` 决定音频段是否还能入队。
+4. 视觉层：
+   - `generation_id` 决定 VAD 截图结果是否还能解析；未知或迟到结果直接丢弃。
 
-这三层缺一不可。只保留其中一层，会出现：
+这四层缺一不可。只保留其中一层，会出现：
 
 - 旧连接事件写回新页面；
 - 旧聊天 chunk 混入新聊天；
@@ -248,6 +285,8 @@ no current chat
 - 短期记忆或长期记忆
 - Provider 密钥
 - 后端模块完整配置镜像
+- 视觉截图、Base64、data URL、MediaStream 或“已授权”状态
+- generation failure notice
 
 ## 初始化顺序
 
@@ -258,6 +297,7 @@ no current chat
 3. 首页同时拉角色列表和 Live2D 模型列表。
 4. `useWebSocket()` 默认 handler 在首次使用时注册一次。
 5. 各组件只消费 facade，不重复创建连接。
+6. `VisionInput` 首次挂载时确保视觉配置已加载，但不会自动调用 `getDisplayMedia()`。
 
 这条顺序的意义是：
 
@@ -274,6 +314,8 @@ no current chat
 3. 任何发送逻辑都不能再读 `wsStore.connected` 做 authority 判断。
 4. 若新增 WebSocket 业务事件，先补 `types/websocket.ts`，再经 controller 分发。
 5. 若新增聊天运行时状态，优先落到 `chat` store，而不是散在多个 composable 的局部 ref。
+6. 浏览器原生对象若需要跨路由存活，应由单例 controller 持有，不得塞入 Pinia。
+7. 图片等大字段只能短生命周期传递，不得为了调试进入 store、console 或持久化插件。
 
 ## 相关文档
 
@@ -281,3 +323,4 @@ no current chat
 - [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md)
 - [stage-and-settings.zh-CN.md](stage-and-settings.zh-CN.md)
 - [../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md](../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md)
+- [Vision 模块长期设计](../vision/README.zh-CN.md)

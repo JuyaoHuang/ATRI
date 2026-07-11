@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/前端设计文档.md
   - ../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md
@@ -23,7 +23,7 @@ related_code:
 
 1. 前端在整个系统中的角色。
 2. 首页、设置页、WebSocket 和本地偏好为什么这样划分。
-3. 近期 WebSocket session 重构对整体前端设计意味着什么。
+3. WebSocket session 与屏幕视觉单例如何承担跨组件运行时。
 
 ## 模块定位
 
@@ -50,7 +50,7 @@ REST + WebSocket protocol
 
 1. 后端拥有业务真相，前端只保存浏览器偏好和运行时态。
 2. 首页支持普通聊天模式和 Live2D 舞台模式，但不改变业务协议。
-3. 文本聊天、实时语音和自动 TTS 共享同一套 generation 生命周期。
+3. 文本聊天、屏幕视觉、实时语音和自动 TTS 共享同一套 generation 生命周期。
 4. WebSocket 连接状态、发送 authority 和 UI 投影必须分层。
 5. 设置页只暴露稳定 API 或明确归属的本地偏好。
 
@@ -78,6 +78,7 @@ REST + WebSocket protocol
 - 当前聊天
 - WebSocket 连接
 - 音频播放器
+- 跨路由 `visionSessionController`
 
 长期约束：
 
@@ -95,6 +96,7 @@ REST + WebSocket protocol
    - `live2d` `settings` `user.settings`
 3. 运行时临时态
    - WebSocket session controller
+   - Vision session controller 与 MediaStream
    - `activeStream`
    - 音频队列
 
@@ -120,6 +122,7 @@ WebSocket 负责：
 - VAD 控制事件
 - ASR transcript 事件
 - TTS 分段音频事件
+- 屏幕共享状态、截图请求/结果和 generation failure
 
 这两条面长期共存，前端不会试图把一切都折叠到 WebSocket，也不会为了流式聊天放弃 REST。
 

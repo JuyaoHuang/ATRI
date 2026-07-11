@@ -2,7 +2,7 @@
 status: active
 owner: routes
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/后端设计.md
   - ../../module-design/CN/后端API接口文档.md
@@ -20,6 +20,7 @@ related_code:
   - src/routes/chat_ws.py
   - src/routes/asr.py
   - src/routes/tts.py
+  - src/routes/vision.py
   - src/routes/data.py
   - src/routes/live2d.py
 ---
@@ -75,9 +76,10 @@ client
 | `chats.py` | HTTP | 聊天标题 CRUD、标题生成、消息详情读取。 |
 | `asr.py` | HTTP | ASR 配置、Provider、上传转录。 |
 | `tts.py` | HTTP | TTS 配置、Provider、声音列表、完整音频合成。 |
+| `vision.py` | HTTP | 视觉安全配置读取与 `enabled` 白名单写入。 |
 | `data.py` | HTTP | 短期记忆清理、长期记忆删除提交。 |
 | `live2d.py` | HTTP | Live2D 模型 CRUD 与表达列表。 |
-| `chat_ws.py` | WebSocket | 实时聊天、VAD 打断、ASR handoff、TTS segment 下发。 |
+| `chat_ws.py` | WebSocket | 实时聊天、视觉截图协调、VAD 打断、ASR handoff、TTS segment 下发。 |
 
 ## 应用工厂与 app state
 
@@ -91,6 +93,7 @@ client
 | `asr_service` | `ASRService` |
 | `tts_service` | `TTSService` |
 | `vad_service` | `VADService` |
+| `vision_service` | `VisionService` |
 | `auth_service` | `AuthService` |
 | `character_storage` | `CharacterStorage` |
 | `live2d_storage` | `Live2DStorage` |
@@ -126,7 +129,11 @@ client
 - 聊天 generation 跟踪；
 - VAD 连接态；
 - ASR transcript 自动接管；
-- TTS 分段音频事件下发。
+- TTS 分段音频事件下发；
+- 连接级视觉共享状态与 generation-keyed 截图 Future；
+- 应用层 WebSocket 文本帧大小限制；
+- generation complete、failure 与 interrupt 的终态竞争；
+- generation durable-commit 认领与 VAD 重复归档防护。
 
 它的长期定位是：
 
@@ -197,9 +204,47 @@ create_from_role("title_gen", llm_config)
 WebSocket 路径则使用：
 
 - `error`
+- `output:chat:error`
 - `control:listen-state(state=error)`
 
-来表达失败，而不是关闭连接。
+来表达不同层级的失败，而不是关闭连接：
+
+- `error`：协议校验、未知类型、聊天归属等非 generation 终态错误；
+- `output:chat:error`：已经关联到 `chat_id + character_id + generation_id` 的 pre-success 生成失败；
+- `control:listen-state(state=error)`：VAD/ASR 监听链路错误。
+
+`output:chat:error` 只能携带固定安全文案。Provider 原始错误、完整请求参数和图片 payload 不得跨越路由边界。
+
+新客户端的 `input:text.request_id` 只服务于“generation 建立前的请求拒绝”。顶层 `error` 可以回显 `chat_id + character_id + request_id`；前端据此只清理匹配且仍为 pending 的 submission。它不能替代 `generation_id`，也不能让通用协议错误终止正在 streaming 的 generation。
+
+## 视觉路由与 WebSocket 协作
+
+视觉能力同时经过 HTTP 与 WebSocket：
+
+```text
+PUT /api/vision/config
+  -> 持久化 vision.enabled
+
+input:vision:state
+  -> 更新当前连接是否持有活动屏幕共享
+
+input:text.image
+  -> 直接文本/普通 ASR 的可选单图
+
+control:vision:capture-request
+  <-> input:vision:capture-result
+  -> VAD + ASR 的 generation 截图握手
+```
+
+`WebSocketVisionState` 只属于单连接。它不能覆盖后端持久化开关；后端实际接受图片必须同时满足模块开启与连接状态开启。
+
+截图 Future 必须在发送 capture request 前注册。等待发生在后台 generation task，不阻塞主 receive loop。timeout、断开、模块关闭、VAD interrupt 和迟到结果都要清理 pending Future。
+
+直接 `input:text.image` 和 VAD capture result 都进入同一个有界校验函数。无效图片只被丢弃，合法文本继续处理。
+
+LLM stream 正常耗尽后，路由先在 send lock 内把 active generation 标记为 `committing`，再进入 Storage/Memory durable effects。此后 speech_start 仍停止音频，但不得取消聊天任务或再次持久化 interrupted round；控制事件携带 `preserve_chat_generation=true`，正常 complete 负责最终收口。Storage/Memory 均为 best effort，complete 不是严格 durability ACK。
+
+若下一轮 speech_end 在旧 generation 提交期间到达，路由最多等待 5 秒。超时后保留旧 commit task，发送 `chat_commit_busy` listen-state error，并且不调用 ASR、不创建新 generation；随后立即返回 receive loop，避免单个持久化 await 无限阻塞整条连接。
 
 ## 生命周期管理
 
@@ -213,6 +258,8 @@ WebSocket 路径则使用：
 
 - `ServiceContext.close_all()` 负责冲刷 Agent 和长期记忆句柄；
 - 路由层不自己管理这些资源的最终关闭。
+
+WebSocket 连接关闭时还会释放连接级 Vision coordinator、取消 pending capture，并清理 VAD/TTS 状态。
 
 这意味着生命周期所有权在 `app.py`，不在具体路由文件里。
 
@@ -266,3 +313,4 @@ WebSocket 路径则使用：
 - [../../api/README.zh-CN.md](../../api/README.zh-CN.md)
 - [../storage/design.zh-CN.md](../storage/design.zh-CN.md)
 - [../agent/design.zh-CN.md](../agent/design.zh-CN.md)
+- [Vision 模块长期设计](../vision/README.zh-CN.md)

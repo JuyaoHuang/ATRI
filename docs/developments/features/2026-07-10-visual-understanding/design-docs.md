@@ -406,14 +406,15 @@ Chrome/Edge 的“停止共享”按钮属于浏览器原生共享指示器，AT
 
 ### 10.3 超限处理
 
-前端在发送前检查 Blob 和 Base64 长度：
+前端在发送前检查 Blob，并在发送边界检查完整 JSON 文本帧的 UTF-8 字节数：
 
 - 首次编码超限时允许进行有界的再次缩放和编码；
 - 不允许无限压缩循环；
-- 仍然超限时放弃图片并走纯文本；
+- 包含图片的完整 `input:text` 超限时，放弃图片并把同一文本发送一次；
+- VAD capture result 超限时，改发不含图片的 `status=failed`；
 - 不把超限 Base64 传给 WebSocket 层。
 
-后端仍必须独立执行同样的安全校验，不能信任浏览器客户端。
+后端仍必须独立执行同样的安全校验，不能信任浏览器客户端。配置校验还必须在理论最大 Base64 长度之外保留 JSON 信封余量；实际帧仍以前端完整序列化结果和后端应用层限制为准。
 
 ## 11. 三种 InputText 链路
 
@@ -494,7 +495,8 @@ VAD 路径中的截图时机是：
 {
   "type": "input:vision:state",
   "data": {
-    "enabled": false
+    "enabled": false,
+    "source": "screen"
   }
 }
 ```
@@ -517,6 +519,7 @@ VAD 路径中的截图时机是：
     "text": "请看看我现在的屏幕",
     "chat_id": "chat_xxx",
     "character_id": "atri",
+    "request_id": "request_xxx",
     "client_context": {},
     "image": {
       "source": "screen",
@@ -531,6 +534,7 @@ VAD 路径中的截图时机是：
 兼容规则：
 
 - 无图片时完全省略 `image`；
+- `request_id` 是新前端生成的短生命周期关联字段；旧客户端可以省略；
 - 旧客户端的纯文本 payload 保持有效；
 - 后端图片校验失败只丢弃图片，不拒绝合法文本；
 - `image.data` 不允许出现在日志和错误响应中。
@@ -855,6 +859,10 @@ pre-success terminal generation failure
 规则是：
 
 > 第一个在 WebSocket send lock 内成功提交的终态获胜，后续终态全部丢弃。
+
+LLM 流正常耗尽后，后端在同一 send lock 内先认领 `committing` 阶段，再开始 ChatStorage 与 Memory 的 durable effects。该认领不是新的前端终态，但会阻止 VAD 把同一 generation 再次归档为 interrupted。此时 VAD 仍立即停止音频，并通过 `preserve_chat_generation=true` 告知前端保留聊天流；正常 durable commit 完成后仍由 `output:chat:complete` 收口。Storage 与 Memory 均为 best effort，complete 表示 generation 成功结束，不是两类介质均写入成功的严格事务确认。
+
+如果新一轮 VAD 语音在旧 generation 的 `committing` 期间结束，`speech_end` 最多等待旧任务 5 秒。旧任务在上限内完成时继续 ASR；超时时不取消旧 commit、不转写或创建新 generation，而是发送 `control:listen-state(state=error, code=chat_commit_busy)` 并返回 WebSocket receive loop。用户可在旧 complete 收口后重新说话，连接不会因卡住的持久化调用而无限失去响应。
 
 ### 17.1 generation-aware 错误发送
 
@@ -1244,6 +1252,7 @@ Vitest 不替代真实 Chrome/Edge 验收；`getDisplayMedia()` 权限选择器�
 
 - GET 读取前端运行视觉能力所需的完整安全配置；
 - PUT 幂等更新现有单例配置资源，首版显式只允许写入 `enabled`；
+- PUT 在进程内串行执行，YAML 采用同目录临时文件原子替换；只有落盘成功后才发布内存配置；
 - POST 不用于创建 MediaStream，因为只有浏览器可以创建当前标签页的共享流；
 - 连接运行时状态继续通过 `input:vision:state` 同步，不通过 REST 持久化。
 
@@ -1258,6 +1267,17 @@ Vitest 不替代真实 Chrome/Edge 验收；`getDisplayMedia()` 权限选择器�
 选择继续使用现有 `provider: siliconflow`。日常配置由用户维护；当前 `deepseek-ai/DeepSeek-V4-Flash` 不支持视觉理解，真实视觉验收时只临时把 chat role 模型改为 `Pro/moonshotai/Kimi-K2.6`。
 
 该修改只作为本地验收 override，不改变 provider、base URL、API key、`compress_light` 或 `title_gen`，也不作为默认配置提交，除非用户另行确认。
+
+### 24.13 综合审查后的协议硬化
+
+综合审查确认并补充以下工程合同：
+
+- `input:text.request_id` 只用于关联“请求尚未进入 generation 就被拒绝”的顶层 `error`；前端只清理匹配且仍为 pending 的 submission，不让通用协议错误终止正在 streaming 的 generation；
+- 图片是否超限以完整 WebSocket JSON 帧为最终判断，不能只检查 JPEG Blob；
+- `committing` generation 已经取得 durable success 所有权，VAD 可以停音频，但不能取消任务或重复写 interrupted round；
+- `committing` handoff 最多等待 5 秒；超时保留旧 commit task、拒绝本次 ASR，并把控制权归还 WebSocket receive loop；
+- `visionSessionController` 只有在 live track 与非零视频帧尺寸同时成立时才发布 `active`；
+- OpenAI-compatible 与 Xiaomi Provider 的项目异常使用固定安全文本，不保存可能回显 data URL 的 SDK 原始异常字符串或 cause/context。
 
 ## 25. 验收标准
 

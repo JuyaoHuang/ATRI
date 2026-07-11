@@ -161,6 +161,7 @@ InputInform
 协议按以下方式保持向后兼容：
 
 - `input:text.image` 是可选字段；
+- `input:text.request_id` 是可选字段，只用于新前端关联 pre-generation rejection；
 - 未发送 `input:vision:state` 的旧客户端默认处于视觉关闭状态；
 - 视觉关闭时，后端继续使用原有字符串 user content；
 - 新增 `output:chat:error`，同时保留顶层 `error` 处理通用协议错误；
@@ -226,6 +227,7 @@ class InputInform:
     "text": "请告诉我当前屏幕显示了什么",
     "chat_id": "chat_xxx",
     "character_id": "atri",
+    "request_id": "request_xxx",
     "client_context": {},
     "image": {
       "source": "screen",
@@ -698,6 +700,10 @@ release send_lock
 
 #### F. pre-success generation failure 与持久化
 
+LLM stream 正常耗尽后，必须先在 send lock 内把 active generation 原子标记为 `committing`，再开始 ChatStorage 与 Memory 写入。`committing` 已经认领 durable success：VAD speech_start 仍中断音频，但不得取消该聊天任务或重复持久化 interrupted round；`control:interrupt` 使用 `preserve_chat_generation=true` 让前端保留流式状态，随后由正常 complete 收口。ChatStorage 与 Memory 均为 best effort，`output:chat:complete` 只确认 generation 成功结束，不是二者均成功落盘的事务 ACK。
+
+若新一轮 `speech_end` 到达时旧 generation 仍在 `committing`，后端最多等待 5 秒。上限内完成则继续 ASR；超时则发送 `control:listen-state` 的 `chat_commit_busy` 错误，不取消旧 commit task、不调用 ASR、不创建新 generation，并立即返回 WebSocket receive loop。该语音段由用户在旧 generation 收口后重试，不能用无限等待占住唯一消息接收循环。
+
 所有发生在 durable success effects 开始之前、导致本 generation 无法完成的终态错误都走同一个 generation failure 分支，包括 `LLMError`、Provider 流式失败，以及成功持久化前不可恢复的 generation 编排失败。统一行为为：
 
 - 丢弃已累积的 partial reply；
@@ -729,6 +735,8 @@ Provider 返回 HTTP 200 且正常生成自然语言拒绝时，仍走 success �
 - 未知 message type；
 - 缺少必填协议字段；
 - 与 generation 调用无关的连接级错误。
+
+新前端为每个 `input:text` 附带短生命周期 `request_id`。后端在明确拒绝该输入时通过顶层 `error` 原样返回；前端只清理 `chatId + characterId + requestId` 匹配且仍为 pending 的 submission。已经 streaming 的 generation 和不相关顶层错误不得被该路径终止。
 
 它不得无条件清理前端 active generation。前端事件映射必须与 `output:chat:error` 分开。
 
@@ -1276,6 +1284,18 @@ model: Pro/moonshotai/Kimi-K2.6
 
 README 开发路线只在功能验收完成后更新状态。
 
+### 综合审查硬化项
+
+综合审查必须使用可控 Event/Future 覆盖 durable persistence 窗口，而不只检查 sender 函数。合并前还需验证：
+
+1. `committing` 期间的 VAD interrupt 不重复写 human/AI 或 Memory；
+2. 完整图片 JSON 帧超限时，键盘/普通 ASR 降级为一次文本，VAD 回传 `failed`；
+3. 顶层 input rejection 只通过 `request_id` 清理匹配的 pending submission；
+4. Vision PUT 写失败不发布内存值，并发 PUT 不同时写 YAML；
+5. Provider 映射异常不保留可能含 data URL 的 SDK 原始文本；
+6. controller 只有在共享视频帧尺寸有效时进入 active。
+7. `committing` handoff 超时后旧 task 不被取消，本次 speech-end 不调用 ASR，receive loop 能继续处理消息。
+
 ### PR 前
 
 1. 检查后端和前端工作区；
@@ -1599,6 +1619,8 @@ PUT /api/vision/config
 ```
 
 前端只提供 API client wrapper。GET 返回完整安全配置；PUT 幂等更新现有单例资源，首版通过 `VISION_CONFIG_WRITE_FIELDS = {"enabled"}` 只允许 `{ "enabled": boolean }`，其他字段写入返回 HTTP 400。
+
+PUT 的实现必须串行化同一进程内的并发更新，并以同目录临时文件 + 原子 replace 落盘。只有写入成功后才能发布新的内存配置和成功响应；写入失败时，磁盘与内存都保留最后确认值。
 
 三个状态层必须保持独立：
 
