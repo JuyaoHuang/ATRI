@@ -67,6 +67,7 @@ from src.vision import (
 
 _TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
 _CHAT_GENERATION_FAILURE_MESSAGE = "本轮回复生成失败，请稍后重试。"
+_CHAT_COMMIT_WAIT_TIMEOUT_MS = 5_000
 
 
 @dataclass(frozen=True)
@@ -1729,23 +1730,40 @@ async def _handle_text_input(
         await vad_state.interrupt_tts_generation(generation_id)
 
 
-async def _wait_for_committing_generation(vad_state: WebSocketVADState) -> None:
-    """Let an already claimed durable commit finish before the next ASR turn."""
+async def _wait_for_committing_generation(
+    vad_state: WebSocketVADState,
+    *,
+    timeout_ms: int = _CHAT_COMMIT_WAIT_TIMEOUT_MS,
+) -> bool:
+    """Wait a bounded time for an already claimed durable commit."""
 
     task = vad_state.current_chat_task
     if task is None or task.done() or not vad_state.is_generation_committing():
-        return
+        return True
+    generation_id = vad_state.current_generation_id
     try:
-        await asyncio.shield(task)
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=timeout_ms / 1000,
+        )
+        return True
+    except TimeoutError:
+        logger.warning(
+            "Timed out waiting for committing generation | generation_id={} | timeout_ms={}",
+            generation_id,
+            timeout_ms,
+        )
+        return False
     except asyncio.CancelledError:
         if task.cancelled():
-            return
+            return True
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Committing chat task ended unexpectedly before next ASR turn | error_type={}",
             type(exc).__name__,
         )
+        return True
 
 
 async def _handle_audio_chunk(
@@ -1870,7 +1888,17 @@ async def _handle_audio_chunk(
             )
             await _send_chat_interrupted(websocket, interrupted_snapshot)
     if event.type is VADEventType.SPEECH_END and speech_audio is not None:
-        await _wait_for_committing_generation(vad_state)
+        commit_ready = await _wait_for_committing_generation(vad_state)
+        if not commit_ready:
+            await _send_listen_error(
+                websocket,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                code="chat_commit_busy",
+                message="Previous chat turn is still committing.",
+                seq=data.get("seq"),
+            )
+            return
         asr_result = await _handle_speech_end_asr(
             websocket,
             asr_service,

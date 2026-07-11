@@ -36,6 +36,7 @@ from src.routes.chat_ws import (
     _send_speech_start_interrupt_unlocked,
     _start_asr_chat_task,
     _start_tracked_chat_task,
+    _wait_for_committing_generation,
 )
 from src.vad import VADConfigStore, VADService
 from src.vad.exceptions import VADProviderUnavailableError
@@ -992,6 +993,57 @@ async def test_audio_speech_end_calls_asr_and_clears_buffer(tmp_path) -> None:
     assert websocket.messages[-1]["type"] == "output:asr:transcript"
     assert websocket.messages[-1]["data"]["text"] == "你好"
     assert websocket.messages[-1]["data"]["generation_id"]
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_end_reports_busy_when_previous_generation_is_committing(
+    tmp_path,
+) -> None:
+    vad_service = VADService(
+        VADConfigStore(
+            _vad_enabled_config({})["vad"],
+            path=tmp_path / "vad_config.yaml",
+        )
+    )
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+    asr_service = AsyncMock()
+    asr_service.transcribe_audio = AsyncMock(return_value={"provider": "fake", "text": "不应转录"})
+
+    with patch(
+        "src.routes.chat_ws._wait_for_committing_generation",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as wait_for_commit:
+        for seq, audio in ((1, [0.8]), (2, [0.9]), (3, [0.0]), (4, [0.0])):
+            await _handle_audio_chunk(
+                websocket,
+                {
+                    "data": {
+                        "chat_id": "test_chat_123",
+                        "character_id": "atri",
+                        "audio": audio,
+                        "seq": seq,
+                    }
+                },
+                vad_service,
+                vad_state,
+                asr_service,
+            )
+
+    wait_for_commit.assert_awaited_once_with(vad_state)
+    asr_service.transcribe_audio.assert_not_awaited()
+    assert websocket.messages[-1] == {
+        "type": "control:listen-state",
+        "data": {
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "state": "error",
+            "code": "chat_commit_busy",
+            "message": "Previous chat turn is still committing.",
+            "seq": 4,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -2232,6 +2284,34 @@ async def test_durable_commit_wins_interrupt_without_duplicate_persistence(
         "output:chat:complete",
     ]
     assert vad_state.current_generation_id is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_committing_generation_times_out_without_cancelling_task() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_commit() -> None:
+        started.set()
+        await release.wait()
+
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-blocked-commit"
+    vad_state.activate_generation(generation_id)
+    assert vad_state.begin_generation_commit(generation_id) is True
+    task = asyncio.create_task(blocked_commit())
+    vad_state.current_chat_task = task
+    await started.wait()
+
+    try:
+        completed = await _wait_for_committing_generation(vad_state, timeout_ms=1)
+
+        assert completed is False
+        assert task.done() is False
+        assert task.cancelled() is False
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.mark.asyncio
