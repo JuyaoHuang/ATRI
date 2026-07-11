@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import yaml
@@ -170,6 +171,7 @@ class VisionConfigStore:
         path: Path | None = None,
     ) -> None:
         self.path = path or DEFAULT_VISION_CONFIG_PATH
+        self._lock = RLock()
         raw_config = self._read_raw_config()
         source_config = raw_config if raw_config is not None else {}
         merged = _deep_merge(DEFAULT_VISION_CONFIG, source_config)
@@ -180,19 +182,26 @@ class VisionConfigStore:
     def read(self) -> dict[str, Any]:
         """Return a defensive copy of the current configuration."""
 
-        return deepcopy(self._config)
+        with self._lock:
+            return deepcopy(self._config)
 
     def update_enabled(self, enabled: bool, *, persist: bool = True) -> dict[str, Any]:
         """Update only the persistent module availability switch."""
 
         _strict_bool(enabled, "vision.enabled")
-        if persist:
-            self._refresh_from_disk()
-        updated = _deep_merge(self._config, {"enabled": enabled})
-        self._config = validate_vision_config(updated)
-        if persist:
-            patch_yaml_values(self.path, {"enabled": enabled})
-        return self.read()
+        with self._lock:
+            source_config = self._config
+            if persist:
+                raw_config = self._read_raw_config()
+                if raw_config is not None:
+                    source_config = validate_vision_config(
+                        _deep_merge(DEFAULT_VISION_CONFIG, raw_config)
+                    )
+            updated = validate_vision_config(_deep_merge(source_config, {"enabled": enabled}))
+            if persist:
+                patch_yaml_values(self.path, {"enabled": enabled})
+            self._config = updated
+            return deepcopy(updated)
 
     def _read_raw_config(self) -> dict[str, Any] | None:
         if not self.path.is_file():
@@ -201,9 +210,3 @@ class VisionConfigStore:
         if not isinstance(raw, dict):
             raise VisionConfigError("Vision config file must contain a mapping")
         return raw
-
-    def _refresh_from_disk(self) -> None:
-        raw_config = self._read_raw_config()
-        if raw_config is None:
-            return
-        self._config = validate_vision_config(_deep_merge(DEFAULT_VISION_CONFIG, raw_config))

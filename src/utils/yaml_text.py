@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -47,8 +49,25 @@ def _detect_newline(text: str) -> str:
 
 
 def _write_text(path: Path, text: str) -> None:
-    with path.open("w", encoding="utf-8", newline="") as file:
-        file.write(text)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _apply_mapping_patch(

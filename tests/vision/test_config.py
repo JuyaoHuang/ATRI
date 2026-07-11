@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 
@@ -111,6 +114,61 @@ def test_update_enabled_preserves_yaml_layout_and_external_values(tmp_path: Path
     assert "enabled: true # writable" in text
     assert "  max_long_edge: 1600" in text
     assert store.read()["capture"]["max_long_edge"] == 1600
+
+
+def test_update_enabled_write_failure_keeps_last_confirmed_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "vision_config.yaml"
+    path.write_text("enabled: false\n", encoding="utf-8")
+    store = VisionConfigStore(path=path)
+
+    def fail_write(_path: Path, _patch: object) -> None:
+        raise OSError("read only")
+
+    monkeypatch.setattr("src.vision.config.patch_yaml_values", fail_write)
+
+    with pytest.raises(OSError, match="read only"):
+        store.update_enabled(True)
+
+    assert store.read()["enabled"] is False
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["enabled"] is False
+
+
+def test_concurrent_enabled_updates_are_serialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.vision import config as vision_config_module
+
+    path = tmp_path / "vision_config.yaml"
+    store = VisionConfigStore(path=path)
+    original_patch = vision_config_module.patch_yaml_values
+    counter_lock = threading.Lock()
+    active_writers = 0
+    maximum_active_writers = 0
+
+    def delayed_patch(target: Path, patch: object) -> None:
+        nonlocal active_writers, maximum_active_writers
+        with counter_lock:
+            active_writers += 1
+            maximum_active_writers = max(maximum_active_writers, active_writers)
+        try:
+            time.sleep(0.02)
+            original_patch(target, patch)
+        finally:
+            with counter_lock:
+                active_writers -= 1
+
+    monkeypatch.setattr(vision_config_module, "patch_yaml_values", delayed_patch)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(store.update_enabled, [True, False]))
+
+    assert {result["enabled"] for result in results} == {True, False}
+    assert maximum_active_writers == 1
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["enabled"] is store.read()["enabled"]
 
 
 @pytest.mark.asyncio
