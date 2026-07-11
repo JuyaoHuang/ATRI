@@ -28,6 +28,7 @@ from src.routes.chat_ws import (
 )
 from src.vad import VADConfigStore, VADService
 from src.vad.exceptions import VADProviderUnavailableError
+from src.vision import InputInform
 
 _TEST_VAD_CONFIG_PATH = Path(__file__).with_name("__test_vad_config.yaml")
 
@@ -992,7 +993,12 @@ async def test_audio_speech_end_auto_starts_chat_with_asr_generation(
     assert chunk["data"]["generation_id"] == generation_id
     assert complete["data"]["full_reply"] == "收到"
     assert complete["data"]["generation_id"] == generation_id
-    mock_agent.chat.assert_called_once_with("你好", commit_round=False)
+    mock_agent.chat.assert_called_once()
+    chat_input = mock_agent.chat.call_args.args[0]
+    assert isinstance(chat_input, InputInform)
+    assert chat_input.input_text.content == "你好"
+    assert chat_input.image is None
+    assert mock_agent.chat.call_args.kwargs == {"commit_round": False}
     mock_agent.memory_manager.on_round_complete.assert_awaited_once_with(
         {"role": "human", "content": "你好", "name": "default"},
         {"role": "ai", "content": "收到", "name": "atri"},

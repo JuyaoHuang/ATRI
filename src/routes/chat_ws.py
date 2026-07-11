@@ -37,7 +37,7 @@ import uuid
 import wave
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
@@ -54,6 +54,16 @@ from src.tts.segment_manager import (
 )
 from src.vad import VADEvent, VADEventType, VADService, VADState
 from src.vad.exceptions import VADConfigError, VADProcessingError, VADProviderUnavailableError
+from src.vision import (
+    InputImage,
+    InputInform,
+    InputText,
+    VisionCaptureCoordinator,
+    VisionService,
+    validate_input_image,
+    websocket_message_size_bytes,
+    websocket_message_within_limit,
+)
 
 _TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
 
@@ -68,6 +78,34 @@ class InterruptedGenerationSnapshot:
     user_text: str
     partial_reply: str
     reason: str
+
+
+@dataclass
+class WebSocketVisionState:
+    """Runtime-only screen sharing state for one WebSocket connection."""
+
+    enabled: bool = False
+    source: Literal["screen"] = "screen"
+    capture_coordinator: VisionCaptureCoordinator = field(default_factory=VisionCaptureCoordinator)
+
+    def is_active(self, vision_service: VisionService) -> bool:
+        """Return whether this connection may attach a screen frame."""
+
+        return self.enabled and vision_service.is_enabled()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Update the connection projection and unblock pending turns on stop."""
+
+        self.enabled = enabled
+        if not enabled:
+            for generation_id in self.capture_coordinator.pending_generation_ids:
+                self.capture_coordinator.resolve(generation_id, None)
+
+    def release(self) -> None:
+        """Cancel pending capture waits when the connection is destroyed."""
+
+        self.enabled = False
+        self.capture_coordinator.cancel_all()
 
 
 @dataclass
@@ -317,7 +355,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     vad_service = websocket.app.state.vad_service
     asr_service = websocket.app.state.asr_service
     tts_service = getattr(websocket.app.state, "tts_service", None)
+    vision_service = websocket.app.state.vision_service
     vad_state = WebSocketVADState(session_id=f"ws:{uuid.uuid4().hex}")
+    vision_state = WebSocketVisionState()
 
     try:
         while True:
@@ -325,13 +365,37 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             # 接收客户端消息
             raw_message = await websocket.receive_text()
 
+            vision_config = vision_service.get_config()
+            max_message_bytes = vision_config["transport"]["websocket_max_message_bytes"]
+            if not websocket_message_within_limit(raw_message, max_message_bytes):
+                logger.warning(
+                    "Rejected oversized WebSocket text frame | size_bytes={} | limit_bytes={}",
+                    websocket_message_size_bytes(raw_message),
+                    max_message_bytes,
+                )
+                await _send_error(
+                    websocket,
+                    "WebSocket message exceeds the configured size limit",
+                    chat_id=None,
+                )
+                continue
+
             # Parse JSON
             # 解析 JSON
             try:
                 message = json.loads(raw_message)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON received: {e}")
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Invalid WebSocket JSON | line={} | column={}",
+                    exc.lineno,
+                    exc.colno,
+                )
                 await _send_error(websocket, "Invalid JSON format", chat_id=None)
+                continue
+
+            if not isinstance(message, dict):
+                logger.warning("WebSocket message root must be an object")
+                await _send_error(websocket, "Message must be an object", chat_id=None)
                 continue
 
             # Extract message type
@@ -360,14 +424,31 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         vad_state,
                         generation_id,
                         tts_service=tts_service,
+                        vision_state=vision_state,
+                        vision_service=vision_service,
                     ),
                 )
                 if not started:
                     await _send_error(
                         websocket,
                         "Chat task already running",
-                        chat_id=message.get("data", {}).get("chat_id"),
+                        chat_id=_message_chat_id(message),
                     )
+            elif msg_type == "input:vision:state":
+                await _handle_vision_state(
+                    websocket,
+                    message,
+                    vision_state,
+                    vision_service,
+                )
+            elif msg_type == "input:vision:capture-result":
+                await _handle_vision_capture_result(
+                    websocket,
+                    message,
+                    vad_state,
+                    vision_state,
+                    vision_service,
+                )
             elif msg_type == "input:audio:chunk":
                 await _handle_audio_chunk(
                     websocket,
@@ -379,27 +460,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     storage=storage,
                     user_id=user_id,
                     tts_service=tts_service,
+                    vision_state=vision_state,
+                    vision_service=vision_service,
                 )
             elif msg_type == "input:audio:end":
                 await _handle_audio_end(websocket, message, vad_service, vad_state)
             else:
-                logger.warning(f"Unknown message type: {msg_type}")
+                logger.warning("Unknown WebSocket message type")
                 await _send_error(
                     websocket,
-                    f"Unknown message type: {msg_type}",
-                    chat_id=message.get("data", {}).get("chat_id"),
+                    "Unknown message type",
+                    chat_id=_message_chat_id(message),
                 )
 
     except WebSocketDisconnect:
         logger.info("WebSocket connection closed by client")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+    except Exception as exc:
+        logger.error("WebSocket connection failed | error_type={}", type(exc).__name__)
         try:
             if websocket.client_state == WebSocketState.CONNECTED:
-                await _send_error(websocket, f"Internal server error: {e}", chat_id=None)
+                await _send_error(websocket, "Internal server error", chat_id=None)
         except Exception:
             pass  # Connection already closed
     finally:
+        vision_state.release()
         await vad_state.interrupt_tts_generation()
         vad_state.release()
         vad_service.reset_session(vad_state.session_id)
@@ -415,6 +499,233 @@ async def _handle_ping(websocket: WebSocket) -> None:
                    WebSocket 连接。
     """
     await _send_json(websocket, {"type": "pong"})
+
+
+def _message_chat_id(message: dict[str, Any]) -> str | None:
+    """Extract a safe chat identifier without assuming a valid data object."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    chat_id = data.get("chat_id")
+    return chat_id if isinstance(chat_id, str) and chat_id else None
+
+
+async def _handle_vision_state(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+) -> None:
+    """Project the current browser screen-sharing state onto this connection."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    enabled = data.get("enabled")
+    source = data.get("source")
+    if type(enabled) is not bool:
+        await _send_error(
+            websocket,
+            "Vision state 'enabled' must be a boolean",
+            chat_id=None,
+        )
+        return
+    if source != "screen":
+        await _send_error(
+            websocket,
+            "Vision state 'source' must be 'screen'",
+            chat_id=None,
+        )
+        return
+
+    vision_state.set_enabled(enabled)
+    logger.info(
+        "WebSocket vision state updated | enabled={} | module_enabled={} | source=screen",
+        enabled,
+        vision_service.is_enabled(),
+    )
+
+
+async def _handle_vision_capture_result(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vad_state: WebSocketVADState,
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+) -> None:
+    """Resolve one generation-keyed browser capture without blocking receives."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    generation_id = data.get("generation_id")
+    if not isinstance(generation_id, str) or not generation_id:
+        await _send_error(
+            websocket,
+            "Vision capture result requires 'generation_id'",
+            chat_id=None,
+        )
+        return
+
+    coordinator = vision_state.capture_coordinator
+    if generation_id not in coordinator.pending_generation_ids:
+        logger.debug(
+            "Discarding unknown or stale vision capture result | generation_id={}",
+            generation_id,
+        )
+        return
+    if not vad_state.is_generation_active(generation_id) or not vision_state.is_active(
+        vision_service
+    ):
+        coordinator.resolve(generation_id, None)
+        logger.debug(
+            "Discarding inactive vision capture result | generation_id={}",
+            generation_id,
+        )
+        return
+
+    status = data.get("status")
+    if status in {"unavailable", "failed"}:
+        coordinator.resolve(generation_id, None)
+        logger.debug(
+            "Vision capture unavailable | generation_id={} | status={}",
+            generation_id,
+            status,
+        )
+        return
+    if status != "captured":
+        coordinator.resolve(generation_id, None)
+        await _send_error(
+            websocket,
+            "Vision capture result has invalid 'status'",
+            chat_id=None,
+            generation_id=generation_id,
+        )
+        return
+
+    config = vision_service.get_config()
+    validation = validate_input_image(
+        data.get("image"),
+        max_decoded_bytes=config["capture"]["max_decoded_bytes"],
+    )
+    coordinator.resolve(generation_id, validation.image if validation.is_valid else None)
+    if not validation.is_valid:
+        logger.warning(
+            "Discarded invalid vision capture | generation_id={} | code={} | "
+            "encoded_length={} | decoded_length={}",
+            generation_id,
+            validation.code,
+            validation.encoded_length,
+            validation.decoded_length,
+        )
+
+
+def _validated_message_image(
+    data: dict[str, Any],
+    *,
+    chat_id: str,
+    generation_id: str,
+    vision_state: WebSocketVisionState | None,
+    vision_service: VisionService | None,
+) -> InputImage | None:
+    """Validate an optional direct-submit image only when vision is active."""
+
+    if vision_state is None or vision_service is None or not vision_state.is_active(vision_service):
+        return None
+
+    config = vision_service.get_config()
+    validation = validate_input_image(
+        data.get("image"),
+        max_decoded_bytes=config["capture"]["max_decoded_bytes"],
+    )
+    if validation.is_valid:
+        return validation.image
+    if validation.code != "missing":
+        logger.warning(
+            "Discarded invalid input image | chat_id={} | generation_id={} | code={} | "
+            "encoded_length={} | decoded_length={}",
+            chat_id,
+            generation_id,
+            validation.code,
+            validation.encoded_length,
+            validation.decoded_length,
+        )
+    return None
+
+
+async def _capture_image_for_generation(
+    websocket: WebSocket,
+    vad_state: WebSocketVADState,
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+    *,
+    generation_id: str,
+    chat_id: str,
+    character_id: str,
+) -> InputImage | None:
+    """Request one browser frame for a VAD turn and silently fall back."""
+
+    if not vision_state.is_active(vision_service):
+        return None
+
+    coordinator = vision_state.capture_coordinator
+    try:
+        future = coordinator.register(generation_id)
+    except ValueError:
+        logger.warning(
+            "Vision capture registration failed | generation_id={} | error_type=ValueError",
+            generation_id,
+        )
+        return None
+
+    request = {
+        "type": "control:vision:capture-request",
+        "data": {
+            "generation_id": generation_id,
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "source": "screen",
+        },
+    }
+    try:
+        sent = await _send_generation_event(
+            websocket,
+            vad_state,
+            generation_id,
+            request,
+        )
+    except asyncio.CancelledError:
+        coordinator.cancel(generation_id)
+        raise
+    except Exception as exc:
+        coordinator.cancel(generation_id)
+        logger.warning(
+            "Vision capture request failed | generation_id={} | error_type={}",
+            generation_id,
+            type(exc).__name__,
+        )
+        return None
+
+    if not sent:
+        coordinator.cancel(generation_id)
+        return None
+
+    config = vision_service.get_config()
+    image = await coordinator.wait(
+        generation_id,
+        future,
+        timeout_ms=config["capture"]["timeout_ms"],
+    )
+    if not vad_state.is_generation_active(generation_id):
+        return None
+    if not vision_state.is_active(vision_service):
+        return None
+    return image
 
 
 async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
@@ -434,6 +745,28 @@ def _get_send_lock(websocket: Any) -> Any | None:
 
     websocket_state = getattr(websocket, "state", None)
     return getattr(websocket_state, "send_lock", None)
+
+
+async def _send_generation_event(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+    message: dict[str, Any],
+) -> bool:
+    """Send a non-terminal generation event only while it remains active."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
+
+    async with send_lock:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
 
 
 async def _send_generation_chunk(
@@ -875,6 +1208,9 @@ async def _handle_text_input(
     vad_state: WebSocketVADState,
     generation_id: str,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
+    input_image: InputImage | None = None,
 ) -> None:
     """Handle text input message and stream ChatAgent response.
     处理文本输入消息并流式传输 ChatAgent 响应。
@@ -890,6 +1226,10 @@ async def _handle_text_input(
                  来自 app.state 的 ChatStorage 实例。
     """
     data = message.get("data", {})
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        _discard_generation_if_active(vad_state, generation_id)
+        return
     text = data.get("text")
     chat_id = data.get("chat_id")
     character_id = data.get("character_id")
@@ -899,7 +1239,7 @@ async def _handle_text_input(
 
     # Validate required fields
     # 验证必填字段
-    if not text:
+    if not isinstance(text, str) or not text.strip():
         await _send_error(websocket, "Missing 'text' field", chat_id=chat_id)
         _discard_generation_if_active(vad_state, generation_id)
         return
@@ -950,6 +1290,22 @@ async def _handle_text_input(
         user_text=str(text),
     )
 
+    effective_image = input_image
+    if vision_state is None or vision_service is None or not vision_state.is_active(vision_service):
+        effective_image = None
+    elif effective_image is None:
+        effective_image = _validated_message_image(
+            data,
+            chat_id=str(chat_id),
+            generation_id=generation_id,
+            vision_state=vision_state,
+            vision_service=vision_service,
+        )
+    input_inform = InputInform(
+        input_text=InputText(content=text),
+        image=effective_image,
+    )
+
     # Get or create ChatAgent for this character/user/chat.
     # 获取或创建此 character/user/chat 的 ChatAgent。
     try:
@@ -978,9 +1334,9 @@ async def _handle_text_input(
     chunks = []
     try:
         chat_stream = (
-            agent.chat(text, runtime_context=client_context, commit_round=False)
+            agent.chat(input_inform, runtime_context=client_context, commit_round=False)
             if client_context
-            else agent.chat(text, commit_round=False)
+            else agent.chat(input_inform, commit_round=False)
         )
         async for chunk in chat_stream:
             if not vad_state.is_generation_active(generation_id):
@@ -1149,6 +1505,8 @@ async def _handle_audio_chunk(
     storage: Any | None = None,
     user_id: str | None = None,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
 ) -> None:
     """Handle realtime microphone audio chunks for backend VAD."""
 
@@ -1281,6 +1639,8 @@ async def _handle_audio_chunk(
                 text=asr_result["text"],
                 generation_id=asr_result["generation_id"],
                 tts_service=tts_service,
+                vision_state=vision_state,
+                vision_service=vision_service,
             )
 
 
@@ -1567,6 +1927,8 @@ async def _start_asr_chat_task(
     text: str,
     generation_id: str,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
 ) -> None:
     """Start a backend-owned chat turn from a completed ASR transcript."""
 
@@ -1588,10 +1950,20 @@ async def _start_asr_chat_task(
             "character_id": character_id,
         },
     }
-    started = _start_tracked_chat_task(
-        vad_state,
-        generation_id,
-        _handle_text_input(
+
+    async def run_chat_generation() -> None:
+        image: InputImage | None = None
+        if vision_state is not None and vision_service is not None:
+            image = await _capture_image_for_generation(
+                websocket,
+                vad_state,
+                vision_state,
+                vision_service,
+                generation_id=generation_id,
+                chat_id=chat_id,
+                character_id=character_id,
+            )
+        await _handle_text_input(
             websocket,
             message,
             service_context,
@@ -1600,7 +1972,15 @@ async def _start_asr_chat_task(
             vad_state,
             generation_id,
             tts_service=tts_service,
-        ),
+            vision_state=vision_state,
+            vision_service=vision_service,
+            input_image=image,
+        )
+
+    started = _start_tracked_chat_task(
+        vad_state,
+        generation_id,
+        run_chat_generation(),
     )
     if not started:
         await _send_error(
