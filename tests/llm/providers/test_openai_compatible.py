@@ -218,7 +218,7 @@ async def test_tools_parameter_accepted_but_ignored(patched_client: Any) -> None
 async def test_connection_error_translated(patched_client: Any) -> None:
     patched_client.chat.completions.create = AsyncMock(side_effect=_FakeConnErr("down"))
     llm = OpenAICompatibleLLM(model="m", base_url="u", api_key="k")
-    with pytest.raises(LLMConnectionError, match="down"):
+    with pytest.raises(LLMConnectionError, match="provider connection failed"):
         await _collect(llm.chat_completion_stream(messages=[]))
 
 
@@ -226,7 +226,7 @@ async def test_connection_error_translated(patched_client: Any) -> None:
 async def test_rate_limit_error_translated(patched_client: Any) -> None:
     patched_client.chat.completions.create = AsyncMock(side_effect=_FakeRateLimitErr("slow down"))
     llm = OpenAICompatibleLLM(model="m", base_url="u", api_key="k")
-    with pytest.raises(LLMRateLimitError, match="slow down"):
+    with pytest.raises(LLMRateLimitError, match="provider rate limit exceeded"):
         await _collect(llm.chat_completion_stream(messages=[]))
 
 
@@ -234,13 +234,18 @@ async def test_rate_limit_error_translated(patched_client: Any) -> None:
 async def test_api_error_translated(patched_client: Any) -> None:
     patched_client.chat.completions.create = AsyncMock(side_effect=_FakeAPIErr("bad api"))
     llm = OpenAICompatibleLLM(model="m", base_url="u", api_key="k")
-    with pytest.raises(LLMAPIError, match="bad api"):
+    with pytest.raises(LLMAPIError, match="provider API request failed"):
         await _collect(llm.chat_completion_stream(messages=[]))
 
 
 @pytest.mark.asyncio
 async def test_unknown_error_translated_to_api_error(patched_client: Any) -> None:
-    patched_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("unexpected"))
+    sensitive = "data:image/jpeg;base64,SENSITIVE_IMAGE"
+    patched_client.chat.completions.create = AsyncMock(side_effect=RuntimeError(sensitive))
     llm = OpenAICompatibleLLM(model="m", base_url="u", api_key="k")
-    with pytest.raises(LLMAPIError, match="unexpected"):
+    with pytest.raises(LLMAPIError, match="provider request failed") as raised:
         await _collect(llm.chat_completion_stream(messages=[]))
+
+    assert sensitive not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None

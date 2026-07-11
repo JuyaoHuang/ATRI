@@ -35,6 +35,7 @@ from openai import (
 from src.llm.exceptions import (
     LLMAPIError,
     LLMConnectionError,
+    LLMError,
     LLMRateLimitError,
 )
 from src.llm.factory import LLMFactory
@@ -101,17 +102,21 @@ class OpenAICompatibleLLM(LLMInterface):
         if self.temperature is not None:
             params["temperature"] = self.temperature
 
+        provider_error: LLMError | None = None
         try:
             stream = await self.client.chat.completions.create(**params)
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta
-        except APIConnectionError as exc:
-            raise LLMConnectionError(str(exc)) from exc
-        except RateLimitError as exc:
-            raise LLMRateLimitError(str(exc)) from exc
-        except APIError as exc:
-            raise LLMAPIError(str(exc)) from exc
-        except Exception as exc:
-            raise LLMAPIError(str(exc)) from exc
+        except APIConnectionError:
+            provider_error = LLMConnectionError("LLM provider connection failed")
+        except RateLimitError:
+            provider_error = LLMRateLimitError("LLM provider rate limit exceeded")
+        except APIError:
+            provider_error = LLMAPIError("LLM provider API request failed")
+        except Exception:
+            provider_error = LLMAPIError("LLM provider request failed")
+
+        if provider_error is not None:
+            raise provider_error
