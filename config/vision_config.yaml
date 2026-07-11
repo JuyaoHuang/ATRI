@@ -1,0 +1,22 @@
+# ============================================================
+# ATRI Visual Understanding Configuration
+# ATRI 视觉理解配置
+# ============================================================
+
+# Persistent module availability. The browser MediaStream remains runtime-only.
+# 持久化模块可用开关；浏览器 MediaStream 仍然只属于运行时。
+enabled: false
+source: screen
+
+capture:
+  media_type: image/jpeg
+  jpeg_quality: 0.82
+  max_long_edge: 1920
+  max_decoded_bytes: 4194304
+  timeout_ms: 1500
+
+provider:
+  detail: auto
+
+transport:
+  websocket_max_message_bytes: 8388608
