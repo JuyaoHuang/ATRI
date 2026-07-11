@@ -16,6 +16,7 @@ import pytest
 
 from src.llm.factory import LLMFactory, create_from_role
 from src.llm.interface import LLMInterface
+from src.vision import InputImage
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,8 @@ class _DummyLLM(LLMInterface):
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> AsyncIterator[str]:
         yield ""
 
@@ -194,3 +197,19 @@ def test_create_from_role_does_not_mutate_input_config() -> None:
     config = {"llm_configs": {"p": entry}, "llm_roles": {"chat": "p"}}
     create_from_role("chat", config)
     assert entry == {"provider": "dummy_role_imm", "model": "m"}
+
+
+def test_create_from_role_applies_runtime_overrides_without_mutating_config() -> None:
+    LLMFactory.register("dummy_role_override")(_DummyLLM)
+    entry = {"provider": "dummy_role_override", "model": "m"}
+    config = {"llm_configs": {"p": entry}, "llm_roles": {"chat": "p"}}
+
+    llm = create_from_role(
+        "chat",
+        config,
+        provider_overrides={"image_detail": "high"},
+    )
+
+    assert isinstance(llm, _DummyLLM)
+    assert llm.extra == {"image_detail": "high"}
+    assert entry == {"provider": "dummy_role_override", "model": "m"}

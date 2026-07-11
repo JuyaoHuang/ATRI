@@ -12,6 +12,7 @@ All tests mock ``AsyncOpenAI`` -- no real network calls are made.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,6 +27,7 @@ from src.llm.exceptions import (
 )
 from src.llm.factory import LLMFactory
 from src.llm.providers.openai_compatible import OpenAICompatibleLLM
+from src.vision import InputImage
 
 
 def _chunk(text: str | None) -> SimpleNamespace:
@@ -75,6 +77,15 @@ def patched_client() -> Any:
 
 async def _collect(stream: AsyncIterator[str]) -> list[str]:
     return [chunk async for chunk in stream]
+
+
+def _image() -> InputImage:
+    return InputImage(
+        source="screen",
+        media_type="image/jpeg",
+        encoding="base64",
+        data="c21hbGwtaW1hZ2U=",
+    )
 
 
 def test_factory_registration_binds_openai_compatible() -> None:
@@ -133,6 +144,45 @@ async def test_no_system_prompt_leaves_messages_untouched(
     await _collect(llm.chat_completion_stream(messages=[{"role": "user", "content": "hi"}]))
     call_kwargs = patched_client.chat.completions.create.await_args.kwargs
     assert call_kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_image_multimodalizes_only_current_user_without_mutating_input(
+    patched_client: Any,
+) -> None:
+    patched_client.chat.completions.create = AsyncMock(return_value=_FakeStream([]))
+    llm = OpenAICompatibleLLM(
+        model="m",
+        base_url="u",
+        api_key="k",
+        image_detail="high",
+    )
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "current"},
+    ]
+    before = deepcopy(messages)
+
+    await _collect(llm.chat_completion_stream(messages=messages, input_image=_image()))
+
+    assert messages == before
+    request_messages = patched_client.chat.completions.create.await_args.kwargs["messages"]
+    assert request_messages[:2] == before[:2]
+    content = request_messages[-1]["content"]
+    assert content[0] == {"type": "text", "text": "current"}
+    assert content[1]["image_url"]["detail"] == "high"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_invalid_image_detail_is_rejected_before_client_creation() -> None:
+    with pytest.raises(ValueError, match="detail"):
+        OpenAICompatibleLLM(
+            model="m",
+            base_url="u",
+            api_key="k",
+            image_detail="original",  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.asyncio

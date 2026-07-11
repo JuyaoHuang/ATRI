@@ -6,6 +6,7 @@ All tests mock ``AsyncOpenAI`` -- no real network calls are made.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +21,7 @@ from src.llm.exceptions import (
 )
 from src.llm.factory import LLMFactory
 from src.llm.providers.xiaomi import XiaomiLLM
+from src.vision import InputImage
 
 
 def _chunk(text: str | None) -> SimpleNamespace:
@@ -97,6 +99,15 @@ async def _collect(stream: AsyncIterator[str]) -> list[str]:
     return [chunk async for chunk in stream]
 
 
+def _image() -> InputImage:
+    return InputImage(
+        source="screen",
+        media_type="image/jpeg",
+        encoding="base64",
+        data="c21hbGwtaW1hZ2U=",
+    )
+
+
 def test_factory_registration_binds_xiaomi() -> None:
     assert LLMFactory._registry.get("xiaomi") is XiaomiLLM
 
@@ -138,6 +149,29 @@ async def test_request_options_forwarded_when_present(patched_client: Any) -> No
     assert call_kwargs["presence_penalty"] == 0
     assert call_kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
     assert call_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_image_uses_shared_multimodal_shape_without_mutating_input(
+    patched_client: Any,
+) -> None:
+    patched_client.chat.completions.create = AsyncMock(return_value=_FakeStream([]))
+    llm = XiaomiLLM(
+        model="m",
+        base_url="u",
+        api_key="k",
+        image_detail="high",
+    )
+    messages = [{"role": "user", "content": "describe"}]
+    before = deepcopy(messages)
+
+    await _collect(llm.chat_completion_stream(messages, input_image=_image()))
+
+    assert messages == before
+    content = patched_client.chat.completions.create.await_args.kwargs["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "describe"}
+    assert content[1]["image_url"]["detail"] == "high"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 @pytest.mark.asyncio

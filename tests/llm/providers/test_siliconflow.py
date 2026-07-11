@@ -7,11 +7,23 @@ network calls are made.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.llm.factory import LLMFactory
 from src.llm.providers.openai_compatible import OpenAICompatibleLLM
 from src.llm.providers.siliconflow import SiliconFlowLLM
+from src.vision import InputImage
+
+
+class _EmptyStream:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
 
 
 def test_factory_registration_binds_siliconflow_provider() -> None:
@@ -39,3 +51,39 @@ def test_factory_creates_siliconflow_provider_with_existing_config_shape() -> No
         base_url="https://api.siliconflow.cn/v1",
         api_key="test-key",
     )
+
+
+@pytest.mark.asyncio
+async def test_siliconflow_inherits_multimodal_serialization() -> None:
+    with patch("src.llm.providers.openai_compatible.AsyncOpenAI") as client_cls:
+        client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock(return_value=_EmptyStream()))
+            )
+        )
+        client_cls.return_value = client
+        llm = SiliconFlowLLM(
+            model="vision-model",
+            base_url="https://api.siliconflow.cn/v1",
+            api_key="test-key",
+            image_detail="low",
+        )
+
+        image = InputImage(
+            source="screen",
+            media_type="image/jpeg",
+            encoding="base64",
+            data="c21hbGwtaW1hZ2U=",
+        )
+        _ = [
+            chunk
+            async for chunk in llm.chat_completion_stream(
+                [{"role": "user", "content": "describe"}],
+                input_image=image,
+            )
+        ]
+
+    content = client.chat.completions.create.await_args.kwargs["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "describe"}
+    assert content[1]["image_url"]["detail"] == "low"
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")

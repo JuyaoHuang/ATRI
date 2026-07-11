@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from src.llm.interface import LLMInterface
+from src.vision import InputImage
 
 
 class _FakeLLM(LLMInterface):
@@ -23,16 +24,20 @@ class _FakeLLM(LLMInterface):
         self.seen_system: str | None = None
         self.seen_tools: list[dict[str, Any]] | None = None
         self.seen_messages: list[dict[str, Any]] | None = None
+        self.seen_input_image: InputImage | None = None
 
     async def chat_completion_stream(
         self,
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> AsyncIterator[str]:
         self.seen_messages = messages
         self.seen_system = system
         self.seen_tools = tools
+        self.seen_input_image = input_image
         for chunk in self.chunks:
             yield chunk
 
@@ -59,14 +64,22 @@ async def test_default_chat_completion_handles_empty_stream() -> None:
 @pytest.mark.asyncio
 async def test_optional_params_propagate_to_stream() -> None:
     llm = _FakeLLM(["x"])
+    image = InputImage(
+        source="screen",
+        media_type="image/jpeg",
+        encoding="base64",
+        data="opaque",
+    )
     await llm.chat_completion(
         messages=[{"role": "user", "content": "q"}],
         system="you are a bot",
         tools=[{"name": "t"}],
+        input_image=image,
     )
     assert llm.seen_system == "you are a bot"
     assert llm.seen_tools == [{"name": "t"}]
     assert llm.seen_messages == [{"role": "user", "content": "q"}]
+    assert llm.seen_input_image is image
 
 
 @pytest.mark.asyncio
