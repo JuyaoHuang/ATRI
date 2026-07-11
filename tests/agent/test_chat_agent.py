@@ -31,6 +31,7 @@ from src.llm.exceptions import (
     LLMError,
     LLMRateLimitError,
 )
+from src.vision import InputImage, InputInform, InputText
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -174,6 +175,35 @@ async def test_llm_stream_called_with_build_context_result() -> None:
     # 必须把 build_llm_context 的结果原样转发
     # Must forward build_llm_context's result unchanged.
     assert call_args.args[0] is context
+
+
+@pytest.mark.asyncio
+async def test_multimodal_input_sends_image_only_to_llm_boundary() -> None:
+    context = [{"role": "user", "content": "describe the screen"}]
+    mgr = _make_mgr(context)
+    llm = _make_llm(["ok"])
+    agent = ChatAgent(llm, mgr, _persona())
+    image = InputImage(
+        source="screen",
+        media_type="image/jpeg",
+        encoding="base64",
+        data="opaque-image",
+    )
+    input_inform = InputInform(
+        input_text=InputText("describe the screen"),
+        image=image,
+    )
+
+    [_ async for _ in agent.chat(input_inform)]
+
+    mgr.build_llm_context.assert_awaited_once_with(
+        "describe the screen",
+        system_prompt="You are Atri.",
+    )
+    llm.chat_completion_stream.assert_called_once_with(context, input_image=image)
+    user_msg, _ai_msg = mgr.on_round_complete.await_args.args
+    assert user_msg == {"role": "human", "content": "describe the screen"}
+    assert "opaque-image" not in repr(mgr.build_llm_context.await_args)
 
 
 # ---------------------------------------------------------------------------
@@ -339,12 +369,9 @@ async def test_empty_stream_still_commits_round_with_empty_reply() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Error-path tests (US-AGT-004) -- LLMError from the stream
-# 错误路径测试（US-AGT-004）——流中的 LLMError
+# Error-path tests -- LLMError remains exception control flow
+# 错误路径测试——LLMError 保持异常控制流
 # ---------------------------------------------------------------------------
-
-
-import re  # noqa: E402  -- deliberately local to the error-path section
 
 
 async def _astream_then_raise(chunks_before: list[str], exc: BaseException) -> AsyncIterator[str]:
@@ -377,82 +404,68 @@ def _make_failing_llm(
     "exc_cls",
     [LLMConnectionError, LLMRateLimitError, LLMAPIError],
 )
-async def test_all_llmerror_subclasses_are_caught(exc_cls: type[LLMError]) -> None:
-    """LLMConnectionError / LLMRateLimitError / LLMAPIError all caught via
-    the LLMError base.
-
-    三个 LLMError 子类都能被 LLMError 基类捕获。
-    """
+async def test_all_llmerror_subclasses_propagate(exc_cls: type[LLMError]) -> None:
     exc = exc_cls("boom")
     agent = ChatAgent(_make_failing_llm([], exc), _make_mgr(), _persona())
 
-    received = [c async for c in agent.chat("hi")]
+    with pytest.raises(exc_cls) as raised:
+        [_ async for _ in agent.chat("hi")]
 
-    assert len(received) == 1
-    assert received[0].startswith("[LLM call failed: ")
-    assert exc_cls.__name__ in received[0]
-    agent.memory_manager.append_system_note.assert_called_once_with(received[0])
+    assert raised.value is exc
+    agent.memory_manager.append_system_note.assert_not_called()
     agent.memory_manager.on_round_complete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_immediate_failure_yields_single_error_chunk() -> None:
-    """First __anext__ raising -> chat() yields exactly one (error) chunk.
-
-    第一次 __anext__ 抛错时，chat() 恰好 yield 一个（错误）chunk。
-    """
+async def test_immediate_failure_yields_no_error_text() -> None:
     agent = ChatAgent(
         _make_failing_llm([], LLMConnectionError("network down")),
         _make_mgr(),
         _persona(),
     )
 
-    received = [c async for c in agent.chat("hi")]
+    received: list[str] = []
+    with pytest.raises(LLMConnectionError, match="network down"):
+        async for chunk in agent.chat("hi"):
+            received.append(chunk)
 
-    assert received == ["[LLM call failed: LLMConnectionError: network down]"]
-    agent.memory_manager.append_system_note.assert_called_once_with(received[0])
+    assert received == []
+    agent.memory_manager.append_system_note.assert_not_called()
     agent.memory_manager.on_round_complete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_partial_stream_preserves_yielded_chunks_before_error() -> None:
-    """Stream yields 'hello ' then raises -> caller sees ['hello ', error_text].
-
-    流先 yield 'hello ' 再抛错 -> 调用方收到 ['hello ', error_text]。
-    The already-yielded chunks are NOT re-committed via on_round_complete.
-    已 yield 的 chunks 不会通过 on_round_complete 再次提交。
-    """
+    """Partial chunks stay observable, then the original error propagates."""
     agent = ChatAgent(
         _make_failing_llm(["hello ", "world"], LLMAPIError("backend 500")),
         _make_mgr(),
         _persona(),
     )
 
-    received = [c async for c in agent.chat("hi")]
+    received: list[str] = []
+    with pytest.raises(LLMAPIError, match="backend 500"):
+        async for chunk in agent.chat("hi"):
+            received.append(chunk)
 
-    assert received[:2] == ["hello ", "world"]
-    assert received[2] == "[LLM call failed: LLMAPIError: backend 500]"
-    assert len(received) == 3
-    agent.memory_manager.append_system_note.assert_called_once_with(received[2])
+    assert received == ["hello ", "world"]
+    agent.memory_manager.append_system_note.assert_not_called()
     agent.memory_manager.on_round_complete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_error_text_format_matches_contract_regex() -> None:
-    """error_text matches r'^\\[LLM call failed: LLM[A-Za-z]+Error: .*\\]$'.
-
-    error_text 格式匹配 r'^\\[LLM call failed: LLM[A-Za-z]+Error: .*\\]$'。
-    """
+async def test_original_llm_error_instance_is_not_rewrapped() -> None:
+    error = LLMRateLimitError("429 too many")
     agent = ChatAgent(
-        _make_failing_llm([], LLMRateLimitError("429 too many")),
+        _make_failing_llm([], error),
         _make_mgr(),
         _persona(),
     )
 
-    received = [c async for c in agent.chat("hi")]
+    with pytest.raises(LLMRateLimitError) as raised:
+        [_ async for _ in agent.chat("hi")]
 
-    assert len(received) == 1
-    assert re.match(r"^\[LLM call failed: LLM[A-Za-z]+Error: .*\]$", received[0])
+    assert raised.value is error
 
 
 @pytest.mark.asyncio
@@ -477,22 +490,15 @@ async def test_non_llmerror_exceptions_propagate_not_swallowed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_collect_surfaces_error_sentinel_in_returned_string() -> None:
-    """chat_collect() also returns the error sentinel concatenated to any
-    partial chunks -- delegated via chat(), so the error path is shared.
-
-    chat_collect() 同样会把错误哨兵拼在任何 partial chunks 之后返回——因为
-    它委托给 chat()，错误路径是共用的。
-    """
+async def test_chat_collect_propagates_llm_error() -> None:
     agent = ChatAgent(
         _make_failing_llm(["partial "], LLMAPIError("boom")),
         _make_mgr(),
         _persona(),
     )
 
-    result = await agent.chat_collect("hi")
+    with pytest.raises(LLMAPIError, match="boom"):
+        await agent.chat_collect("hi")
 
-    assert result.startswith("partial ")
-    assert "[LLM call failed: LLMAPIError: boom]" in result
-    agent.memory_manager.append_system_note.assert_called_once()
+    agent.memory_manager.append_system_note.assert_not_called()
     agent.memory_manager.on_round_complete.assert_not_awaited()
