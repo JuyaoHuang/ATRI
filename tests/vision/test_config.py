@@ -10,6 +10,7 @@ import yaml
 
 from src.utils.config_loader import load_config
 from src.vision import DEFAULT_VISION_CONFIG, VisionConfigError, VisionConfigStore, VisionService
+from src.vision.config import MIN_WEBSOCKET_ENVELOPE_HEADROOM_BYTES
 
 
 def _config_with(path: tuple[str, ...], value: object) -> dict[str, object]:
@@ -63,6 +64,18 @@ def test_unknown_config_field_is_rejected(tmp_path: Path) -> None:
     config["unexpected"] = True
 
     with pytest.raises(VisionConfigError, match="unexpected"):
+        VisionConfigStore(config, path=tmp_path / "missing.yaml")
+
+
+def test_websocket_limit_requires_base64_envelope_headroom(tmp_path: Path) -> None:
+    config = deepcopy(DEFAULT_VISION_CONFIG)
+    max_decoded_bytes = config["capture"]["max_decoded_bytes"]
+    max_base64_length = 4 * ((max_decoded_bytes + 2) // 3)
+    config["transport"]["websocket_max_message_bytes"] = (
+        max_base64_length + MIN_WEBSOCKET_ENVELOPE_HEADROOM_BYTES - 1
+    )
+
+    with pytest.raises(VisionConfigError, match="headroom"):
         VisionConfigStore(config, path=tmp_path / "missing.yaml")
 
 

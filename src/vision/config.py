@@ -23,6 +23,7 @@ MAX_LONG_EDGE_LIMIT = 8192
 MAX_DECODED_BYTES_LIMIT = 64 * 1024 * 1024
 MAX_CAPTURE_TIMEOUT_MS = 60_000
 MAX_WEBSOCKET_MESSAGE_BYTES = 128 * 1024 * 1024
+MIN_WEBSOCKET_ENVELOPE_HEADROOM_BYTES = 64 * 1024
 
 DEFAULT_VISION_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -138,9 +139,10 @@ def validate_vision_config(config: Mapping[str, Any]) -> dict[str, Any]:
         maximum=MAX_WEBSOCKET_MESSAGE_BYTES,
     )
     max_base64_length = 4 * ((max_decoded_bytes + 2) // 3)
-    if websocket_max_message_bytes <= max_base64_length:
+    minimum_message_bytes = max_base64_length + MIN_WEBSOCKET_ENVELOPE_HEADROOM_BYTES
+    if websocket_max_message_bytes < minimum_message_bytes:
         raise VisionConfigError(
-            "vision.transport.websocket_max_message_bytes must exceed the maximum Base64 length"
+            "vision.transport.websocket_max_message_bytes must include Base64 and envelope headroom"
         )
 
     return {
