@@ -66,6 +66,7 @@ from src.vision import (
 )
 
 _TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
+_CHAT_GENERATION_FAILURE_MESSAGE = "本轮回复生成失败，请稍后重试。"
 
 
 @dataclass(frozen=True)
@@ -800,20 +801,65 @@ async def _send_generation_complete(
     generation_id: str,
     message: dict[str, Any],
 ) -> bool:
-    """Send a completion only if its generation is still active."""
+    """Atomically send and invalidate a successfully completed generation."""
 
     send_lock = _get_send_lock(websocket)
     if send_lock is None:
         if not vad_state.is_generation_active(generation_id):
             return False
         await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
         return True
 
     async with send_lock:
         if not vad_state.is_generation_active(generation_id):
             return False
         await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
         return True
+
+
+async def _send_generation_failure(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    *,
+    chat_id: str,
+    character_id: str,
+    generation_id: str,
+) -> bool:
+    """Commit one safe pre-success failure if the generation is still active."""
+
+    message = {
+        "type": "output:chat:error",
+        "data": {
+            "message": _CHAT_GENERATION_FAILURE_MESSAGE,
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "generation_id": generation_id,
+        },
+    }
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
+    else:
+        async with send_lock:
+            if not vad_state.is_generation_active(generation_id):
+                return False
+            await websocket.send_json(message)
+            vad_state.invalidate_current_generation()
+
+    try:
+        await vad_state.interrupt_tts_generation(generation_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to clean up TTS after chat failure | generation_id={} | error_type={}",
+            generation_id,
+            type(exc).__name__,
+        )
+    return True
 
 
 async def _send_tts_audio_segment(
@@ -989,7 +1035,7 @@ def _finalize_tracked_chat_task(
     except asyncio.CancelledError:
         logger.debug("Tracked chat task cancelled")
     except Exception as exc:
-        logger.error(f"Tracked chat task failed: {exc}")
+        logger.error("Tracked chat task failed | error_type={}", type(exc).__name__)
 
 
 def _start_tts_finish_task(vad_state: WebSocketVADState, generation_id: str) -> None:
@@ -1290,34 +1336,64 @@ async def _handle_text_input(
         user_text=str(text),
     )
 
-    effective_image = input_image
-    if vision_state is None or vision_service is None or not vision_state.is_active(vision_service):
-        effective_image = None
-    elif effective_image is None:
-        effective_image = _validated_message_image(
-            data,
-            chat_id=str(chat_id),
-            generation_id=generation_id,
-            vision_state=vision_state,
-            vision_service=vision_service,
+    try:
+        effective_image = input_image
+        if (
+            vision_state is None
+            or vision_service is None
+            or not vision_state.is_active(vision_service)
+        ):
+            effective_image = None
+        elif effective_image is None:
+            effective_image = _validated_message_image(
+                data,
+                chat_id=str(chat_id),
+                generation_id=generation_id,
+                vision_state=vision_state,
+                vision_service=vision_service,
+            )
+        input_inform = InputInform(
+            input_text=InputText(content=text),
+            image=effective_image,
         )
-    input_inform = InputInform(
-        input_text=InputText(content=text),
-        image=effective_image,
-    )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Failed to assemble chat input | chat_id={} | character_id={} | "
+            "generation_id={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
+        )
+        await _send_generation_failure(
+            websocket,
+            vad_state,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            generation_id=generation_id,
+        )
+        return
 
     # Get or create ChatAgent for this character/user/chat.
     # 获取或创建此 character/user/chat 的 ChatAgent。
     try:
         agent = service_context.get_or_create_agent(character_id, user_id, chat_id)
-    except Exception as e:
-        logger.error(f"Failed to get ChatAgent: {e}")
-        await _send_error(
-            websocket,
-            f"Failed to initialize character '{character_id}': {e}",
-            chat_id=chat_id,
+    except Exception as exc:
+        logger.error(
+            "Failed to initialize ChatAgent | chat_id={} | character_id={} | "
+            "generation_id={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
         )
-        _discard_generation_if_active(vad_state, generation_id)
+        await _send_generation_failure(
+            websocket,
+            vad_state,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            generation_id=generation_id,
+        )
         return
 
     tts_manager = await _maybe_start_tts_segment_manager(
@@ -1332,6 +1408,7 @@ async def _handle_text_input(
     # Stream ChatAgent response
     # 流式传输 ChatAgent 响应
     chunks = []
+    durable_success_started = False
     try:
         chat_stream = (
             agent.chat(input_inform, runtime_context=client_context, commit_round=False)
@@ -1390,6 +1467,7 @@ async def _handle_text_input(
         # 在发送完成事件之前持久化消息到存储
         # This ensures messages are saved before client closes connection
         # 这确保在客户端关闭连接前消息已保存
+        durable_success_started = True
         try:
             logger.debug(f"Starting message persistence | chat_id={chat_id}")
             await storage.append_message_for_user(user_id, chat_id, "human", text, name=user_id)
@@ -1418,21 +1496,41 @@ async def _handle_text_input(
                 )
                 return
             logger.debug(f"Messages persisted | chat_id={chat_id}")
-        except ValueError as e:
+        except ValueError as exc:
             # Chat not found (client may have deleted it)
             # 聊天不存在（客户端可能已删除）
-            logger.warning(f"Failed to persist messages: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error persisting messages: {e}")
+            logger.warning(
+                "Failed to persist chat messages | chat_id={} | generation_id={} | error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
+        except Exception as exc:
+            logger.error(
+                "Unexpected chat persistence failure | chat_id={} | generation_id={} | "
+                "error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
 
         ai_name = character_id
         persona_name = getattr(getattr(agent, "persona", None), "name", None)
         if isinstance(persona_name, str) and persona_name.strip():
             ai_name = persona_name
-        await agent.memory_manager.on_round_complete(
-            {"role": "human", "content": str(text), "name": user_id},
-            {"role": "ai", "content": full_reply, "name": ai_name},
-        )
+        try:
+            await agent.memory_manager.on_round_complete(
+                {"role": "human", "content": str(text), "name": user_id},
+                {"role": "ai", "content": full_reply, "name": ai_name},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Post-persistence memory commit failed | chat_id={} | generation_id={} | "
+                "error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
         if not vad_state.is_generation_active(generation_id):
             logger.info(
                 "Discarding stale chat completion after memory commit | "
@@ -1465,32 +1563,52 @@ async def _handle_text_input(
                 generation_id,
             )
             return
-        vad_state.complete_generation(generation_id)
         if tts_manager is not None:
             _start_tts_finish_task(vad_state, generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
 
-    except LLMError as e:
-        # LLM error path (already handled by ChatAgent, but catch here for safety)
-        # LLM 错误路径（ChatAgent 已处理，但此处捕获以确保安全）
-        logger.error(f"LLM error during chat: {e}")
-        await _send_error(
-            websocket,
-            f"LLM call failed: {e}",
-            chat_id=chat_id,
-            generation_id=generation_id,
+    except asyncio.CancelledError:
+        raise
+    except LLMError as exc:
+        logger.error(
+            "LLM generation failed | chat_id={} | character_id={} | generation_id={} | "
+            "error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
         )
+        if not durable_success_started:
+            await _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                generation_id=generation_id,
+            )
+            return
         _discard_generation_if_active(vad_state, generation_id)
         await vad_state.interrupt_tts_generation(generation_id)
-    except Exception as e:
-        logger.error(f"Unexpected error during chat: {e}")
-        await _send_error(
-            websocket,
-            f"Chat processing failed: {e}",
-            chat_id=chat_id,
-            generation_id=generation_id,
+    except Exception as exc:
+        logger.error(
+            "Chat generation orchestration failed | chat_id={} | character_id={} | "
+            "generation_id={} | durable_success_started={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            durable_success_started,
+            type(exc).__name__,
         )
+        if not durable_success_started:
+            await _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                generation_id=generation_id,
+            )
+            return
         _discard_generation_if_active(vad_state, generation_id)
         await vad_state.interrupt_tts_generation(generation_id)
 
@@ -1953,16 +2071,36 @@ async def _start_asr_chat_task(
 
     async def run_chat_generation() -> None:
         image: InputImage | None = None
-        if vision_state is not None and vision_service is not None:
-            image = await _capture_image_for_generation(
+        try:
+            if vision_state is not None and vision_service is not None:
+                image = await _capture_image_for_generation(
+                    websocket,
+                    vad_state,
+                    vision_state,
+                    vision_service,
+                    generation_id=generation_id,
+                    chat_id=chat_id,
+                    character_id=character_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "VAD chat capture orchestration failed | chat_id={} | character_id={} | "
+                "generation_id={} | error_type={}",
+                chat_id,
+                character_id,
+                generation_id,
+                type(exc).__name__,
+            )
+            await _send_generation_failure(
                 websocket,
                 vad_state,
-                vision_state,
-                vision_service,
-                generation_id=generation_id,
                 chat_id=chat_id,
                 character_id=character_id,
+                generation_id=generation_id,
             )
+            return
         await _handle_text_input(
             websocket,
             message,
