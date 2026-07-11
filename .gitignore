@@ -43,3 +43,5 @@ prompts/persona
 *.chat_scope_migrated
 *.legacy_migrated
 models/
+
+.playwright-cli/
