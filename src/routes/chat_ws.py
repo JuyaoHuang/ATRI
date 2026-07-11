@@ -117,6 +117,7 @@ class WebSocketVADState:
     interrupt_sent: bool = False
     current_chat_task: asyncio.Task[None] | None = None
     current_generation_id: str | None = None
+    current_generation_committing: bool = False
     current_generation_chat_id: str | None = None
     current_generation_character_id: str | None = None
     current_generation_user_text: str | None = None
@@ -132,6 +133,7 @@ class WebSocketVADState:
         """Mark a chat generation as the only valid one for this connection."""
 
         self.current_generation_id = generation_id
+        self.current_generation_committing = False
         self.current_generation_chat_id = None
         self.current_generation_character_id = None
         self.current_generation_user_text = None
@@ -165,6 +167,21 @@ class WebSocketVADState:
 
         return self.current_generation_id == generation_id
 
+    def begin_generation_commit(self, generation_id: str) -> bool:
+        """Claim durable success for the active generation exactly once."""
+
+        if not self.is_generation_active(generation_id) or self.current_generation_committing:
+            return False
+        self.current_generation_committing = True
+        return True
+
+    def is_generation_committing(self, generation_id: str | None = None) -> bool:
+        """Return whether durable success is already owned by this generation."""
+
+        if not self.current_generation_committing:
+            return False
+        return generation_id is None or self.current_generation_id == generation_id
+
     def get_interrupted_generation(
         self,
         *,
@@ -195,6 +212,7 @@ class WebSocketVADState:
 
         generation_id = self.current_generation_id
         self.current_generation_id = None
+        self.current_generation_committing = False
         self.current_generation_chat_id = None
         self.current_generation_character_id = None
         self.current_generation_user_text = None
@@ -795,6 +813,21 @@ async def _send_generation_chunk(
         return True
 
 
+async def _claim_generation_commit(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+) -> bool:
+    """Atomically claim durable success before persistence starts."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        return vad_state.begin_generation_commit(generation_id)
+
+    async with send_lock:
+        return vad_state.begin_generation_commit(generation_id)
+
+
 async def _send_generation_complete(
     websocket: Any,
     vad_state: WebSocketVADState,
@@ -981,6 +1014,21 @@ async def _send_speech_start_interrupt_unlocked(
     chat_id: str,
     character_id: str,
 ) -> tuple[InterruptedGenerationSnapshot | None, str | None, bool]:
+    if vad_state.is_generation_committing():
+        committing_generation_id = vad_state.current_generation_id
+        interrupted_tts_generation_id = await vad_state.interrupt_tts_generation()
+        control_generation_id = committing_generation_id or interrupted_tts_generation_id
+        data: dict[str, Any] = {
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "reason": "speech_start",
+            "preserve_chat_generation": True,
+        }
+        if control_generation_id is not None:
+            data["generation_id"] = control_generation_id
+        await websocket.send_json({"type": "control:interrupt", "data": data})
+        return None, control_generation_id, False
+
     interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
     stale_generation_id = vad_state.invalidate_current_generation()
     cancelled = vad_state.cancel_current_chat_task()
@@ -1467,7 +1515,19 @@ async def _handle_text_input(
         # 在发送完成事件之前持久化消息到存储
         # This ensures messages are saved before client closes connection
         # 这确保在客户端关闭连接前消息已保存
-        durable_success_started = True
+        durable_success_started = await _claim_generation_commit(
+            websocket,
+            vad_state,
+            generation_id,
+        )
+        if not durable_success_started:
+            logger.info(
+                "Discarding stale chat completion before durable commit | "
+                "chat_id={} | generation_id={}",
+                chat_id,
+                generation_id,
+            )
+            return
         try:
             logger.debug(f"Starting message persistence | chat_id={chat_id}")
             await storage.append_message_for_user(user_id, chat_id, "human", text, name=user_id)
@@ -1613,6 +1673,25 @@ async def _handle_text_input(
         await vad_state.interrupt_tts_generation(generation_id)
 
 
+async def _wait_for_committing_generation(vad_state: WebSocketVADState) -> None:
+    """Let an already claimed durable commit finish before the next ASR turn."""
+
+    task = vad_state.current_chat_task
+    if task is None or task.done() or not vad_state.is_generation_committing():
+        return
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if task.cancelled():
+            return
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Committing chat task ended unexpectedly before next ASR turn | error_type={}",
+            type(exc).__name__,
+        )
+
+
 async def _handle_audio_chunk(
     websocket: WebSocket,
     message: dict[str, Any],
@@ -1735,6 +1814,7 @@ async def _handle_audio_chunk(
             )
             await _send_chat_interrupted(websocket, interrupted_snapshot)
     if event.type is VADEventType.SPEECH_END and speech_audio is not None:
+        await _wait_for_committing_generation(vad_state)
         asr_result = await _handle_speech_end_asr(
             websocket,
             asr_service,

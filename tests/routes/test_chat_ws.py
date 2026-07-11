@@ -2142,6 +2142,94 @@ async def test_interrupt_wins_send_lock_and_discards_waiting_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_durable_commit_wins_interrupt_without_duplicate_persistence(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["完成"]))
+    ai_persistence_started = asyncio.Event()
+    release_ai_persistence = asyncio.Event()
+    persisted_roles: list[str] = []
+
+    async def append_message(
+        _user_id: str,
+        _chat_id: str,
+        role: str,
+        _content: str,
+        **_kwargs: object,
+    ) -> None:
+        persisted_roles.append(role)
+        if role == "ai":
+            ai_persistence_started.set()
+            await release_ai_persistence.wait()
+
+    mock_storage.append_message_for_user.side_effect = append_message
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-commit-first"
+
+    started = _start_tracked_chat_task(
+        vad_state,
+        generation_id,
+        _handle_text_input(
+            websocket,
+            {
+                "type": "input:text",
+                "data": {
+                    "text": "你好",
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            },
+            mock_context,
+            mock_storage,
+            "default",
+            vad_state,
+            generation_id,
+        ),
+    )
+    assert started is True
+    task = vad_state.current_chat_task
+    assert task is not None
+    await asyncio.wait_for(ai_persistence_started.wait(), timeout=1)
+
+    snapshot, control_generation_id, cancelled = await _send_speech_start_interrupt(
+        websocket,
+        vad_state,
+        chat_id="test_chat_123",
+        character_id="atri",
+    )
+
+    assert snapshot is None
+    assert control_generation_id == generation_id
+    assert cancelled is False
+    assert vad_state.is_generation_committing(generation_id)
+    assert websocket.messages[-1] == {
+        "type": "control:interrupt",
+        "data": {
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "reason": "speech_start",
+            "preserve_chat_generation": True,
+            "generation_id": generation_id,
+        },
+    }
+
+    release_ai_persistence.set()
+    await task
+
+    assert persisted_roles == ["human", "ai"]
+    mock_agent.memory_manager.on_round_complete.assert_awaited_once()
+    assert [message["type"] for message in websocket.messages] == [
+        "output:chat:chunk",
+        "control:interrupt",
+        "output:chat:complete",
+    ]
+    assert vad_state.current_generation_id is None
+
+
+@pytest.mark.asyncio
 async def test_late_failure_for_generation_a_does_not_affect_generation_b() -> None:
     websocket = LockedCapturingWebSocket()
     vad_state = WebSocketVADState(session_id="test-session")
