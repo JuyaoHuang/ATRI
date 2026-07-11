@@ -9,28 +9,66 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from loguru import logger
 from starlette.testclient import TestClient
 
 from src.app import create_app
 from src.asr.exceptions import ASRProviderUnavailableError
+from src.llm.exceptions import LLMAPIError
 from src.routes.chat_ws import (
     WebSocketVADState,
+    WebSocketVisionState,
+    _capture_image_for_generation,
     _float_audio_to_wav_bytes,
     _handle_audio_chunk,
     _handle_audio_end,
     _handle_speech_end_asr,
     _handle_text_input,
+    _handle_vision_capture_result,
+    _handle_vision_state,
     _send_asr_transcript,
+    _send_error,
     _send_generation_chunk,
+    _send_generation_complete,
+    _send_generation_failure,
     _send_json,
     _send_speech_start_interrupt,
+    _send_speech_start_interrupt_unlocked,
+    _start_asr_chat_task,
     _start_tracked_chat_task,
 )
 from src.vad import VADConfigStore, VADService
 from src.vad.exceptions import VADProviderUnavailableError
-from src.vision import InputInform
+from src.vision import InputInform, VisionConfigStore, VisionService
 
 _TEST_VAD_CONFIG_PATH = Path(__file__).with_name("__test_vad_config.yaml")
+_TINY_JPEG = b"\xff\xd8\xff\xe0test\xff\xd9"
+
+
+def _tiny_screen_image_payload() -> dict[str, str]:
+    return {
+        "source": "screen",
+        "media_type": "image/jpeg",
+        "encoding": "base64",
+        "data": base64.b64encode(_TINY_JPEG).decode("ascii"),
+    }
+
+
+def _make_vision_service(
+    tmp_path: Path,
+    *,
+    enabled: bool = True,
+    timeout_ms: int = 100,
+) -> VisionService:
+    return VisionService(
+        VisionConfigStore(
+            {
+                "enabled": enabled,
+                "capture": {"timeout_ms": timeout_ms},
+            },
+            path=tmp_path / "vision_config.yaml",
+        )
+    )
 
 
 class CapturingWebSocket:
@@ -46,6 +84,21 @@ class LockedCapturingWebSocket(CapturingWebSocket):
         super().__init__()
         self.state = MagicMock()
         self.state.send_lock = asyncio.Lock()
+
+
+class CaptureOrderWebSocket(CapturingWebSocket):
+    def __init__(self, vision_state: WebSocketVisionState, generation_id: str) -> None:
+        super().__init__()
+        self.vision_state = vision_state
+        self.generation_id = generation_id
+        self.registered_before_request = False
+
+    async def send_json(self, message: dict) -> None:
+        if message.get("type") == "control:vision:capture-request":
+            self.registered_before_request = (
+                self.generation_id in self.vision_state.capture_coordinator.pending_generation_ids
+            )
+        await super().send_json(message)
 
 
 class FakeTTSConfigStore:
@@ -1686,3 +1739,601 @@ async def test_websocket_audio_chunk_rejects_invalid_audio(
         assert response["type"] == "error"
         assert response["data"]["chat_id"] == "test_chat_123"
         assert "Invalid 'audio' field" in response["data"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Visual input and generation-terminal protocol
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vision_state_disable_unblocks_pending_capture(tmp_path: Path) -> None:
+    websocket = CapturingWebSocket()
+    vision_state = WebSocketVisionState(enabled=True)
+    vision_service = _make_vision_service(tmp_path)
+    future = vision_state.capture_coordinator.register("gen-pending")
+
+    await _handle_vision_state(
+        websocket,
+        {
+            "type": "input:vision:state",
+            "data": {"enabled": False, "source": "screen"},
+        },
+        vision_state,
+        vision_service,
+    )
+
+    assert vision_state.enabled is False
+    assert await future is None
+    assert vision_state.capture_coordinator.pending_count == 0
+    assert websocket.messages == []
+
+
+@pytest.mark.asyncio
+async def test_vision_state_rejects_non_screen_source(tmp_path: Path) -> None:
+    websocket = CapturingWebSocket()
+    vision_state = WebSocketVisionState()
+
+    await _handle_vision_state(
+        websocket,
+        {
+            "type": "input:vision:state",
+            "data": {"enabled": True, "source": "camera"},
+        },
+        vision_state,
+        _make_vision_service(tmp_path),
+    )
+
+    assert vision_state.enabled is False
+    assert websocket.messages[0]["type"] == "error"
+    assert "screen" in websocket.messages[0]["data"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection_enabled", "module_enabled", "image_mode", "expect_image"),
+    [
+        (True, True, "valid", True),
+        (False, True, "valid", False),
+        (True, False, "valid", False),
+        (True, True, "invalid", False),
+    ],
+)
+async def test_text_input_uses_optional_image_with_silent_fallback(
+    tmp_path: Path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+    connection_enabled: bool,
+    module_enabled: bool,
+    image_mode: str,
+    expect_image: bool,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["收到"]))
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vision_state = WebSocketVisionState(enabled=connection_enabled)
+    generation_id = f"gen-{connection_enabled}-{image_mode}"
+    vad_state.activate_generation(generation_id)
+    image_payload = _tiny_screen_image_payload()
+    if image_mode == "invalid":
+        image_payload = {**image_payload, "data": "not-base64"}
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "屏幕上有什么？",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+                "image": image_payload,
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        generation_id,
+        vision_state=vision_state,
+        vision_service=_make_vision_service(tmp_path, enabled=module_enabled),
+    )
+
+    mock_agent.chat.assert_called_once()
+    input_inform = mock_agent.chat.call_args.args[0]
+    assert isinstance(input_inform, InputInform)
+    assert input_inform.input_text.content == "屏幕上有什么？"
+    assert (input_inform.image is not None) is expect_image
+    if expect_image:
+        assert input_inform.image is not None
+        assert input_inform.image.source == "screen"
+        assert len(input_inform.image.data) == len(image_payload["data"])
+    assert [message["type"] for message in websocket.messages] == [
+        "output:chat:chunk",
+        "output:chat:complete",
+    ]
+    assert mock_storage.append_message_for_user.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_vad_capture_registers_before_request_and_resolves_while_task_waits(
+    tmp_path: Path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["收到"]))
+    generation_id = "gen-vad-captured"
+    vision_state = WebSocketVisionState(enabled=True)
+    vision_service = _make_vision_service(tmp_path)
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CaptureOrderWebSocket(vision_state, generation_id)
+
+    await _start_asr_chat_task(
+        websocket,
+        vad_state,
+        mock_context,
+        mock_storage,
+        "default",
+        chat_id="test_chat_123",
+        character_id="atri",
+        text="请看屏幕",
+        generation_id=generation_id,
+        vision_state=vision_state,
+        vision_service=vision_service,
+    )
+    request = await _wait_for_message_type(websocket, "control:vision:capture-request")
+    task = vad_state.current_chat_task
+    assert task is not None
+    assert not task.done()
+    assert websocket.registered_before_request is True
+    assert request["data"]["generation_id"] == generation_id
+
+    payload = _tiny_screen_image_payload()
+    await _handle_vision_capture_result(
+        websocket,
+        {
+            "type": "input:vision:capture-result",
+            "data": {
+                "generation_id": generation_id,
+                "status": "captured",
+                "image": payload,
+            },
+        },
+        vad_state,
+        vision_state,
+        vision_service,
+    )
+    await task
+    await asyncio.sleep(0)
+
+    input_inform = mock_agent.chat.call_args.args[0]
+    assert isinstance(input_inform, InputInform)
+    assert input_inform.image is not None
+    assert len(input_inform.image.data) == len(payload["data"])
+    assert vision_state.capture_coordinator.pending_count == 0
+    assert any(message["type"] == "output:chat:complete" for message in websocket.messages)
+
+    message_count = len(websocket.messages)
+    await _handle_vision_capture_result(
+        websocket,
+        {
+            "type": "input:vision:capture-result",
+            "data": {
+                "generation_id": generation_id,
+                "status": "captured",
+                "image": payload,
+            },
+        },
+        vad_state,
+        vision_state,
+        vision_service,
+    )
+    assert len(websocket.messages) == message_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["unavailable", "failed"])
+async def test_vad_capture_unavailable_or_failed_continues_text_only(
+    tmp_path: Path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+    status: str,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["收到"]))
+    generation_id = f"gen-vad-{status}"
+    vision_state = WebSocketVisionState(enabled=True)
+    vision_service = _make_vision_service(tmp_path)
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+
+    await _start_asr_chat_task(
+        websocket,
+        vad_state,
+        mock_context,
+        mock_storage,
+        "default",
+        chat_id="test_chat_123",
+        character_id="atri",
+        text="请回答",
+        generation_id=generation_id,
+        vision_state=vision_state,
+        vision_service=vision_service,
+    )
+    await _wait_for_message_type(websocket, "control:vision:capture-request")
+    await _handle_vision_capture_result(
+        websocket,
+        {
+            "type": "input:vision:capture-result",
+            "data": {"generation_id": generation_id, "status": status},
+        },
+        vad_state,
+        vision_state,
+        vision_service,
+    )
+    task = vad_state.current_chat_task
+    assert task is not None
+    await task
+
+    input_inform = mock_agent.chat.call_args.args[0]
+    assert isinstance(input_inform, InputInform)
+    assert input_inform.image is None
+    assert not any(message["type"] == "output:chat:error" for message in websocket.messages)
+
+
+@pytest.mark.asyncio
+async def test_vad_capture_timeout_continues_text_only(
+    tmp_path: Path,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["收到"]))
+    vision_state = WebSocketVisionState(enabled=True)
+    vad_state = WebSocketVADState(session_id="test-session")
+    websocket = CapturingWebSocket()
+
+    await _start_asr_chat_task(
+        websocket,
+        vad_state,
+        mock_context,
+        mock_storage,
+        "default",
+        chat_id="test_chat_123",
+        character_id="atri",
+        text="超时也回答",
+        generation_id="gen-timeout",
+        vision_state=vision_state,
+        vision_service=_make_vision_service(tmp_path, timeout_ms=1),
+    )
+    task = vad_state.current_chat_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=0.2)
+
+    input_inform = mock_agent.chat.call_args.args[0]
+    assert isinstance(input_inform, InputInform)
+    assert input_inform.image is None
+    assert vision_state.capture_coordinator.pending_count == 0
+    assert any(message["type"] == "output:chat:complete" for message in websocket.messages)
+
+
+@pytest.mark.asyncio
+async def test_vad_capture_task_cancellation_cleans_pending_future(tmp_path: Path) -> None:
+    generation_id = "gen-cancel-capture"
+    vision_state = WebSocketVisionState(enabled=True)
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation(generation_id)
+    websocket = CapturingWebSocket()
+    task = asyncio.create_task(
+        _capture_image_for_generation(
+            websocket,
+            vad_state,
+            vision_state,
+            _make_vision_service(tmp_path),
+            generation_id=generation_id,
+            chat_id="test_chat_123",
+            character_id="atri",
+        )
+    )
+    await _wait_for_message_type(websocket, "control:vision:capture-request")
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert vision_state.capture_coordinator.pending_count == 0
+
+
+def _terminal_complete_message(generation_id: str) -> dict:
+    return {
+        "type": "output:chat:complete",
+        "data": {
+            "full_reply": "完成",
+            "chat_id": "test_chat_123",
+            "character_id": "atri",
+            "generation_id": generation_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_generation_complete_wins_and_late_failure_is_ignored() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-complete-first"
+    vad_state.activate_generation(generation_id)
+
+    completed = await _send_generation_complete(
+        websocket,
+        vad_state,
+        generation_id,
+        _terminal_complete_message(generation_id),
+    )
+    failed = await _send_generation_failure(
+        websocket,
+        vad_state,
+        chat_id="test_chat_123",
+        character_id="atri",
+        generation_id=generation_id,
+    )
+
+    assert completed is True
+    assert failed is False
+    assert vad_state.current_generation_id is None
+    assert [message["type"] for message in websocket.messages] == ["output:chat:complete"]
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_wins_and_late_complete_is_ignored() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-failure-first"
+    vad_state.activate_generation(generation_id)
+
+    failed = await _send_generation_failure(
+        websocket,
+        vad_state,
+        chat_id="test_chat_123",
+        character_id="atri",
+        generation_id=generation_id,
+    )
+    completed = await _send_generation_complete(
+        websocket,
+        vad_state,
+        generation_id,
+        _terminal_complete_message(generation_id),
+    )
+
+    assert failed is True
+    assert completed is False
+    assert vad_state.current_generation_id is None
+    assert [message["type"] for message in websocket.messages] == ["output:chat:error"]
+
+
+@pytest.mark.asyncio
+async def test_interrupt_wins_send_lock_and_discards_waiting_failure() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = "gen-interrupt-first"
+    vad_state.activate_generation(generation_id)
+
+    async with websocket.state.send_lock:
+        failure_task = asyncio.create_task(
+            _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id="test_chat_123",
+                character_id="atri",
+                generation_id=generation_id,
+            )
+        )
+        await asyncio.sleep(0)
+        await _send_speech_start_interrupt_unlocked(
+            websocket,
+            vad_state,
+            chat_id="test_chat_123",
+            character_id="atri",
+        )
+
+    assert await failure_task is False
+    assert [message["type"] for message in websocket.messages] == ["control:interrupt"]
+    assert websocket.messages[0]["data"]["generation_id"] == generation_id
+
+
+@pytest.mark.asyncio
+async def test_late_failure_for_generation_a_does_not_affect_generation_b() -> None:
+    websocket = LockedCapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-a")
+
+    async with websocket.state.send_lock:
+        failure_task = asyncio.create_task(
+            _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id="test_chat_123",
+                character_id="atri",
+                generation_id="gen-a",
+            )
+        )
+        await asyncio.sleep(0)
+        vad_state.invalidate_current_generation()
+        vad_state.activate_generation("gen-b")
+
+    assert await failure_task is False
+    assert vad_state.current_generation_id == "gen-b"
+    assert websocket.messages == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_error_does_not_invalidate_active_generation() -> None:
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-active")
+
+    await _send_error(websocket, "Invalid protocol field", chat_id="test_chat_123")
+
+    assert vad_state.current_generation_id == "gen-active"
+    assert websocket.messages[0]["type"] == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        LLMAPIError("provider echoed data:image/jpeg;base64,SENSITIVE_IMAGE"),
+        RuntimeError("orchestration echoed data:image/jpeg;base64,SENSITIVE_IMAGE"),
+    ],
+)
+async def test_pre_success_generation_failure_is_transient_and_not_persisted(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+    failure: Exception,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+
+    async def failing_stream() -> AsyncIterator[str]:
+        yield "partial"
+        raise failure
+
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: failing_stream())
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    generation_id = f"gen-failure-{type(failure).__name__}"
+    vad_state.activate_generation(generation_id)
+    manager = RecordingTTSManager()
+    vad_state.current_tts_generation_id = generation_id
+    vad_state.current_tts_manager = manager  # type: ignore[assignment]
+    log_messages: list[str] = []
+    sink_id = logger.add(lambda record: log_messages.append(str(record)), level="DEBUG")
+
+    try:
+        await _handle_text_input(
+            websocket,
+            {
+                "type": "input:text",
+                "data": {
+                    "text": "请回答",
+                    "chat_id": "test_chat_123",
+                    "character_id": "atri",
+                },
+            },
+            mock_context,
+            mock_storage,
+            "default",
+            vad_state,
+            generation_id,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert [message["type"] for message in websocket.messages] == [
+        "output:chat:chunk",
+        "output:chat:error",
+    ]
+    error_data = websocket.messages[-1]["data"]
+    assert error_data == {
+        "message": "本轮回复生成失败，请稍后重试。",
+        "chat_id": "test_chat_123",
+        "character_id": "atri",
+        "generation_id": generation_id,
+    }
+    assert vad_state.current_generation_reply_chunks == []
+    assert vad_state.current_generation_id is None
+    assert manager.interrupted is True
+    mock_storage.append_message_for_user.assert_not_awaited()
+    mock_agent.memory_manager.on_round_complete.assert_not_awaited()
+    assert "SENSITIVE_IMAGE" not in "".join(log_messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_initialization_failure_uses_generation_error(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_context.get_or_create_agent.side_effect = RuntimeError("private provider request")
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-agent-init")
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        "gen-agent-init",
+    )
+
+    assert [message["type"] for message in websocket.messages] == ["output:chat:error"]
+    mock_storage.append_message_for_user.assert_not_awaited()
+    mock_agent.memory_manager.on_round_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_persistence_memory_failure_keeps_success_terminal(
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, mock_agent = mock_service_context
+    mock_agent.chat = MagicMock(side_effect=lambda _input, **_kwargs: _mock_chat_stream(["完成"]))
+    mock_agent.memory_manager.on_round_complete.side_effect = RuntimeError("memory unavailable")
+    websocket = CapturingWebSocket()
+    vad_state = WebSocketVADState(session_id="test-session")
+    vad_state.activate_generation("gen-durable-success")
+
+    await _handle_text_input(
+        websocket,
+        {
+            "type": "input:text",
+            "data": {
+                "text": "你好",
+                "chat_id": "test_chat_123",
+                "character_id": "atri",
+            },
+        },
+        mock_context,
+        mock_storage,
+        "default",
+        vad_state,
+        "gen-durable-success",
+    )
+
+    assert [message["type"] for message in websocket.messages] == [
+        "output:chat:chunk",
+        "output:chat:complete",
+    ]
+    assert mock_storage.append_message_for_user.await_count == 2
+    assert vad_state.current_generation_id is None
+
+
+def test_oversized_websocket_frame_is_rejected_before_json_parse(
+    mock_config: dict,
+    mock_service_context: tuple[MagicMock, MagicMock],
+    mock_storage: AsyncMock,
+) -> None:
+    mock_context, _mock_agent = mock_service_context
+    app = _make_app(mock_config, mock_context, mock_storage)
+    vision_service = MagicMock()
+    vision_service.get_config.return_value = {"transport": {"websocket_max_message_bytes": 16}}
+    app.state.vision_service = vision_service
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_text('{"type":"ping","padding":"too-long"}')
+        response = websocket.receive_json()
+
+    assert response == {
+        "type": "error",
+        "data": {"message": "WebSocket message exceeds the configured size limit"},
+    }
