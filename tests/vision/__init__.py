@@ -1,0 +1,1 @@
+"""Visual understanding tests."""
