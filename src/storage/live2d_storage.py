@@ -81,9 +81,7 @@ def get_default_live2d_models_dir() -> Path:
 
 def _is_settings_path(path: Path) -> bool:
     name = path.name.casefold()
-    return (
-        name.endswith(".model3.json") or name.endswith(".model.json")
-    ) and name != "items_pinned_to_model.json"
+    return name.endswith(".model3.json")
 
 
 def _relative_sort_key(path: Path, root: Path) -> tuple[int, int, str, str]:
@@ -234,9 +232,7 @@ class Live2DStorage:
     def _scan_model(self, model_dir: Path) -> Live2DModelRecord:
         settings_candidates = self._find_settings_candidates(model_dir)
         if not settings_candidates:
-            raise Live2DModelValidationError(
-                "no .model3.json or .model.json settings file was found"
-            )
+            raise Live2DModelValidationError("no .model3.json settings file was found")
 
         settings_file = settings_candidates[0]
         if len(settings_candidates) > 1:

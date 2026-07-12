@@ -128,6 +128,10 @@ async def test_list_discovers_metadata_free_direct_model_directory(client_and_st
     settings_response = await client.get(response.json()[0]["model_url"])
     assert settings_response.status_code == 200
     assert settings_response.json()["FileReferences"]["Moc"] == "model.moc3"
+    assert (await client.get("/api/assets/live2d/mao_pro/runtime/model.moc3")).status_code == 200
+    assert (
+        await client.get("/api/assets/live2d/mao_pro/runtime/textures/texture_00.png")
+    ).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -161,6 +165,43 @@ async def test_invalid_directory_is_warned_and_does_not_hide_valid_models(client
     assert [model["id"] for model in response.json()] == ["valid_model"]
     assert any("copy_in_progress" in warning for warning in warnings)
     assert any("no .model3.json" in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_cubism2_model_json_is_not_published_as_renderable(client_and_storage):
+    client, _storage, models_dir = client_and_storage
+    _write_live2d_model(models_dir, "renderable_model")
+    _write_live2d_model(
+        models_dir,
+        "cubism2_model",
+        settings_path="legacy/legacy.model.json",
+        moc_reference="legacy.moc",
+    )
+
+    response = await client.get("/api/live2d/models")
+
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()] == ["renderable_model"]
+
+
+@pytest.mark.asyncio
+async def test_broken_settings_json_is_warned_without_hiding_valid_models(client_and_storage):
+    client, _storage, models_dir = client_and_storage
+    _write_live2d_model(models_dir, "valid_model")
+    broken_settings = models_dir / "broken_json" / "runtime" / "broken.model3.json"
+    broken_settings.parent.mkdir(parents=True)
+    broken_settings.write_text("{not-json", encoding="utf-8")
+
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
+    try:
+        response = await client.get("/api/live2d/models")
+    finally:
+        logger.remove(sink_id)
+
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()] == ["valid_model"]
+    assert any("broken_json" in warning and "valid UTF-8 JSON" in warning for warning in warnings)
 
 
 @pytest.mark.asyncio
