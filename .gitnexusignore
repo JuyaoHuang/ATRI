@@ -1,0 +1,4 @@
+# Keep GitNexus focused on executable/source structure.
+# Project Markdown docs are read by agents with rg/Get-Content on demand.
+*.md
+**/*.md

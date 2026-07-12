@@ -37,7 +37,7 @@ import uuid
 import wave
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
@@ -54,8 +54,20 @@ from src.tts.segment_manager import (
 )
 from src.vad import VADEvent, VADEventType, VADService, VADState
 from src.vad.exceptions import VADConfigError, VADProcessingError, VADProviderUnavailableError
+from src.vision import (
+    InputImage,
+    InputInform,
+    InputText,
+    VisionCaptureCoordinator,
+    VisionService,
+    validate_input_image,
+    websocket_message_size_bytes,
+    websocket_message_within_limit,
+)
 
 _TTS_FINISH_TASKS: set[asyncio.Task[None]] = set()
+_CHAT_GENERATION_FAILURE_MESSAGE = "本轮回复生成失败，请稍后重试。"
+_CHAT_COMMIT_WAIT_TIMEOUT_MS = 5_000
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,34 @@ class InterruptedGenerationSnapshot:
 
 
 @dataclass
+class WebSocketVisionState:
+    """Runtime-only screen sharing state for one WebSocket connection."""
+
+    enabled: bool = False
+    source: Literal["screen"] = "screen"
+    capture_coordinator: VisionCaptureCoordinator = field(default_factory=VisionCaptureCoordinator)
+
+    def is_active(self, vision_service: VisionService) -> bool:
+        """Return whether this connection may attach a screen frame."""
+
+        return self.enabled and vision_service.is_enabled()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Update the connection projection and unblock pending turns on stop."""
+
+        self.enabled = enabled
+        if not enabled:
+            for generation_id in self.capture_coordinator.pending_generation_ids:
+                self.capture_coordinator.resolve(generation_id, None)
+
+    def release(self) -> None:
+        """Cancel pending capture waits when the connection is destroyed."""
+
+        self.enabled = False
+        self.capture_coordinator.cancel_all()
+
+
+@dataclass
 class WebSocketVADState:
     """Per-connection VAD state reserved for realtime audio control."""
 
@@ -78,6 +118,7 @@ class WebSocketVADState:
     interrupt_sent: bool = False
     current_chat_task: asyncio.Task[None] | None = None
     current_generation_id: str | None = None
+    current_generation_committing: bool = False
     current_generation_chat_id: str | None = None
     current_generation_character_id: str | None = None
     current_generation_user_text: str | None = None
@@ -93,6 +134,7 @@ class WebSocketVADState:
         """Mark a chat generation as the only valid one for this connection."""
 
         self.current_generation_id = generation_id
+        self.current_generation_committing = False
         self.current_generation_chat_id = None
         self.current_generation_character_id = None
         self.current_generation_user_text = None
@@ -126,6 +168,21 @@ class WebSocketVADState:
 
         return self.current_generation_id == generation_id
 
+    def begin_generation_commit(self, generation_id: str) -> bool:
+        """Claim durable success for the active generation exactly once."""
+
+        if not self.is_generation_active(generation_id) or self.current_generation_committing:
+            return False
+        self.current_generation_committing = True
+        return True
+
+    def is_generation_committing(self, generation_id: str | None = None) -> bool:
+        """Return whether durable success is already owned by this generation."""
+
+        if not self.current_generation_committing:
+            return False
+        return generation_id is None or self.current_generation_id == generation_id
+
     def get_interrupted_generation(
         self,
         *,
@@ -156,6 +213,7 @@ class WebSocketVADState:
 
         generation_id = self.current_generation_id
         self.current_generation_id = None
+        self.current_generation_committing = False
         self.current_generation_chat_id = None
         self.current_generation_character_id = None
         self.current_generation_user_text = None
@@ -317,7 +375,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     vad_service = websocket.app.state.vad_service
     asr_service = websocket.app.state.asr_service
     tts_service = getattr(websocket.app.state, "tts_service", None)
+    vision_service = websocket.app.state.vision_service
     vad_state = WebSocketVADState(session_id=f"ws:{uuid.uuid4().hex}")
+    vision_state = WebSocketVisionState()
 
     try:
         while True:
@@ -325,13 +385,37 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             # 接收客户端消息
             raw_message = await websocket.receive_text()
 
+            vision_config = vision_service.get_config()
+            max_message_bytes = vision_config["transport"]["websocket_max_message_bytes"]
+            if not websocket_message_within_limit(raw_message, max_message_bytes):
+                logger.warning(
+                    "Rejected oversized WebSocket text frame | size_bytes={} | limit_bytes={}",
+                    websocket_message_size_bytes(raw_message),
+                    max_message_bytes,
+                )
+                await _send_error(
+                    websocket,
+                    "WebSocket message exceeds the configured size limit",
+                    chat_id=None,
+                )
+                continue
+
             # Parse JSON
             # 解析 JSON
             try:
                 message = json.loads(raw_message)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON received: {e}")
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Invalid WebSocket JSON | line={} | column={}",
+                    exc.lineno,
+                    exc.colno,
+                )
                 await _send_error(websocket, "Invalid JSON format", chat_id=None)
+                continue
+
+            if not isinstance(message, dict):
+                logger.warning("WebSocket message root must be an object")
+                await _send_error(websocket, "Message must be an object", chat_id=None)
                 continue
 
             # Extract message type
@@ -360,14 +444,34 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         vad_state,
                         generation_id,
                         tts_service=tts_service,
+                        vision_state=vision_state,
+                        vision_service=vision_service,
                     ),
                 )
                 if not started:
                     await _send_error(
                         websocket,
                         "Chat task already running",
-                        chat_id=message.get("data", {}).get("chat_id"),
+                        chat_id=_message_chat_id(message),
+                        character_id=_message_character_id(message),
+                        request_id=_message_request_id(message),
+                        generation_id=generation_id,
                     )
+            elif msg_type == "input:vision:state":
+                await _handle_vision_state(
+                    websocket,
+                    message,
+                    vision_state,
+                    vision_service,
+                )
+            elif msg_type == "input:vision:capture-result":
+                await _handle_vision_capture_result(
+                    websocket,
+                    message,
+                    vad_state,
+                    vision_state,
+                    vision_service,
+                )
             elif msg_type == "input:audio:chunk":
                 await _handle_audio_chunk(
                     websocket,
@@ -379,27 +483,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     storage=storage,
                     user_id=user_id,
                     tts_service=tts_service,
+                    vision_state=vision_state,
+                    vision_service=vision_service,
                 )
             elif msg_type == "input:audio:end":
                 await _handle_audio_end(websocket, message, vad_service, vad_state)
             else:
-                logger.warning(f"Unknown message type: {msg_type}")
+                logger.warning("Unknown WebSocket message type")
                 await _send_error(
                     websocket,
-                    f"Unknown message type: {msg_type}",
-                    chat_id=message.get("data", {}).get("chat_id"),
+                    "Unknown message type",
+                    chat_id=_message_chat_id(message),
                 )
 
     except WebSocketDisconnect:
         logger.info("WebSocket connection closed by client")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+    except Exception as exc:
+        logger.error("WebSocket connection failed | error_type={}", type(exc).__name__)
         try:
             if websocket.client_state == WebSocketState.CONNECTED:
-                await _send_error(websocket, f"Internal server error: {e}", chat_id=None)
+                await _send_error(websocket, "Internal server error", chat_id=None)
         except Exception:
             pass  # Connection already closed
     finally:
+        vision_state.release()
         await vad_state.interrupt_tts_generation()
         vad_state.release()
         vad_service.reset_session(vad_state.session_id)
@@ -415,6 +522,255 @@ async def _handle_ping(websocket: WebSocket) -> None:
                    WebSocket 连接。
     """
     await _send_json(websocket, {"type": "pong"})
+
+
+def _message_chat_id(message: dict[str, Any]) -> str | None:
+    """Extract a safe chat identifier without assuming a valid data object."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    chat_id = data.get("chat_id")
+    return chat_id if isinstance(chat_id, str) and chat_id else None
+
+
+def _message_character_id(message: dict[str, Any]) -> str | None:
+    """Extract a safe character identifier from a message data object."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    character_id = data.get("character_id")
+    return character_id if isinstance(character_id, str) and character_id else None
+
+
+def _message_request_id(message: dict[str, Any]) -> str | None:
+    """Extract the bounded client correlation id used for input rejection."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return None
+    request_id = data.get("request_id")
+    if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+        return None
+    return request_id
+
+
+async def _handle_vision_state(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+) -> None:
+    """Project the current browser screen-sharing state onto this connection."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    enabled = data.get("enabled")
+    source = data.get("source")
+    if type(enabled) is not bool:
+        await _send_error(
+            websocket,
+            "Vision state 'enabled' must be a boolean",
+            chat_id=None,
+        )
+        return
+    if source != "screen":
+        await _send_error(
+            websocket,
+            "Vision state 'source' must be 'screen'",
+            chat_id=None,
+        )
+        return
+
+    vision_state.set_enabled(enabled)
+    logger.info(
+        "WebSocket vision state updated | enabled={} | module_enabled={} | source=screen",
+        enabled,
+        vision_service.is_enabled(),
+    )
+
+
+async def _handle_vision_capture_result(
+    websocket: WebSocket,
+    message: dict[str, Any],
+    vad_state: WebSocketVADState,
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+) -> None:
+    """Resolve one generation-keyed browser capture without blocking receives."""
+
+    data = message.get("data")
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        return
+
+    generation_id = data.get("generation_id")
+    if not isinstance(generation_id, str) or not generation_id:
+        await _send_error(
+            websocket,
+            "Vision capture result requires 'generation_id'",
+            chat_id=None,
+        )
+        return
+
+    coordinator = vision_state.capture_coordinator
+    if generation_id not in coordinator.pending_generation_ids:
+        logger.debug(
+            "Discarding unknown or stale vision capture result | generation_id={}",
+            generation_id,
+        )
+        return
+    if not vad_state.is_generation_active(generation_id) or not vision_state.is_active(
+        vision_service
+    ):
+        coordinator.resolve(generation_id, None)
+        logger.debug(
+            "Discarding inactive vision capture result | generation_id={}",
+            generation_id,
+        )
+        return
+
+    status = data.get("status")
+    if status in {"unavailable", "failed"}:
+        coordinator.resolve(generation_id, None)
+        logger.debug(
+            "Vision capture unavailable | generation_id={} | status={}",
+            generation_id,
+            status,
+        )
+        return
+    if status != "captured":
+        coordinator.resolve(generation_id, None)
+        await _send_error(
+            websocket,
+            "Vision capture result has invalid 'status'",
+            chat_id=None,
+            generation_id=generation_id,
+        )
+        return
+
+    config = vision_service.get_config()
+    validation = validate_input_image(
+        data.get("image"),
+        max_decoded_bytes=config["capture"]["max_decoded_bytes"],
+    )
+    coordinator.resolve(generation_id, validation.image if validation.is_valid else None)
+    if not validation.is_valid:
+        logger.warning(
+            "Discarded invalid vision capture | generation_id={} | code={} | "
+            "encoded_length={} | decoded_length={}",
+            generation_id,
+            validation.code,
+            validation.encoded_length,
+            validation.decoded_length,
+        )
+
+
+def _validated_message_image(
+    data: dict[str, Any],
+    *,
+    chat_id: str,
+    generation_id: str,
+    vision_state: WebSocketVisionState | None,
+    vision_service: VisionService | None,
+) -> InputImage | None:
+    """Validate an optional direct-submit image only when vision is active."""
+
+    if vision_state is None or vision_service is None or not vision_state.is_active(vision_service):
+        return None
+
+    config = vision_service.get_config()
+    validation = validate_input_image(
+        data.get("image"),
+        max_decoded_bytes=config["capture"]["max_decoded_bytes"],
+    )
+    if validation.is_valid:
+        return validation.image
+    if validation.code != "missing":
+        logger.warning(
+            "Discarded invalid input image | chat_id={} | generation_id={} | code={} | "
+            "encoded_length={} | decoded_length={}",
+            chat_id,
+            generation_id,
+            validation.code,
+            validation.encoded_length,
+            validation.decoded_length,
+        )
+    return None
+
+
+async def _capture_image_for_generation(
+    websocket: WebSocket,
+    vad_state: WebSocketVADState,
+    vision_state: WebSocketVisionState,
+    vision_service: VisionService,
+    *,
+    generation_id: str,
+    chat_id: str,
+    character_id: str,
+) -> InputImage | None:
+    """Request one browser frame for a VAD turn and silently fall back."""
+
+    if not vision_state.is_active(vision_service):
+        return None
+
+    coordinator = vision_state.capture_coordinator
+    try:
+        future = coordinator.register(generation_id)
+    except ValueError:
+        logger.warning(
+            "Vision capture registration failed | generation_id={} | error_type=ValueError",
+            generation_id,
+        )
+        return None
+
+    request = {
+        "type": "control:vision:capture-request",
+        "data": {
+            "generation_id": generation_id,
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "source": "screen",
+        },
+    }
+    try:
+        sent = await _send_generation_event(
+            websocket,
+            vad_state,
+            generation_id,
+            request,
+        )
+    except asyncio.CancelledError:
+        coordinator.cancel(generation_id)
+        raise
+    except Exception as exc:
+        coordinator.cancel(generation_id)
+        logger.warning(
+            "Vision capture request failed | generation_id={} | error_type={}",
+            generation_id,
+            type(exc).__name__,
+        )
+        return None
+
+    if not sent:
+        coordinator.cancel(generation_id)
+        return None
+
+    config = vision_service.get_config()
+    image = await coordinator.wait(
+        generation_id,
+        future,
+        timeout_ms=config["capture"]["timeout_ms"],
+    )
+    if not vad_state.is_generation_active(generation_id):
+        return None
+    if not vision_state.is_active(vision_service):
+        return None
+    return image
 
 
 async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
@@ -434,6 +790,28 @@ def _get_send_lock(websocket: Any) -> Any | None:
 
     websocket_state = getattr(websocket, "state", None)
     return getattr(websocket_state, "send_lock", None)
+
+
+async def _send_generation_event(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+    message: dict[str, Any],
+) -> bool:
+    """Send a non-terminal generation event only while it remains active."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
+
+    async with send_lock:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        return True
 
 
 async def _send_generation_chunk(
@@ -461,26 +839,86 @@ async def _send_generation_chunk(
         return True
 
 
+async def _claim_generation_commit(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    generation_id: str,
+) -> bool:
+    """Atomically claim durable success before persistence starts."""
+
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        return vad_state.begin_generation_commit(generation_id)
+
+    async with send_lock:
+        return vad_state.begin_generation_commit(generation_id)
+
+
 async def _send_generation_complete(
     websocket: Any,
     vad_state: WebSocketVADState,
     generation_id: str,
     message: dict[str, Any],
 ) -> bool:
-    """Send a completion only if its generation is still active."""
+    """Atomically send and invalidate a successfully completed generation."""
 
     send_lock = _get_send_lock(websocket)
     if send_lock is None:
         if not vad_state.is_generation_active(generation_id):
             return False
         await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
         return True
 
     async with send_lock:
         if not vad_state.is_generation_active(generation_id):
             return False
         await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
         return True
+
+
+async def _send_generation_failure(
+    websocket: Any,
+    vad_state: WebSocketVADState,
+    *,
+    chat_id: str,
+    character_id: str,
+    generation_id: str,
+) -> bool:
+    """Commit one safe pre-success failure if the generation is still active."""
+
+    message = {
+        "type": "output:chat:error",
+        "data": {
+            "message": _CHAT_GENERATION_FAILURE_MESSAGE,
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "generation_id": generation_id,
+        },
+    }
+    send_lock = _get_send_lock(websocket)
+    if send_lock is None:
+        if not vad_state.is_generation_active(generation_id):
+            return False
+        await websocket.send_json(message)
+        vad_state.invalidate_current_generation()
+    else:
+        async with send_lock:
+            if not vad_state.is_generation_active(generation_id):
+                return False
+            await websocket.send_json(message)
+            vad_state.invalidate_current_generation()
+
+    try:
+        await vad_state.interrupt_tts_generation(generation_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to clean up TTS after chat failure | generation_id={} | error_type={}",
+            generation_id,
+            type(exc).__name__,
+        )
+    return True
 
 
 async def _send_tts_audio_segment(
@@ -602,6 +1040,21 @@ async def _send_speech_start_interrupt_unlocked(
     chat_id: str,
     character_id: str,
 ) -> tuple[InterruptedGenerationSnapshot | None, str | None, bool]:
+    if vad_state.is_generation_committing():
+        committing_generation_id = vad_state.current_generation_id
+        interrupted_tts_generation_id = await vad_state.interrupt_tts_generation()
+        control_generation_id = committing_generation_id or interrupted_tts_generation_id
+        preserved_data: dict[str, Any] = {
+            "chat_id": chat_id,
+            "character_id": character_id,
+            "reason": "speech_start",
+            "preserve_chat_generation": True,
+        }
+        if control_generation_id is not None:
+            preserved_data["generation_id"] = control_generation_id
+        await websocket.send_json({"type": "control:interrupt", "data": preserved_data})
+        return None, control_generation_id, False
+
     interrupted_snapshot = vad_state.get_interrupted_generation(reason="vad_speech_start")
     stale_generation_id = vad_state.invalidate_current_generation()
     cancelled = vad_state.cancel_current_chat_task()
@@ -656,7 +1109,7 @@ def _finalize_tracked_chat_task(
     except asyncio.CancelledError:
         logger.debug("Tracked chat task cancelled")
     except Exception as exc:
-        logger.error(f"Tracked chat task failed: {exc}")
+        logger.error("Tracked chat task failed | error_type={}", type(exc).__name__)
 
 
 def _start_tts_finish_task(vad_state: WebSocketVADState, generation_id: str) -> None:
@@ -875,6 +1328,9 @@ async def _handle_text_input(
     vad_state: WebSocketVADState,
     generation_id: str,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
+    input_image: InputImage | None = None,
 ) -> None:
     """Handle text input message and stream ChatAgent response.
     处理文本输入消息并流式传输 ChatAgent 响应。
@@ -890,25 +1346,50 @@ async def _handle_text_input(
                  来自 app.state 的 ChatStorage 实例。
     """
     data = message.get("data", {})
+    if not isinstance(data, dict):
+        await _send_error(websocket, "Message 'data' must be an object", chat_id=None)
+        _discard_generation_if_active(vad_state, generation_id)
+        return
     text = data.get("text")
     chat_id = data.get("chat_id")
     character_id = data.get("character_id")
+    request_id = _message_request_id(message)
     client_context = data.get("client_context")
     if not isinstance(client_context, dict):
         client_context = None
 
     # Validate required fields
     # 验证必填字段
-    if not text:
-        await _send_error(websocket, "Missing 'text' field", chat_id=chat_id)
+    if not isinstance(text, str) or not text.strip():
+        await _send_error(
+            websocket,
+            "Missing 'text' field",
+            chat_id=chat_id,
+            character_id=character_id if isinstance(character_id, str) else None,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
     if not chat_id:
-        await _send_error(websocket, "Missing 'chat_id' field", chat_id=None)
+        await _send_error(
+            websocket,
+            "Missing 'chat_id' field",
+            chat_id=None,
+            character_id=character_id if isinstance(character_id, str) else None,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
     if not character_id:
-        await _send_error(websocket, "Missing 'character_id' field", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            "Missing 'character_id' field",
+            chat_id=chat_id,
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
 
@@ -924,7 +1405,14 @@ async def _handle_text_input(
             character_id,
             exc,
         )
-        await _send_error(websocket, f"Invalid chat request: {exc}", chat_id=chat_id)
+        await _send_error(
+            websocket,
+            f"Invalid chat request: {exc}",
+            chat_id=chat_id,
+            character_id=str(character_id),
+            request_id=request_id,
+            generation_id=generation_id,
+        )
         _discard_generation_if_active(vad_state, generation_id)
         return
 
@@ -939,6 +1427,9 @@ async def _handle_text_input(
             websocket,
             f"Chat '{chat_id}' not found for character '{character_id}'",
             chat_id=chat_id,
+            character_id=str(character_id),
+            request_id=request_id,
+            generation_id=generation_id,
         )
         _discard_generation_if_active(vad_state, generation_id)
         return
@@ -950,18 +1441,64 @@ async def _handle_text_input(
         user_text=str(text),
     )
 
+    try:
+        effective_image = input_image
+        if (
+            vision_state is None
+            or vision_service is None
+            or not vision_state.is_active(vision_service)
+        ):
+            effective_image = None
+        elif effective_image is None:
+            effective_image = _validated_message_image(
+                data,
+                chat_id=str(chat_id),
+                generation_id=generation_id,
+                vision_state=vision_state,
+                vision_service=vision_service,
+            )
+        input_inform = InputInform(
+            input_text=InputText(content=text),
+            image=effective_image,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Failed to assemble chat input | chat_id={} | character_id={} | "
+            "generation_id={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
+        )
+        await _send_generation_failure(
+            websocket,
+            vad_state,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            generation_id=generation_id,
+        )
+        return
+
     # Get or create ChatAgent for this character/user/chat.
     # 获取或创建此 character/user/chat 的 ChatAgent。
     try:
         agent = service_context.get_or_create_agent(character_id, user_id, chat_id)
-    except Exception as e:
-        logger.error(f"Failed to get ChatAgent: {e}")
-        await _send_error(
-            websocket,
-            f"Failed to initialize character '{character_id}': {e}",
-            chat_id=chat_id,
+    except Exception as exc:
+        logger.error(
+            "Failed to initialize ChatAgent | chat_id={} | character_id={} | "
+            "generation_id={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
         )
-        _discard_generation_if_active(vad_state, generation_id)
+        await _send_generation_failure(
+            websocket,
+            vad_state,
+            chat_id=str(chat_id),
+            character_id=str(character_id),
+            generation_id=generation_id,
+        )
         return
 
     tts_manager = await _maybe_start_tts_segment_manager(
@@ -976,11 +1513,12 @@ async def _handle_text_input(
     # Stream ChatAgent response
     # 流式传输 ChatAgent 响应
     chunks = []
+    durable_success_started = False
     try:
         chat_stream = (
-            agent.chat(text, runtime_context=client_context, commit_round=False)
+            agent.chat(input_inform, runtime_context=client_context, commit_round=False)
             if client_context
-            else agent.chat(text, commit_round=False)
+            else agent.chat(input_inform, commit_round=False)
         )
         async for chunk in chat_stream:
             if not vad_state.is_generation_active(generation_id):
@@ -1034,6 +1572,19 @@ async def _handle_text_input(
         # 在发送完成事件之前持久化消息到存储
         # This ensures messages are saved before client closes connection
         # 这确保在客户端关闭连接前消息已保存
+        durable_success_started = await _claim_generation_commit(
+            websocket,
+            vad_state,
+            generation_id,
+        )
+        if not durable_success_started:
+            logger.info(
+                "Discarding stale chat completion before durable commit | "
+                "chat_id={} | generation_id={}",
+                chat_id,
+                generation_id,
+            )
+            return
         try:
             logger.debug(f"Starting message persistence | chat_id={chat_id}")
             await storage.append_message_for_user(user_id, chat_id, "human", text, name=user_id)
@@ -1062,21 +1613,41 @@ async def _handle_text_input(
                 )
                 return
             logger.debug(f"Messages persisted | chat_id={chat_id}")
-        except ValueError as e:
+        except ValueError as exc:
             # Chat not found (client may have deleted it)
             # 聊天不存在（客户端可能已删除）
-            logger.warning(f"Failed to persist messages: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error persisting messages: {e}")
+            logger.warning(
+                "Failed to persist chat messages | chat_id={} | generation_id={} | error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
+        except Exception as exc:
+            logger.error(
+                "Unexpected chat persistence failure | chat_id={} | generation_id={} | "
+                "error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
 
         ai_name = character_id
         persona_name = getattr(getattr(agent, "persona", None), "name", None)
         if isinstance(persona_name, str) and persona_name.strip():
             ai_name = persona_name
-        await agent.memory_manager.on_round_complete(
-            {"role": "human", "content": str(text), "name": user_id},
-            {"role": "ai", "content": full_reply, "name": ai_name},
-        )
+        try:
+            await agent.memory_manager.on_round_complete(
+                {"role": "human", "content": str(text), "name": user_id},
+                {"role": "ai", "content": full_reply, "name": ai_name},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Post-persistence memory commit failed | chat_id={} | generation_id={} | "
+                "error_type={}",
+                chat_id,
+                generation_id,
+                type(exc).__name__,
+            )
         if not vad_state.is_generation_active(generation_id):
             logger.info(
                 "Discarding stale chat completion after memory commit | "
@@ -1109,34 +1680,90 @@ async def _handle_text_input(
                 generation_id,
             )
             return
-        vad_state.complete_generation(generation_id)
         if tts_manager is not None:
             _start_tts_finish_task(vad_state, generation_id)
 
         logger.info(f"Chat complete | chat_id={chat_id} | reply_length={len(full_reply)}")
 
-    except LLMError as e:
-        # LLM error path (already handled by ChatAgent, but catch here for safety)
-        # LLM 错误路径（ChatAgent 已处理，但此处捕获以确保安全）
-        logger.error(f"LLM error during chat: {e}")
-        await _send_error(
-            websocket,
-            f"LLM call failed: {e}",
-            chat_id=chat_id,
-            generation_id=generation_id,
+    except asyncio.CancelledError:
+        raise
+    except LLMError as exc:
+        logger.error(
+            "LLM generation failed | chat_id={} | character_id={} | generation_id={} | "
+            "error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            type(exc).__name__,
         )
+        if not durable_success_started:
+            await _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                generation_id=generation_id,
+            )
+            return
         _discard_generation_if_active(vad_state, generation_id)
         await vad_state.interrupt_tts_generation(generation_id)
-    except Exception as e:
-        logger.error(f"Unexpected error during chat: {e}")
-        await _send_error(
-            websocket,
-            f"Chat processing failed: {e}",
-            chat_id=chat_id,
-            generation_id=generation_id,
+    except Exception as exc:
+        logger.error(
+            "Chat generation orchestration failed | chat_id={} | character_id={} | "
+            "generation_id={} | durable_success_started={} | error_type={}",
+            chat_id,
+            character_id,
+            generation_id,
+            durable_success_started,
+            type(exc).__name__,
         )
+        if not durable_success_started:
+            await _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                generation_id=generation_id,
+            )
+            return
         _discard_generation_if_active(vad_state, generation_id)
         await vad_state.interrupt_tts_generation(generation_id)
+
+
+async def _wait_for_committing_generation(
+    vad_state: WebSocketVADState,
+    *,
+    timeout_ms: int = _CHAT_COMMIT_WAIT_TIMEOUT_MS,
+) -> bool:
+    """Wait a bounded time for an already claimed durable commit."""
+
+    task = vad_state.current_chat_task
+    if task is None or task.done() or not vad_state.is_generation_committing():
+        return True
+    generation_id = vad_state.current_generation_id
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=timeout_ms / 1000,
+        )
+        return True
+    except TimeoutError:
+        logger.warning(
+            "Timed out waiting for committing generation | generation_id={} | timeout_ms={}",
+            generation_id,
+            timeout_ms,
+        )
+        return False
+    except asyncio.CancelledError:
+        if task.cancelled():
+            return True
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Committing chat task ended unexpectedly before next ASR turn | error_type={}",
+            type(exc).__name__,
+        )
+        return True
 
 
 async def _handle_audio_chunk(
@@ -1149,6 +1776,8 @@ async def _handle_audio_chunk(
     storage: Any | None = None,
     user_id: str | None = None,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
 ) -> None:
     """Handle realtime microphone audio chunks for backend VAD."""
 
@@ -1259,6 +1888,17 @@ async def _handle_audio_chunk(
             )
             await _send_chat_interrupted(websocket, interrupted_snapshot)
     if event.type is VADEventType.SPEECH_END and speech_audio is not None:
+        commit_ready = await _wait_for_committing_generation(vad_state)
+        if not commit_ready:
+            await _send_listen_error(
+                websocket,
+                chat_id=str(chat_id),
+                character_id=str(character_id),
+                code="chat_commit_busy",
+                message="Previous chat turn is still committing.",
+                seq=data.get("seq"),
+            )
+            return
         asr_result = await _handle_speech_end_asr(
             websocket,
             asr_service,
@@ -1281,6 +1921,8 @@ async def _handle_audio_chunk(
                 text=asr_result["text"],
                 generation_id=asr_result["generation_id"],
                 tts_service=tts_service,
+                vision_state=vision_state,
+                vision_service=vision_service,
             )
 
 
@@ -1567,6 +2209,8 @@ async def _start_asr_chat_task(
     text: str,
     generation_id: str,
     tts_service: Any | None = None,
+    vision_state: WebSocketVisionState | None = None,
+    vision_service: VisionService | None = None,
 ) -> None:
     """Start a backend-owned chat turn from a completed ASR transcript."""
 
@@ -1588,10 +2232,40 @@ async def _start_asr_chat_task(
             "character_id": character_id,
         },
     }
-    started = _start_tracked_chat_task(
-        vad_state,
-        generation_id,
-        _handle_text_input(
+
+    async def run_chat_generation() -> None:
+        image: InputImage | None = None
+        try:
+            if vision_state is not None and vision_service is not None:
+                image = await _capture_image_for_generation(
+                    websocket,
+                    vad_state,
+                    vision_state,
+                    vision_service,
+                    generation_id=generation_id,
+                    chat_id=chat_id,
+                    character_id=character_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "VAD chat capture orchestration failed | chat_id={} | character_id={} | "
+                "generation_id={} | error_type={}",
+                chat_id,
+                character_id,
+                generation_id,
+                type(exc).__name__,
+            )
+            await _send_generation_failure(
+                websocket,
+                vad_state,
+                chat_id=chat_id,
+                character_id=character_id,
+                generation_id=generation_id,
+            )
+            return
+        await _handle_text_input(
             websocket,
             message,
             service_context,
@@ -1600,7 +2274,15 @@ async def _start_asr_chat_task(
             vad_state,
             generation_id,
             tts_service=tts_service,
-        ),
+            vision_state=vision_state,
+            vision_service=vision_service,
+            input_image=image,
+        )
+
+    started = _start_tracked_chat_task(
+        vad_state,
+        generation_id,
+        run_chat_generation(),
     )
     if not started:
         await _send_error(
@@ -1717,6 +2399,8 @@ async def _send_error(
     message: str,
     chat_id: str | None,
     generation_id: str | None = None,
+    character_id: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Send error message to client.
     向客户端发送错误消息。
@@ -1734,5 +2418,9 @@ async def _send_error(
         error_data["chat_id"] = chat_id
     if generation_id:
         error_data["generation_id"] = generation_id
+    if character_id:
+        error_data["character_id"] = character_id
+    if request_id:
+        error_data["request_id"] = request_id
 
     await _send_json(websocket, {"type": "error", "data": error_data})

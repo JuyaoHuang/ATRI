@@ -11,13 +11,9 @@ Two tests live here:
 
 2. ``test_live_chat_agent_llm_error`` -- **not** live-gated (no network);
    injects a stub ``LLMInterface`` that raises :class:`LLMConnectionError`
-   on the first ``__anext__``, then asserts the error path writes a
-   ``role=system`` chat_history row, emits no ``role=ai`` row, and leaves
-   ``total_rounds=0`` / ``recent_messages=[]``. This is the integration-
-   level sibling of the mock-driven error-path tests in
-   ``tests/agent/test_chat_agent.py`` -- where the mock tests prove
-   ChatAgent *calls* ``append_system_note``, this test proves the actual
-   file on disk gets the right content.
+   on the first ``__anext__``, then asserts the original exception propagates,
+   no turn row is appended to chat_history, and ``total_rounds=0`` /
+   ``recent_messages=[]`` remain unchanged.
 
 Run::
 
@@ -39,11 +35,8 @@ ChatAgent 组合层的在线端到端测试（Phase 4）。
 
 2. ``test_live_chat_agent_llm_error`` —— **不**走 live 门控（无网络）；
    注入一个在第一次 ``__anext__`` 就抛出 :class:`LLMConnectionError`
-   的 stub ``LLMInterface``，然后断言错误路径在 chat_history 里写入
-   ``role=system`` 行、不产生 ``role=ai`` 行，且 ``total_rounds=0``
-   / ``recent_messages=[]``。本测试是 ``tests/agent/test_chat_agent.py``
-   里 mock 级错误路径测试的集成级兄弟——mock 测试验证 ChatAgent
-   **调用**了 ``append_system_note``，本测试验证磁盘上的文件内容正确。
+   的 stub ``LLMInterface``，然后断言原始异常继续传播、chat_history 不写入
+   本轮任何消息，且 ``total_rounds=0`` / ``recent_messages=[]`` 保持不变。
 
 Reference: docs/Phase4_执行规格.md §US-AGT-007,
 docs/记忆系统设计讨论.md §6.1.
@@ -67,6 +60,7 @@ from src.llm.exceptions import LLMConnectionError
 from src.llm.interface import LLMInterface
 from src.memory.manager import MemoryManager
 from src.service_context import ServiceContext
+from src.vision import InputImage
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_REPO_ROOT / ".env")
@@ -404,6 +398,8 @@ class _FailingLLM(LLMInterface):
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> AsyncIterator[str]:
         raise LLMConnectionError("simulated network failure")
         yield ""  # type: ignore[unreachable]
@@ -425,14 +421,12 @@ def _l3l4_factory_should_not_fire(role: str) -> LLMInterface:
 
 @pytest.mark.asyncio
 async def test_live_chat_agent_llm_error(tmp_path: Path) -> None:
-    """Stub LLM raises -> chat_history has system row, no ai row, state untouched.
+    """Stub LLM raises -> no turn rows are persisted and state stays untouched.
 
-    Integration-level proof that the US-AGT-004 error path lands on disk
-    correctly when a real :class:`ChatHistoryWriter` is wired in (not a
-    MagicMock). Unlike the live ten-round test, this needs no ``.env``
-    / no mem0 / no network.
+    Integration-level proof that an operational LLM failure does not reach
+    ChatHistoryWriter when a real MemoryManager is wired in.
 
-    Stub LLM 抛错 → chat_history 有 system 行、无 ai 行、状态不变。
+    Stub LLM 抛错 → chat_history 无本轮 system/human/ai 行，状态不变。
 
     当真实的 :class:`ChatHistoryWriter` 接入时（非 MagicMock），这个
     集成级验证 US-AGT-004 错误路径能在磁盘上落盘正确。相比在线 10 轮
@@ -456,16 +450,11 @@ async def test_live_chat_agent_llm_error(tmp_path: Path) -> None:
     )
     agent = ChatAgent(_FailingLLM(), mgr, persona)
 
-    chunks = [c async for c in agent.chat("anything")]
+    with pytest.raises(LLMConnectionError, match="simulated network failure"):
+        [_ async for _ in agent.chat("anything")]
 
-    # yield 单一 error sentinel，格式与 US-AGT-004 契约一致
-    # Single error sentinel yielded, matching the US-AGT-004 contract.
-    assert len(chunks) == 1
-    assert chunks[0].startswith("[LLM call failed: LLMConnectionError: ")
-    assert chunks[0].endswith("]")
-
-    # chat_history 必须含 role=system 行且**不**含 role=ai 行（本轮未完成）
-    # chat_history must contain a role=system row and NO role=ai row for this turn.
+    # chat_history 只能保留初始化 metadata，本轮不能写入任何消息。
+    # Chat history keeps initialization metadata only; this turn writes nothing.
     session_id = mgr.active_session_id
     assert session_id is not None
     chat_path = character_dir / "sessions" / f"{session_id}.json"
@@ -477,8 +466,7 @@ async def test_live_chat_agent_llm_error(tmp_path: Path) -> None:
     ai_rows = [e for e in entries if e["role"] == "ai"]
     human_rows = [e for e in entries if e["role"] == "human"]
 
-    assert len(system_rows) >= 1
-    assert any("[LLM call failed" in e["content"] for e in system_rows)
+    assert system_rows == []
     assert len(ai_rows) == 0, f"expected no ai row, got: {ai_rows}"
     assert len(human_rows) == 0, f"error path must not append human row either: {human_rows}"
 

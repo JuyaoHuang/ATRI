@@ -2,7 +2,7 @@
 status: active
 owner: llm
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source:
   - ../../module-design/CN/LLM调用层设计讨论.md
   - src/llm/interface.py
@@ -14,7 +14,9 @@ related_code:
   - src/llm/interface.py
   - src/llm/factory.py
   - src/llm/exceptions.py
+  - src/llm/multimodal.py
   - src/llm/providers/openai_compatible.py
+  - src/llm/providers/siliconflow.py
   - src/llm/providers/xiaomi.py
   - src/service_context.py
   - src/routes/chats.py
@@ -35,6 +37,7 @@ related_code:
 - 定义统一的调用契约；
 - 把角色名映射到配置池；
 - 根据配置池实例化具体 Provider；
+- 把当前轮可选图片转换为 Provider 多模态消息；
 - 把 SDK 级错误翻译成项目内异常。
 
 它在系统中的位置更接近：
@@ -49,23 +52,25 @@ Persona / Memory / Route
 
 ## 设计目标
 
-结合旧设计讨论和当前实现，长期目标已经收敛为 5 条：
+结合旧设计讨论和当前实现，长期目标已经收敛为 6 条：
 
 1. 调用层必须保持无状态，避免 history 和 system prompt 被悄悄缓存到实例里。
 2. Provider 扩展必须通过装饰器注册，而不是修改工厂核心代码。
 3. 一套配置池要能服务多个角色出口：主聊天、压缩器、标题生成等。
 4. 错误只在这里被归一化，不在这里决定重试或降级。
 5. 为未来 tool calling 预留形态，但不让预留能力污染当前主链路。
+6. 图片只属于当前调用，不能反向污染历史 messages 或 Memory。
 
 ## 模块组成
 
-当前 `src/llm/` 可以稳定拆成四部分：
+当前 `src/llm/` 可以稳定拆成五部分：
 
 | 组件 | 代码 | 职责 |
 | --- | --- | --- |
 | 接口层 | `interface.py` | 定义 `chat_completion_stream()` / `chat_completion()` 双接口。 |
 | 工厂层 | `factory.py` | Provider 注册表、角色映射、配置池解析。 |
 | 异常层 | `exceptions.py` | `LLMError` 及其子类。 |
+| 多模态辅助层 | `multimodal.py` | 纯函数化组装最终当前 user 的单图消息。 |
 | Provider 实现层 | `providers/` | 适配具体 SDK 和接口差异。 |
 
 ## 上游依赖者
@@ -92,8 +97,11 @@ Persona / Memory / Route
 
 - `system` 每次调用显式传入；
 - `messages` 每次调用显式传入；
+- `input_image` 作为可选关键字参数显式传入；
 - Provider 实例上不保存对话历史；
 - 非流式接口默认只是收集流式结果。
+
+`input_image` 不代表 Provider 实例会保存附件。helper 只复制当前调用的最终 user message；历史上下文仍由 MemoryManager 以纯文本组装。
 
 这意味着：
 
@@ -173,9 +181,10 @@ create_from_role(...)
 
 ## 当前 Provider 现实
 
-当前内置 Provider 实际上只有两种实现类：
+当前内置 Provider 有三种实现类：
 
 - `OpenAICompatibleLLM`
+- `SiliconFlowLLM`
 - `XiaomiLLM`
 
 但注册名有多种：
@@ -188,8 +197,10 @@ create_from_role(...)
 这里的长期约束是：
 
 - “注册名”不等于“实现类数量”；
-- 某些 Provider 名只是为配置与语义隔离而存在；
-- 调用方只看到角色和配置池，不需要知道背后共享同一实现类。
+- SiliconFlow 通过独立类和注册模块建立扩展边界，同时继承通用 OpenAI
+  兼容协议实现；
+- 调用方只看到角色和配置池，不需要知道 Provider 之间的继承与复用关系。
+- Provider 能接受多模态消息不等于当前模型一定具备视觉能力，最终能力由配置中的 model 决定。
 
 ## 错误所有权
 
@@ -209,6 +220,7 @@ create_from_role(...)
 - 自动重试；
 - fallback 到第二个 Provider；
 - 给前端写错误文案；
+- 记录或回显完整多模态请求与图片 Base64；
 - 记日志之外的行为纠正。
 
 因此：
@@ -276,3 +288,4 @@ create_from_role(...)
 - [call-layer.zh-CN.md](call-layer.zh-CN.md)
 - [../agent/chat-agent.zh-CN.md](../agent/chat-agent.zh-CN.md)
 - [../memory/design.zh-CN.md](../memory/design.zh-CN.md)
+- [../vision/README.zh-CN.md](../vision/README.zh-CN.md)

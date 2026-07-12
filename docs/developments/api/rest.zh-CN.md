@@ -2,7 +2,7 @@
 status: active
 owner: api
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 related_code:
   - src/routes/health.py
   - src/routes/characters.py
@@ -10,6 +10,7 @@ related_code:
   - src/routes/data.py
   - src/routes/asr.py
   - src/routes/tts.py
+  - src/routes/vision.py
   - src/routes/live2d.py
   - src/app.py
 ---
@@ -346,6 +347,62 @@ curl -X POST http://localhost:8430/api/tts/synthesize \
 - `502`：上游 TTS API 调用失败。
 - `503`：provider 不可用。
 
+## Vision
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/vision/config` | 读取完整的安全视觉配置。 |
+| `PUT` | `/api/vision/config` | 只持久化视觉模块 `enabled` 开关。 |
+
+### `GET /api/vision/config`
+
+响应示例：
+
+```json
+{
+  "enabled": false,
+  "source": "screen",
+  "capture": {
+    "media_type": "image/jpeg",
+    "jpeg_quality": 0.82,
+    "max_long_edge": 1920,
+    "max_decoded_bytes": 4194304,
+    "timeout_ms": 1500
+  },
+  "provider": {
+    "detail": "auto"
+  },
+  "transport": {
+    "websocket_max_message_bytes": 8388608
+  }
+}
+```
+
+这些字段不包含图片、MediaStream、Provider 密钥或浏览器授权状态。截图参数首版为只读投影。
+
+### `PUT /api/vision/config`
+
+请求体必须恰好包含一个严格布尔字段：
+
+```json
+{
+  "enabled": true
+}
+```
+
+成功时返回更新后的完整安全配置。该接口只修改 `config/vision_config.yaml` 顶层 `enabled`，不会创建或停止浏览器 MediaStream；前端在 PUT 禁用成功后自行停止当前标签页 tracks。
+
+同一进程内的更新会被串行化。服务端先生成同目录临时文件并原子 replace 正式 YAML，成功后才发布内存值和响应；写入失败不会留下“HTTP 失败但进程内开关已经改变”的分叉状态。
+
+下面这些请求返回 `400`：
+
+- 缺少 `enabled`；
+- `enabled` 不是 JSON boolean；
+- 同时提交 `capture`、`provider`、`transport` 或其他额外字段；
+- 配置文件无法安全更新。
+
+视觉截图本身不走 REST。它使用业务 WebSocket 的 `input:text.image` 或 generation-keyed capture request/result 协议。
+
 ## Live2D
 
 | 方法 | 路径 | 说明 |
@@ -446,3 +503,4 @@ curl -X POST http://localhost:8430/api/tts/synthesize \
 - [认证 API 与鉴权协议](auth.zh-CN.md)
 - [WebSocket 协议](websocket.zh-CN.md)
 - [事件字典](events.zh-CN.md)
+- [Vision 模块长期设计](../modules/vision/README.zh-CN.md)

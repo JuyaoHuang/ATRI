@@ -25,6 +25,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 
+from src.vision.models import InputImage
+
 
 class LLMInterface(ABC):
     """Stateless LLM call contract.
@@ -44,6 +46,8 @@ class LLMInterface(ABC):
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> AsyncIterator[str]:
         """Yield non-empty content deltas from the LLM response stream.
 
@@ -55,6 +59,8 @@ class LLMInterface(ABC):
                 present.
             tools: Reserved for tool-calling (§2.7). Currently unused by
                 all providers.
+            input_image: Optional short-lived screen image attached only to
+                the current user message by supporting providers.
 
         Yields:
             str: Content chunks in order of arrival. Empty chunks are
@@ -78,6 +84,8 @@ class LLMInterface(ABC):
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> str:
         """Return the full response as a single string.
 
@@ -90,6 +98,11 @@ class LLMInterface(ABC):
         子类可以覆盖此方法。
         """
         parts: list[str] = []
-        async for chunk in self.chat_completion_stream(messages, system, tools):
+        async for chunk in self.chat_completion_stream(
+            messages,
+            system,
+            tools,
+            input_image=input_image,
+        ):
             parts.append(chunk)
         return "".join(parts)

@@ -9,16 +9,15 @@ the stream exhausts.
 Key design points (per docs/Phase4_执行规格.md §US-AGT-003 and strategy
 decisions S1a / S1b / S5):
 
-* ``user_input`` is passed **raw** (un-cleaned) to both
+* ``InputInform.input_text.content`` is passed **raw** (un-cleaned) to both
   :meth:`MemoryManager.build_llm_context` (payload position [6] / long-term
   search) and :meth:`MemoryManager.on_round_complete` (L1 is applied inside
   the manager). ChatAgent does no cleaning itself.
 * ``persona.system_prompt`` is forwarded to ``build_llm_context`` as payload
   position [1]; :meth:`LLMInterface.chat_completion_stream` is called without
   a separate ``system=`` kwarg to avoid double-prepend.
-* The error path (``LLMError`` from the stream) is added in US-AGT-004;
-  this module ships only the success path so each story is independently
-  verifiable.
+* Optional images bypass Memory and are forwarded only to the LLM invocation
+  boundary. LLM failures remain exceptions for the route orchestrator.
 
 Reference: docs/Phase4_执行规格.md §US-AGT-003, docs/项目架构设计.md §2.5,
 docs/记忆系统设计讨论.md §6.1 (revised data flow),
@@ -34,15 +33,15 @@ ChatAgent——Phase 4 组合层。
 关键设计点（对齐 docs/Phase4_执行规格.md §US-AGT-003 以及策略决策
 S1a / S1b / S5）：
 
-* ``user_input`` 以**原样（未清洗）**同时传给
+* ``InputInform.input_text.content`` 以**原样（未清洗）**同时传给
   :meth:`MemoryManager.build_llm_context`（载荷位置 [6] / 长期检索）
   与 :meth:`MemoryManager.on_round_complete`（L1 在 manager 内部执行）。
   ChatAgent 自身不做任何清洗。
 * ``persona.system_prompt`` 作为载荷位置 [1] 通过 ``build_llm_context``
   注入；调用 :meth:`LLMInterface.chat_completion_stream` 时**不**额外传
   ``system=`` 关键字，避免重复前置。
-* 错误路径（流中抛出 ``LLMError``）由 US-AGT-004 增补；本模块只承载
-  成功路径，让每个 US 能独立验证。
+* 可选图片绕过 Memory，仅传给 LLM 调用边界；LLM 失败保持异常控制流，
+  交由路由编排层处理。
 """
 
 from __future__ import annotations
@@ -53,9 +52,9 @@ from typing import Any
 from loguru import logger
 
 from src.agent.persona import Persona
-from src.llm.exceptions import LLMError
 from src.llm.interface import LLMInterface
 from src.memory.manager import MemoryManager
+from src.vision.models import InputInform
 
 # Threshold below which a successful (non-errored) LLM reply is deemed
 # "suspiciously short" and logged as WARNING. Chosen empirically: the atri
@@ -100,12 +99,12 @@ class ChatAgent:
 
     async def chat(
         self,
-        user_input: str,
+        user_input: str | InputInform,
         runtime_context: dict[str, Any] | None = None,
         *,
         commit_round: bool = True,
     ) -> AsyncIterator[str]:
-        """Stream LLM tokens for ``user_input`` and auto-commit the round.
+        """Stream one text or multimodal turn and optionally commit its text.
 
         Sequence (success path, per §6.1):
           1. ``messages = await memory_manager.build_llm_context(
@@ -123,15 +122,12 @@ class ChatAgent:
              internally, appends to chat_history / recent_messages, and
              may fire L3 / L4 triggers.
 
-        Error path (US-AGT-004): if the stream raises ``LLMError``, yield
-        an error sentinel to the caller, call
-        :meth:`MemoryManager.append_system_note`, and skip
-        ``on_round_complete`` so the failed turn does not count as a round.
+        LLM failures are not converted into text. The original exception
+        propagates to the route orchestrator, and no round commit occurs.
 
         Args:
-            user_input: The raw user message (text-typed or ASR transcript).
-                Not cleaned before ``build_llm_context`` / ``on_round_complete``;
-                L1 cleansing happens inside MemoryManager.
+            user_input: A complete :class:`InputInform` or a backward-compatible
+                raw string that is normalized to a text-only turn.
 
         Yields:
             str: Each chunk from the underlying LLM stream in arrival order.
@@ -152,43 +148,35 @@ class ChatAgent:
              MemoryManager 在内部对用户消息执行 L1，追加到 chat_history /
              recent_messages，并可能触发 L3 / L4。
 
-        错误路径（US-AGT-004）：若流抛出 ``LLMError``，向调用方 yield
-        错误哨兵，调用 :meth:`MemoryManager.append_system_note`，并跳过
-        ``on_round_complete``，使失败的一轮不计数。
+        LLM 失败不会转换为文本。原始异常传播给路由编排层，且不会提交本轮。
 
         参数：
-            user_input：原始用户消息（文字输入或 ASR 转写）。传给
-                ``build_llm_context`` / ``on_round_complete`` 之前**不**做清洗，
-                L1 清洗由 MemoryManager 内部完成。
+            user_input：完整 :class:`InputInform`，或兼容的原始字符串；字符串
+                会被规范化为纯文本轮次。
 
         产出：
             str：底层 LLM 流的每个 chunk（按到达顺序）。
         """
+        input_inform = (
+            user_input if isinstance(user_input, InputInform) else InputInform.text_only(user_input)
+        )
+        input_text = input_inform.input_text.content
+
         context_kwargs: dict[str, Any] = {"system_prompt": self.persona.system_prompt}
         if runtime_context:
             context_kwargs["runtime_context"] = runtime_context
 
-        messages = await self.memory_manager.build_llm_context(user_input, **context_kwargs)
+        messages = await self.memory_manager.build_llm_context(input_text, **context_kwargs)
 
         reply_chunks: list[str] = []
-        try:
-            async for chunk in self.llm.chat_completion_stream(messages):
-                reply_chunks.append(chunk)
-                yield chunk
-        except LLMError as exc:
-            # Error path (S4): surface the failure to the caller as a final
-            # sentinel chunk, persist it as a chat_history system row, and
-            # bail out WITHOUT counting the round. `append_system_note` does
-            # not touch total_rounds / recent_messages / triggers (see
-            # MemoryManager.append_system_note invariants).
-            # 错误路径（S4）：将失败作为末尾的哨兵 chunk 告知调用方，持久化
-            # 为 chat_history 的 system 行，并在**不**计入轮次的情况下退出。
-            # `append_system_note` 不触碰 total_rounds / recent_messages /
-            # 触发器（见 MemoryManager.append_system_note 的不变式）。
-            error_text = f"[LLM call failed: {type(exc).__name__}: {exc}]"
-            yield error_text
-            self.memory_manager.append_system_note(error_text)
-            return
+        stream = (
+            self.llm.chat_completion_stream(messages, input_image=input_inform.image)
+            if input_inform.image is not None
+            else self.llm.chat_completion_stream(messages)
+        )
+        async for chunk in stream:
+            reply_chunks.append(chunk)
+            yield chunk
 
         reply = "".join(reply_chunks)
 
@@ -215,13 +203,13 @@ class ChatAgent:
 
         if commit_round:
             await self.memory_manager.on_round_complete(
-                {"role": "human", "content": user_input},
+                {"role": "human", "content": input_text},
                 {"role": "ai", "content": reply, "name": self.persona.name},
             )
 
     async def chat_collect(
         self,
-        user_input: str,
+        user_input: str | InputInform,
         runtime_context: dict[str, Any] | None = None,
         *,
         commit_round: bool = True,

@@ -109,5 +109,5 @@ def test_root_config_loads_vad_sub_config() -> None:
     config = load_config("config.yaml")
 
     assert config["vad"]["enabled"] is True
-    assert config["vad"]["vad_model"] == "fake"
+    assert config["vad"]["vad_model"] == "silero_vad"
     assert config["vad"]["fake"]["required_misses"] == 10

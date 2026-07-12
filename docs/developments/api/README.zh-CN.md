@@ -6,7 +6,7 @@
 
 1. [auth.zh-CN.md](auth.zh-CN.md)：先确认认证模式、Cookie/Bearer 边界和 OAuth 回调语义。
 2. [rest.zh-CN.md](rest.zh-CN.md)：查 HTTP 路由、请求体、响应体和通用错误。
-3. [websocket.zh-CN.md](websocket.zh-CN.md)：查连接方式、实时聊天时序、VAD 打断和 TTS 分段行为。
+3. [websocket.zh-CN.md](websocket.zh-CN.md)：查连接方式、实时聊天、屏幕视觉、VAD 打断和 TTS 分段行为。
 4. [events.zh-CN.md](events.zh-CN.md)：按事件名查字段字典和消息示例。
 
 ## 文档索引
@@ -14,8 +14,8 @@
 | 文档 | 说明 | 适合什么时候看 |
 | --- | --- | --- |
 | [auth.zh-CN.md](auth.zh-CN.md) | 认证 REST API、会话 Cookie、HTTP Bearer 兼容规则、WebSocket Cookie 鉴权、OAuth 回调结果约定。 | 登录失败、401、跨端调用、Cookie/会话问题。 |
-| [rest.zh-CN.md](rest.zh-CN.md) | 健康检查、角色、聊天、数据维护、ASR、TTS、Live2D、静态资源和通用错误。 | 查业务 REST 路由或准备写调用代码。 |
-| [websocket.zh-CN.md](websocket.zh-CN.md) | `/ws` 连接、鉴权、文本聊天流、实时语音/VAD 中断、TTS 分段流和关闭语义。 | 查实时协议、心跳、流式回复和语音链路。 |
+| [rest.zh-CN.md](rest.zh-CN.md) | 健康检查、角色、聊天、数据维护、ASR、TTS、Vision、Live2D、静态资源和通用错误。 | 查业务 REST 路由或准备写调用代码。 |
+| [websocket.zh-CN.md](websocket.zh-CN.md) | `/ws` 连接、鉴权、文本/视觉输入、实时语音/VAD 中断、generation failure、TTS 分段流和关闭语义。 | 查实时协议、心跳、流式回复和多模态输入链路。 |
 | [events.zh-CN.md](events.zh-CN.md) | `input:*`、`output:*`、`control:*`、`error`、`pong` 的字段字典。 | 已经知道事件名，需要精确字段说明。 |
 
 ## 维护约定

@@ -49,6 +49,7 @@ from src.storage.factory import create_chat_storage
 from src.storage.live2d_storage import Live2DStorage, get_default_live2d_models_dir
 from src.tts import TTSConfigStore, TTSService
 from src.vad import VADConfigStore, VADService
+from src.vision import VisionConfigStore, VisionService
 
 
 @asynccontextmanager
@@ -114,6 +115,7 @@ def create_app(config: dict) -> FastAPI:
     app.state.asr_service = ASRService(ASRConfigStore(config.get("asr", {})))
     app.state.tts_service = TTSService(TTSConfigStore(config.get("tts", {})))
     app.state.vad_service = VADService(VADConfigStore(config.get("vad", {})))
+    app.state.vision_service = VisionService(VisionConfigStore(config.get("vision", {})))
     app.state.auth_service = AuthService(config.get("auth", {}))
     app.state.character_storage = CharacterStorage()
     app.state.live2d_storage = Live2DStorage()
@@ -161,11 +163,13 @@ def create_app(config: dict) -> FastAPI:
     from src.routes.health import router as health_router
     from src.routes.live2d import router as live2d_router
     from src.routes.tts import router as tts_router
+    from src.routes.vision import router as vision_router
 
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(asr_router)
     app.include_router(tts_router)
+    app.include_router(vision_router)
     app.include_router(characters_router)
     app.include_router(chats_router)
     app.include_router(data_router)

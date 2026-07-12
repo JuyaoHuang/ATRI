@@ -20,10 +20,17 @@ from openai import (
 from src.llm.exceptions import (
     LLMAPIError,
     LLMConnectionError,
+    LLMError,
     LLMRateLimitError,
 )
 from src.llm.factory import LLMFactory
 from src.llm.interface import LLMInterface
+from src.llm.multimodal import (
+    SUPPORTED_IMAGE_DETAILS,
+    ImageDetail,
+    build_multimodal_messages,
+)
+from src.vision.models import InputImage
 
 _REQUEST_OPTION_KEYS = (
     "max_completion_tokens",
@@ -59,13 +66,17 @@ class XiaomiLLM(LLMInterface):
         api_key: str,
         temperature: float | None = None,
         request_options: dict[str, Any] | None = None,
+        image_detail: ImageDetail = "auto",
         **extra: Any,
     ) -> None:
+        if image_detail not in SUPPORTED_IMAGE_DETAILS:
+            raise ValueError(f"Unsupported image detail: {image_detail!r}")
         self.model = model
         self.base_url = base_url
         self.api_key = api_key
         self.temperature = temperature
         self.request_options = dict(request_options or {})
+        self.image_detail = image_detail
         self.extra = extra
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
@@ -74,11 +85,18 @@ class XiaomiLLM(LLMInterface):
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        *,
+        input_image: InputImage | None = None,
     ) -> AsyncIterator[str]:
+        request_messages = build_multimodal_messages(
+            messages,
+            input_image,
+            image_detail=self.image_detail,
+        )
         payload: list[dict[str, Any]] = (
-            [{"role": "system", "content": system}, *messages]
+            [{"role": "system", "content": system}, *request_messages]
             if system is not None
-            else list(messages)
+            else list(request_messages)
         )
 
         params: dict[str, Any] = {
@@ -94,17 +112,21 @@ class XiaomiLLM(LLMInterface):
             if value is not None:
                 params[key] = value
 
+        provider_error: LLMError | None = None
         try:
             stream = await self.client.chat.completions.create(**params)
             async for chunk in stream:
                 content = _extract_content(chunk)
                 if content:
                     yield content
-        except APIConnectionError as exc:
-            raise LLMConnectionError(str(exc)) from exc
-        except RateLimitError as exc:
-            raise LLMRateLimitError(str(exc)) from exc
-        except APIError as exc:
-            raise LLMAPIError(str(exc)) from exc
-        except Exception as exc:
-            raise LLMAPIError(str(exc)) from exc
+        except APIConnectionError:
+            provider_error = LLMConnectionError("LLM provider connection failed")
+        except RateLimitError:
+            provider_error = LLMRateLimitError("LLM provider rate limit exceeded")
+        except APIError:
+            provider_error = LLMAPIError("LLM provider API request failed")
+        except Exception:
+            provider_error = LLMAPIError("LLM provider request failed")
+
+        if provider_error is not None:
+            raise provider_error

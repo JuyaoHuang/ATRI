@@ -44,6 +44,7 @@ from src.llm import create_from_role
 from src.service_context import ServiceContext
 from src.utils.config_loader import load_config
 from src.utils.logger import init_logger
+from src.vision import DEFAULT_VISION_CONFIG
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "config.yaml"
@@ -143,12 +144,17 @@ def main() -> None:
     server_config = config.get("server", {})
     host = server_config.get("host", "0.0.0.0")
     port = server_config.get("port", 8430)
+    vision_transport = config.get("vision", {}).get("transport", {})
+    ws_max_size = vision_transport.get(
+        "websocket_max_message_bytes",
+        DEFAULT_VISION_CONFIG["transport"]["websocket_max_message_bytes"],
+    )
 
-    logger.info("Server starting | host={} | port={}", host, port)
+    logger.info("Server starting | host={} | port={} | ws_max_size={}", host, port, ws_max_size)
 
     # Start uvicorn server (blocks until shutdown)
     # 启动 uvicorn 服务器（阻塞直到关闭）
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, ws_max_size=ws_max_size)
 
 
 if __name__ == "__main__":

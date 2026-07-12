@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-11
 source_documents:
   - ../../module-design/CN/前端设计文档.md
 related_code:
@@ -14,6 +14,8 @@ related_code:
   - frontend/src/stores/settings.ts
   - frontend/src/stores/live2d.ts
   - frontend/src/stores/user.ts
+  - frontend/src/pages/settings/modules/vision.vue
+  - frontend/src/components/chat/VisionInput.vue
 ---
 
 # 舞台与设置
@@ -35,6 +37,7 @@ related_code:
 - WebSocket 连接
 - 消息历史
 - 音频播放器
+- `InputBox` 中的单次语音、VAD 与视觉运行时入口
 
 切换模式只改变页面布局和交互入口，不改变聊天协议。
 
@@ -43,7 +46,7 @@ related_code:
 默认模式由 `Sidebar.vue` 和 `ChatArea.vue` 组成：
 
 - `Sidebar`：显示项目标题、角色选择器和聊天历史。
-- `ChatArea`：显示消息列表、输入框和语音入口。
+- `ChatArea`：显示消息列表、输入框、语音与屏幕视觉入口。
 - 右上角固定按钮负责主题切换和进入设置页。
 
 该模式更接近“列表 + 主内容”的工作台布局，适合频繁切换角色和聊天标题。
@@ -69,6 +72,7 @@ related_code:
 - 顶部工具栏提供聊天历史与角色面板切换。
 - 中间使用 `StageChatHistory` 复用同一套消息状态。
 - 底部仍然是 `InputBox variant="stage"`。
+- 因为复用同一 `InputBox`，视觉按钮在 Stage 中仍位于 VAD 右侧。
 - 连接状态仅展示为 UI pill，不在这里管理 WebSocket 生命周期以外的业务逻辑。
 
 ## Live2D 舞台设置边界
@@ -98,14 +102,17 @@ related_code:
 | --- | --- | --- |
 | `/settings/account` | 认证状态、本地昵称和本地头像文件名 | 认证会话由后端拥有，本地资料由前端拥有 |
 | `/settings/airi-card` | 角色卡 CRUD、详情查看、导入导出 | 后端 Persona 与头像托管 |
-| `/settings/modules` | 模块入口聚合页，展示 ASR/TTS 是否已启用 | 前端只汇总状态 |
+| `/settings/modules` | 模块入口聚合页，展示 ASR/TTS/Vision 是否已启用 | 前端只汇总状态 |
 | `/settings/modules/speech` | TTS provider、自动播放、播放器显示与测试 | 后端配置拥有真相，前端只写白名单字段 |
 | `/settings/modules/hearing` | ASR provider、设备选择、自动发送、监控与测试 | 模块配置后端拥有，设备选择前端拥有 |
+| `/settings/modules/vision` | 视觉模块唯一持久化开关与当前标签页状态说明 | `enabled` 由后端拥有，MediaStream 由浏览器 controller 拥有 |
 | `/settings/scene` | 背景图、透明度、模糊度 | 前端本地偏好 |
 | `/settings/models` | Live2D 模型与舞台参数 | 模型资源后端拥有，展示参数前端拥有 |
 | `/settings/data` | 聊天删除、短期记忆清理、长期记忆删除提交 | 删除动作通过后端 API 执行 |
 
-路由里仍保留若干占位页，例如 `consciousness`、`vision`、`providers`、`connection`、`system`。这些入口在没有对应稳定后端能力前，不应被当成已完成模块设计。
+路由里仍保留若干占位页，例如 `consciousness`、`providers`、`connection`、`system`。这些入口在没有对应稳定后端能力前，不应被当成已完成模块设计。
+
+视觉设置页只有一个可编辑开关。它不会调用 `getDisplayMedia()`；用户必须回到主页，通过 `VisionInput` 的明确点击选择共享目标。设置页与主页切换不得停止已经活动的 stream。
 
 ## 认证与路由守卫
 
@@ -148,6 +155,7 @@ related_code:
 - 聊天标题与聊天消息
 - 短期记忆或长期记忆
 - 认证 Cookie 或真实访问令牌
+- 视觉截图、MediaStream、Base64、data URL 或“已授权”状态
 
 ## App 级全局元素
 
@@ -184,6 +192,7 @@ related_code:
 2. 后端拥有真相的模块配置，不在前端做第二份长期缓存。
 3. 新设置页必须先有稳定 API 或稳定本地偏好边界，再挂到 `settingsEntry`。
 4. 舞台模式新增控件时，优先复用既有 `chatStore`、`charactersStore` 和 `live2dStore`，不要复制一套页面专用状态机。
+5. 浏览器媒体流必须有跨路由所有者，设置页和展示组件不得在卸载时擅自停止。
 
 ## 相关文档
 
@@ -191,3 +200,4 @@ related_code:
 - [chat-voice-runtime.zh-CN.md](chat-voice-runtime.zh-CN.md)
 - [../../modules/auth/README.zh-CN.md](../../modules/auth/README.zh-CN.md)
 - [../../modules/tts/README.zh-CN.md](../../modules/tts/README.zh-CN.md)
+- [../../modules/vision/README.zh-CN.md](../../modules/vision/README.zh-CN.md)

@@ -100,6 +100,7 @@ def _make_config(characters_dir: Path) -> dict[str, Any]:
                 "l4_compact": "main_pool",
             },
         },
+        "vision": {"provider": {"detail": "high"}},
         "memory": {
             "storage": {"characters_dir": str(characters_dir)},
             "short_term": {
@@ -135,11 +136,19 @@ def _install_stubs(
     PRD 描述的形式。返回共享的 stub LLM，供测试按需断言。
     """
     stub_llm = MagicMock(name="stub_llm")
+    factory_calls: list[tuple[str, dict[str, Any] | None]] = []
+    stub_llm.factory_calls = factory_calls
 
     def _fake_load_persona(character_id: str) -> Persona:
         return _persona_for(character_id)
 
-    def _fake_create_from_role(role: str, llm_config: dict[str, Any]) -> MagicMock:
+    def _fake_create_from_role(
+        role: str,
+        llm_config: dict[str, Any],
+        *,
+        provider_overrides: dict[str, Any] | None = None,
+    ) -> MagicMock:
+        factory_calls.append((role, provider_overrides))
         return stub_llm
 
     def _fake_safe_build_long_term(mem0_config: dict[str, Any]) -> MagicMock | None:
@@ -270,6 +279,21 @@ def test_memory_manager_wired_with_expected_character_and_user(
     assert agent.memory_manager.chat_id == "chat-a"
 
 
+def test_only_chat_role_receives_visual_provider_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_llm = _install_stubs(monkeypatch)
+    ctx = ServiceContext(_make_config(tmp_path))
+
+    agent = ctx.get_or_create_agent("atri", "alice", "chat-a")
+    compression_llm = agent.memory_manager.llm_factory_fn("l3_compress")
+
+    assert compression_llm is stub_llm
+    assert ("chat", {"image_detail": "high"}) in stub_llm.factory_calls
+    assert ("l3_compress", None) in stub_llm.factory_calls
+
+
 def test_agent_builds_when_safe_build_long_term_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -285,9 +309,7 @@ def test_agent_builds_when_safe_build_long_term_returns_none(
     assert agent.memory_manager.long_term is None
 
 
-def test_long_term_failure_is_not_cached(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_long_term_failure_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     long_term = _make_long_term_mock()
     calls = 0
 

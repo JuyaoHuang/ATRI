@@ -25,6 +25,7 @@ asr_config: config/asr_config.yaml
 tts_config: config/tts_config.yaml
 auth_config: config/auth.yaml
 vad_config: config/vad_config.yaml
+vision_config: config/vision_config.yaml
 
 # Reserved for future phases:
 # translate_config: config/translate_config.yaml

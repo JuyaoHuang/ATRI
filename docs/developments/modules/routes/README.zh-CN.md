@@ -25,7 +25,7 @@ Routes 模块负责：
 
 - 把后端能力暴露为 HTTP 路由或 WebSocket 端点。
 - 从 `app.state` 取出共享服务对象，并做请求级依赖注入。
-- 把领域异常映射成 HTTP 状态码或 WebSocket 错误事件。
+- 把领域异常映射成 HTTP 状态码、协议错误或 generation 终态事件。
 
 它不负责：
 
@@ -41,4 +41,5 @@ Routes 模块负责：
 2. `src/app.py`
 3. `src/routes/chats.py`
 4. `src/routes/chat_ws.py`
-5. 交叉核对 `docs/developments/api/`
+5. `src/routes/vision.py`
+6. 交叉核对 `docs/developments/api/`

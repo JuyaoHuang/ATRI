@@ -14,7 +14,7 @@ Reference: docs/LLM调用层设计讨论.md §2.1, §2.3
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from src.llm.interface import LLMInterface
@@ -159,7 +159,12 @@ class LLMFactory:
         return sorted(cls._registry.keys())
 
 
-def create_from_role(role: str, llm_config: dict[str, Any]) -> LLMInterface:
+def create_from_role(
+    role: str,
+    llm_config: dict[str, Any],
+    *,
+    provider_overrides: Mapping[str, Any] | None = None,
+) -> LLMInterface:
     """Create an LLM instance by resolving a role name through the config.
 
     Looks up ``llm_config['llm_roles'][role]`` to get a pool key, then
@@ -171,6 +176,8 @@ def create_from_role(role: str, llm_config: dict[str, Any]) -> LLMInterface:
             (or any key defined in ``llm_roles``).
         llm_config: The ``llm`` section from the merged config (contains
             ``llm_configs`` and ``llm_roles``).
+        provider_overrides: Internal runtime-only provider constructor values.
+            They are not persisted and do not mutate the source config.
 
     Returns:
         A ready-to-use :class:`LLMInterface` instance.
@@ -213,4 +220,8 @@ def create_from_role(role: str, llm_config: dict[str, Any]) -> LLMInterface:
 
     entry = dict(pool[pool_key])
     provider, kwargs = _select_provider_config(str(pool_key), entry)
+    if provider_overrides:
+        runtime_overrides = dict(provider_overrides)
+        _raise_on_unresolved_placeholders(runtime_overrides, "provider_overrides")
+        kwargs = {**kwargs, **runtime_overrides}
     return LLMFactory.create(provider, **kwargs)
