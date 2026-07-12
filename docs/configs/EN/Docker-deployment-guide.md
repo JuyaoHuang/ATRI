@@ -2,9 +2,11 @@
 
 This document describes how to deploy ATRI using Docker. The currently recommended production deployment approach is:
 
-- Backend runs in a Docker container, exposed to the host at `127.0.0.1:8430`.
-- Frontend is built as static files, served by Nginx inside the frontend container, exposed to the host at `127.0.0.1:5200`.
-- Public entry point is handled by the host Nginx for HTTPS, domain, and reverse proxy.
+- The backend runs in Docker and is available only as `backend:8430` on the internal
+  Compose network; it is not published to the host.
+- The frontend is built as static files. Nginx in the frontend container serves the pages and
+  proxies the backend through the unified host entry point at `127.0.0.1:5200`.
+- The host Nginx handles HTTPS and the domain, forwarding all traffic to `127.0.0.1:5200`.
 - Frontend and backend share the same domain, distinguished by path.
 
 Recommended access structure:
@@ -151,7 +153,10 @@ This means the frontend will request:
 /ws
 ```
 
-Therefore, when changing the production domain, you usually don't need to rebuild the frontend image. As long as the host Nginx still forwards `/api/` and `/ws` to the backend.
+Nginx in the frontend container forwards `/api/`, `/ws`, backend static assets, health checks,
+and API documentation to `backend:8430`. Therefore, changing the production domain usually
+does not require rebuilding the frontend image; the host Nginx only needs to keep forwarding the
+unified entry point to `127.0.0.1:5200`.
 
 If you change to different domains for frontend and backend in the future, change the build parameters to full addresses:
 
@@ -205,6 +210,7 @@ docker compose -f docker-compose.prod.yml down
 | `./data` | `/app/data` | Chat records, character memories, avatars, Live2D models, Qdrant local data |
 | `./models` | `/app/models` | ASR and other local model files |
 | `./prompts/persona` | `/app/prompts/persona` | Character persona files |
+| `./config` | `/app/config` | Authentication, ASR, TTS, VAD, vision, and other runtime settings |
 
 These directories are preserved after container rebuild. When backing up project data, prioritize backing up:
 
@@ -236,20 +242,20 @@ Core forwarding rules:
 
 ```nginx
 location /ws {
-    proxy_pass http://127.0.0.1:8430;
+    proxy_pass http://127.0.0.1:5200;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
-}
-
-location /api/ {
-    proxy_pass http://127.0.0.1:8430;
 }
 
 location / {
     proxy_pass http://127.0.0.1:5200;
 }
 ```
+
+The host no longer accesses backend port 8430 directly. After `/api/`, `/static/`, `/health`,
+`/docs`, `/redoc`, `/openapi.json`, and `/ws` reach the frontend container,
+`docker/frontend-nginx.conf` forwards them to `backend:8430` on the Compose network.
 
 Check and reload Nginx:
 
@@ -286,16 +292,23 @@ If frontend code or frontend environment variables were modified, you need to re
 
 ### 11.1 Frontend can open, but API requests fail
 
-Check if the host Nginx forwards `/api/` to the backend:
+Check the public unified entry point:
 
 ```bash
 curl https://your-domain/health
 ```
 
-You can also check the backend directly on the server:
+You can also bypass the host Nginx and check the frontend container's unified entry point:
 
 ```bash
-curl http://127.0.0.1:8430/health
+curl http://127.0.0.1:5200/health
+```
+
+To check the backend directly, run the check inside the Compose network:
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8430/health').read().decode())"
 ```
 
 If the backend is unavailable, check the logs:
@@ -306,7 +319,7 @@ docker compose -f docker-compose.prod.yml logs -f backend
 
 ### 11.2 WebSocket connection fails
 
-Confirm that `/ws` in Nginx has the Upgrade header configured:
+Confirm that `/ws` in both the host and frontend-container Nginx has the Upgrade header configured:
 
 ```nginx
 proxy_http_version 1.1;
@@ -322,7 +335,7 @@ Check if three addresses are consistent:
 
 - `config/auth.yaml`'s `github.callback_url`
 - GitHub OAuth App's Authorization callback URL
-- Host Nginx's `/api/` forwarding rule
+- Frontend-container Nginx's `/api/` forwarding rule
 
 Same-domain production recommendation:
 
@@ -365,6 +378,7 @@ volumes:
   - ./data:/app/data
   - ./models:/app/models
   - ./prompts/persona:/app/prompts/persona
+  - ./config:/app/config
 ```
 
 Don't just back up images. Runtime data is in the host mount directories.

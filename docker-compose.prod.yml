@@ -5,12 +5,13 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
-    ports:
-      - "127.0.0.1:8430:8430"
+    expose:
+      - "8430"
     volumes:
       - ./data:/app/data
       - ./models:/app/models
       - ./prompts/persona:/app/prompts/persona
+      - ./config:/app/config
     restart: unless-stopped
     healthcheck:
       test:
@@ -36,5 +37,5 @@ services:
       - "127.0.0.1:5200:80"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
