@@ -39,6 +39,7 @@
 | TTS 分段流式化长期设计 | [modules/tts/streaming-design.zh-CN.md](modules/tts/streaming-design.zh-CN.md) |
 | Live2D 模块 | [modules/live2d/README.zh-CN.md](modules/live2d/README.zh-CN.md) |
 | Frontend 运行时 | [modules/frontend/README.zh-CN.md](modules/frontend/README.zh-CN.md) |
+| 聊天 Markdown 与 KaTeX 渲染 | [features/2026-07-chat-markdown-rendering/README.zh-CN.md](features/2026-07-chat-markdown-rendering/README.zh-CN.md) |
 | 视觉理解 feature 过程 | [features/2026-07-10-visual-understanding/design-docs.md](features/2026-07-10-visual-understanding/design-docs.md) |
 | TTS 分段流式化 feature 过程 | [features/2026-07-tts-segment-streaming/README.zh-CN.md](features/2026-07-tts-segment-streaming/README.zh-CN.md) |
 | VAD 实时打断 feature 过程 | [features/2026-06-vad-realtime-interrupt/README.zh-CN.md](features/2026-06-vad-realtime-interrupt/README.zh-CN.md) |
