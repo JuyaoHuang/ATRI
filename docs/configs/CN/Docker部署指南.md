@@ -2,9 +2,10 @@
 
 本文说明如何使用 Docker 部署 ATRI。当前推荐的生产部署方式是：
 
-- 后端运行在 Docker 容器中，对宿主机 `127.0.0.1:8430` 暴露。
-- 前端构建为静态文件，由前端容器内的 Nginx 提供服务，对宿主机 `127.0.0.1:5200` 暴露。
-- 公网入口由宿主机 Nginx 负责 HTTPS、域名和反向代理。
+- 后端运行在 Docker 容器中，只在 Compose 内部网络提供 `backend:8430`，不发布到宿主机。
+- 前端构建为静态文件，由前端容器内的 Nginx 提供页面并代理后端，对宿主机
+  `127.0.0.1:5200` 暴露统一入口。
+- 公网入口由宿主机 Nginx 负责 HTTPS 和域名，并统一转发到 `127.0.0.1:5200`。
 - 前后端使用同一个域名，通过路径区分服务。
 
 推荐访问结构：
@@ -151,7 +152,9 @@ args:
 /ws
 ```
 
-因此更换生产域名时，通常不需要重新构建前端镜像。只要宿主机 Nginx 仍然把 `/api/` 和 `/ws` 转发到后端即可。
+前端容器内的 Nginx 会把 `/api/`、`/ws`、后端静态资源、健康检查和 API 文档转发到
+`backend:8430`。因此更换生产域名时，通常不需要重新构建前端镜像；宿主机 Nginx 只需
+继续把统一入口转发到 `127.0.0.1:5200`。
 
 如果未来改成前后端不同域名，再把构建参数改成完整地址：
 
@@ -205,6 +208,7 @@ docker compose -f docker-compose.prod.yml down
 | `./data` | `/app/data` | 聊天记录、角色记忆、头像、Live2D 模型、Qdrant 本地数据 |
 | `./models` | `/app/models` | ASR 等本地模型文件 |
 | `./prompts/persona` | `/app/prompts/persona` | 角色人设文件 |
+| `./config` | `/app/config` | 认证、ASR、TTS、VAD、视觉等运行配置 |
 
 这些目录会在容器重建后保留。备份项目数据时，优先备份：
 
@@ -236,20 +240,20 @@ sudo cp docker/host-nginx.same-domain.conf /etc/nginx/conf.d/atri.conf
 
 ```nginx
 location /ws {
-    proxy_pass http://127.0.0.1:8430;
+    proxy_pass http://127.0.0.1:5200;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
-}
-
-location /api/ {
-    proxy_pass http://127.0.0.1:8430;
 }
 
 location / {
     proxy_pass http://127.0.0.1:5200;
 }
 ```
+
+宿主机不再直接访问后端 8430。`/api/`、`/static/`、`/health`、`/docs`、`/redoc`、
+`/openapi.json` 和 `/ws` 到达前端容器后，再由 `docker/frontend-nginx.conf` 转发到
+Compose 网络内的 `backend:8430`。
 
 检查并重载 Nginx：
 
@@ -286,16 +290,23 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ### 11.1 前端能打开，但接口请求失败
 
-检查宿主机 Nginx 是否把 `/api/` 转发到后端：
+检查公网统一入口：
 
 ```bash
 curl https://你的域名/health
 ```
 
-也可以直接在服务器上检查后端：
+也可以绕过宿主机 Nginx，检查前端容器的统一入口：
 
 ```bash
-curl http://127.0.0.1:8430/health
+curl http://127.0.0.1:5200/health
+```
+
+如需直接检查后端，只在 Compose 网络内执行：
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8430/health').read().decode())"
 ```
 
 如果后端不可用，查看日志：
@@ -306,7 +317,7 @@ docker compose -f docker-compose.prod.yml logs -f backend
 
 ### 11.2 WebSocket 连接失败
 
-确认 Nginx 中 `/ws` 配置了 Upgrade 头：
+确认宿主机和前端容器的 Nginx 中 `/ws` 都配置了 Upgrade 头：
 
 ```nginx
 proxy_http_version 1.1;
@@ -322,7 +333,7 @@ proxy_set_header Connection $connection_upgrade;
 
 - `config/auth.yaml` 的 `github.callback_url`
 - GitHub OAuth App 的 Authorization callback URL
-- 宿主机 Nginx 的 `/api/` 转发规则
+- 前端容器 Nginx 的 `/api/` 转发规则
 
 同域生产环境推荐：
 
@@ -365,6 +376,7 @@ volumes:
   - ./data:/app/data
   - ./models:/app/models
   - ./prompts/persona:/app/prompts/persona
+  - ./config:/app/config
 ```
 
 不要只备份镜像。运行时数据在宿主机挂载目录中。
