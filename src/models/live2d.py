@@ -1,6 +1,6 @@
-"""Live2D API schemas used by Phase 8.
+"""Read-only Live2D catalog API schemas.
 
-Live2D API 数据模式（Phase 8）。
+只读 Live2D 模型目录 API 数据模式。
 """
 
 from __future__ import annotations
@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 
 
 class Live2DModelSummary(BaseModel):
-    """Live2D model summary returned by management endpoints.
+    """Live2D model summary derived from an installed directory.
 
-    管理接口返回的 Live2D 模型摘要。
+    从已安装目录派生的 Live2D 模型摘要。
     """
 
     id: str
@@ -20,7 +20,6 @@ class Live2DModelSummary(BaseModel):
     model_url: str
     thumbnail_url: str | None = None
     expressions: list[str] = Field(default_factory=list)
-    created_at: str
     is_default: bool = False
 
 
@@ -32,12 +31,3 @@ class Live2DExpressionList(BaseModel):
 
     model_id: str
     expressions: list[str] = Field(default_factory=list)
-
-
-class Live2DModelUpdateRequest(BaseModel):
-    """Payload for updating one Live2D model.
-
-    更新单个 Live2D 模型的请求载荷。
-    """
-
-    name: str = Field(..., min_length=1, max_length=120)

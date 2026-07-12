@@ -1,0 +1,3 @@
+# Direct child directory name under data/live2d/models.
+# data/live2d/models 下的直接子目录名。
+default_model: hiyori_free_zh
