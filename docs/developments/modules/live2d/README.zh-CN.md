@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-12
 related_code:
   - src/routes/live2d.py
   - src/storage/live2d_storage.py
@@ -18,8 +18,8 @@ related_code:
 
 | 文档 | 内容 |
 | --- | --- |
-| [design.zh-CN.md](design.zh-CN.md) | Live2D 模块总设计，串起资源管理、前端舞台运行时、表情控制和近期演化边界。 |
-| [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) | 后端模型存储、ZIP 校验、静态资源挂载和 `/api/live2d/models` REST 边界。 |
+| [design.zh-CN.md](design.zh-CN.md) | Live2D 模块总设计，串起管理员目录投放、只读模型目录、前端舞台运行时和表情控制边界。 |
+| [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) | 后端模型目录实时扫描、结构校验、默认模型配置、静态资源挂载和只读 REST 边界。 |
 | [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) | 前端 `live2d` store、Pixi/`pixi-live2d-display` 运行时、OPFS 缓存和本地持久化边界。 |
 | [expression-control.zh-CN.md](expression-control.zh-CN.md) | 当前表情名称来源、前端切换逻辑、消息标签解析和未接通的 LLM 工具边界。 |
 

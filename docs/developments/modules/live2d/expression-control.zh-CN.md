@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-12
 source:
   - docs/developments/module-design/CN/Live-2d设计文档.md
 related_code:
@@ -19,17 +19,19 @@ related_code:
 
 ## 表情名来自哪里
 
-后端上传模型时，会从 `.model3.json` / `.model.json` 的：
+后端每次扫描管理员安装的模型目录时，会从 `.model3.json` / `.model.json` 的：
 
 - `FileReferences.Expressions`
 - 或 `expressions`
 
-里提取表情**名称**，并把结果存进 `metadata.json`，再通过：
+里动态提取表情**名称**，再通过：
 
 - `GET /api/live2d/models`
 - `GET /api/live2d/models/{model_id}/expressions`
 
 返回给前端。
+
+表情名称不写入 `metadata.json` 或其他 sidecar 文件；管理员修改模型目录后，下一次读取会重新派生结果。
 
 当前后端只知道“有哪些表情名”，不知道 `exp3.json` 的参数混合细节，因此它不是表情计算引擎。
 
@@ -113,7 +115,7 @@ LLM 工具集成暂未接通。
 
 这些都**不是**当前仓库已经实现的事实。当前仓库已经实现的是：
 
-1. 后端保存表情名称列表；
+1. 后端从模型设置 JSON 动态返回表情名称列表；
 2. 前端手动单选表情；
 3. 前端从聊天文本里解析 `[expression:...]` 标签并切换表情。
 
@@ -125,5 +127,5 @@ LLM 工具集成暂未接通。
 
 ## 文档关系
 
-- 后端模型 CRUD 和表情名称来源见 [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md)。
+- 后端只读模型目录和表情名称来源见 [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md)。
 - 前端画布、缓存和动作运行时见 [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md)。

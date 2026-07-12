@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-11
+updated: 2026-07-12
 source_documents:
   - ../../module-design/CN/前端设计文档.md
 related_code:
@@ -62,7 +62,7 @@ related_code:
 ### 舞台模式的额外职责
 
 1. 根据窗口宽度微调模型偏移，避免桌面端模型过于居中遮挡聊天区。
-2. 在 `watch(isLive2dMode)` 时重新拉取模型列表，保证设置页刚上传的模型能被首页感知。
+2. 在 `watch(isLive2dMode)` 时重新拉取模型列表，保证管理员刚放入服务器目录的模型能被首页感知。
 3. 让聊天区以浮层方式承载，而不是重建第二套聊天协议。
 
 ### StageChatShell 的设计边界
@@ -84,7 +84,8 @@ related_code:
 
 设置面当前负责：
 
-- 模型选择、上传、重命名、删除。
+- 从后端有效模型列表中选择模型；当没有可用模型时提示联系管理员安装。
+- 开启或关闭 Live2D；普通前端用户不能上传、重命名或删除服务器模型。
 - 首页舞台总开关。
 - 缩放与位置。
 - 待机动作、渲染精度和最大帧率。
@@ -92,7 +93,7 @@ related_code:
 - 运行时表情组与 LLM 暴露策略。
 - 预览帧取色与 OPFS 缓存清理。
 
-模型文件、模型表达列表和静态资源 URL 仍以后端 `live2dApi` 为准；前端只持久化“我怎么展示它”。
+模型目录、模型表达列表、默认模型标记和静态资源 URL 仍以后端只读 `live2dApi` 为准；前端只持久化“我选择并怎么展示它”。本地模型 ID 失效时优先回退到后端有效默认模型；不存在有效默认模型时不隐式选择列表第一项。
 
 ## 设置路由结构
 
@@ -107,7 +108,7 @@ related_code:
 | `/settings/modules/hearing` | ASR provider、设备选择、自动发送、监控与测试 | 模块配置后端拥有，设备选择前端拥有 |
 | `/settings/modules/vision` | 视觉模块唯一持久化开关与当前标签页状态说明 | `enabled` 由后端拥有，MediaStream 由浏览器 controller 拥有 |
 | `/settings/scene` | 背景图、透明度、模糊度 | 前端本地偏好 |
-| `/settings/models` | Live2D 模型与舞台参数 | 模型资源后端拥有，展示参数前端拥有 |
+| `/settings/models` | Live2D 模型选择、开关与舞台参数 | 管理员维护模型目录，后端只读发现，展示参数前端拥有 |
 | `/settings/data` | 聊天删除、短期记忆清理、长期记忆删除提交 | 删除动作通过后端 API 执行 |
 
 路由里仍保留若干占位页，例如 `consciousness`、`providers`、`connection`、`system`。这些入口在没有对应稳定后端能力前，不应被当成已完成模块设计。

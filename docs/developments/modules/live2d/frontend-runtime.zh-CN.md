@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-12
 source:
   - docs/developments/module-design/CN/Live-2d设计文档.md
 related_code:
@@ -52,10 +52,13 @@ related_code:
 
 - 以 `activeModelId` 为主；
 - 如果本地记录的模型不存在，则优先回退到 `isDefault=true` 的模型；
-- 若没有默认模型，则回退到列表第一项；
-- 删除当前模型后，前端重新执行同一套回退逻辑。
+- 若后端没有有效默认模型，则把 `activeModelId` 置为 `null`；
+- 管理员从服务器移除当前模型后，前端在下一次获取列表时重新执行同一套回退逻辑；
+- 不使用列表第一项作为隐式默认值，也不继续加载失效模型的旧 URL。
 
 这说明“当前模型”是浏览器本地语义，不是服务器全局语义。
+
+`enabled` 仍是独立的浏览器偏好。后端默认模型只提供选择回退，不会在首次访问时强制开启 Live2D。
 
 ## 加载链路
 

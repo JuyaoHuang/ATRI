@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-12
 source:
   - ../../module-design/CN/Live-2d设计文档.md
   - src/routes/live2d.py
@@ -28,25 +28,27 @@ related_code:
 
 ## 模块定位
 
-当前 Live2D 不是一个“服务端驱动角色引擎”，而是一个分裂但边界清晰的双端模块：
+当前 Live2D 不是一个“服务端驱动角色引擎”，而是一个边界清晰的双端模块：
 
-- 后端负责模型资源管理和静态资源暴露；
+- 服务器管理员通过文件系统安装和移除模型；
+- 后端只读发现、校验模型目录，并暴露模型摘要和静态资源；
 - 前端负责模型选择、渲染、动作、表情和本地缓存。
 
 这意味着 Live2D 在系统中的位置更接近：
 
 ```text
-后端：模型资源仓库 + CRUD API + 静态文件服务
-前端：舞台运行时 + 用户偏好 + 消息驱动表情
+管理员：data/live2d/models/ 目录维护
+后端：实时模型目录 + 只读 API + 静态文件服务
+前端：模型选择/关闭 + 舞台运行时 + 用户偏好 + 消息驱动表情
 ```
 
 ## 设计目标
 
 结合旧设计文档、当前代码和近期 git log，当前长期目标可以概括为 4 条：
 
-1. 把 Live2D 资源管理和舞台运行时明确拆开。
+1. 把服务器模型安装和普通前端用户的舞台运行时明确拆开。
 2. 让前端可以在不依赖服务端会话状态的情况下独立管理当前模型与舞台参数。
-3. 保持后端模型上传、校验和资源 URL 输出稳定，便于前端长期缓存。
+3. 让标准 Live2D 模型目录无需 ZIP、UUID 包装层或 ATRI `metadata.json` 即可被发现。
 4. 对表情和动作保持“名称级控制”，不把未落地的参数级工具系统写成事实。
 
 ## 模块组成
@@ -55,7 +57,7 @@ related_code:
 
 | 子系统 | 代码 | 职责 |
 | --- | --- | --- |
-| 后端存储与 API | `src/storage/live2d_storage.py` `src/routes/live2d.py` | 模型 ZIP 上传、结构校验、元数据持久化、资源 URL 输出 |
+| 后端目录与 API | `src/storage/live2d_storage.py` `src/routes/live2d.py` | 直接子目录实时扫描、最低加载校验、默认模型标记、资源 URL 输出 |
 | 前端舞台运行时 | `frontend/src/stores/live2d.ts` `frontend/src/components/live2d/Live2DCanvas.vue` | 当前模型、位置、缩放、动作、表情、OPFS 缓存 |
 | 消息驱动表情 | `frontend/src/utils/live2dExpression.ts` + `useWebSocket()` | 从聊天文本中解析 `[expression:...]` 并发出表情请求 |
 
@@ -63,14 +65,16 @@ related_code:
 
 ### 后端拥有的真相
 
-后端当前拥有这些持久化事实：
+后端当前拥有这些目录派生事实：
 
 - 有哪些模型
-- 每个模型的名称
+- 模型目录名对应的 ID 和名称
 - 设置文件路径
 - 缩略图路径
 - 表情名称列表
-- 是否为默认模型
+- 哪个有效目录匹配统一默认模型配置
+
+这些值都从当前文件系统和后端配置生成，不写入每模型元数据文件。
 
 ### 前端拥有的真相
 
@@ -93,16 +97,18 @@ related_code:
 - 服务端动作播放 API
 - 口型同步链路
 - 成熟的 LLM 工具调用表情系统
+- 模型 ZIP 上传、远程重命名或远程删除能力
 
 ## 数据流
 
 当前 Live2D 的稳定数据流是：
 
 ```text
-ZIP upload
-  -> Live2DStorage.save_model()
-  -> metadata.json + extracted files
-  -> GET /api/live2d/models
+administrator copies data/live2d/models/<model_name>/
+  -> GET /api/live2d/models rescans direct child directories
+  -> Live2DStorage validates settings JSON + Moc + textures
+  -> invalid/incomplete directories are warned and skipped
+  -> valid model summaries + static asset URLs
   -> frontend live2d store maps model summaries
   -> Live2DCanvas loads model_url
   -> optional OPFS cache
@@ -122,36 +128,23 @@ assistant text
 
 ## 资源生命周期
 
-### 上传阶段
+### 安装阶段
 
-`Live2DStorage.save_model()` 当前会：
+管理员把原始模型目录直接复制到 `data/live2d/models/`。直接子目录名就是模型 ID 和默认展示名称；模型内部可继续使用 `runtime/` 等原始层级。
 
-1. 验证扩展名和 Content-Type。
-2. 解压 ZIP。
-3. 拒绝危险路径。
-4. 选择最浅层、最短路径的 `.model3.json` / `.model.json`。
-5. 解析表情名称和缩略图。
-6. 生成 `metadata.json`。
+后端不接收 ZIP，也不生成 `live2d-xxxxxxxx` 目录或 `metadata.json`。复制过程不要求原子发布：暂时不完整的目录在扫描时被跳过并记录 `WARNING`，复制完成后由下一次列表请求发现。
 
 ### 默认模型阶段
 
-近期日志里有两次关键演化：
+默认模型使用 `config/live2d_config.yaml` 的 `default_model` 指定。配置值与某个有效直接子目录名完全匹配时，API 才为该模型返回 `is_default=true`。
 
-- `feat: add Live2D model management backend`
-- `feat: add Hiyori model and update Live2D model management`
-
-这两步确认了当前一个稳定事实：
-
-- 默认 Hiyori 导入是“本地开发便利能力”，不是强依赖部署链路；
-- 找不到 AIRI 缓存时，Live2D 后端仍然可以正常工作，只是没有默认模型。
+默认目录缺失或无效时只记录 `WARNING`；后端不会自动选择列表第一项，也不会从 AIRI ZIP 缓存自动导入模型。
 
 ### 删除阶段
 
-删除模型时：
+删除模型由管理员直接删除服务器目录完成。下一次 `GET /api/live2d/models` 不再返回该模型。
 
-- 后端删除整个模型目录；
-- 若删掉的是默认模型，会从剩余模型里重新选默认项；
-- 前端若当前正使用该模型，需要自行回退到新的默认模型或第一项。
+前端若本地选择已失效，回退到有效的后端默认模型；若默认模型也不存在，则清空当前模型并停止渲染，不回退到列表第一项或过期 URL。
 
 ## 前端舞台生命周期
 
@@ -208,7 +201,7 @@ assistant text
 
 - 这两层缓存都属于浏览器本地；
 - 不回写服务端；
-- 清缓存只影响前端加载路径，不影响模型元数据真相。
+- 清缓存只影响前端加载路径，不影响后端模型目录真相。
 
 ## 与旧设计文档的取舍
 
@@ -222,13 +215,20 @@ assistant text
 
 当前仍然成立并被迁移吸收的，是这些骨架：
 
-- 模型资源要走 ZIP 上传和静态文件暴露
+- 模型资源通过后端静态文件边界提供给浏览器
 - 前后端职责必须拆开
 - 前端需要本地持久化舞台偏好
 - 表情控制要能消费聊天链路里的控制信号
 
+以下旧产品方向已明确废止：
+
+- 前端 ZIP 上传
+- 在线模型重命名
+- 远程递归删除模型
+- UUID 包装目录和 ATRI `metadata.json`
+
 ## 文档关系
 
-- [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) 解释后端资源与 CRUD 边界。
+- [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) 解释管理员目录、后端实时发现和只读 API 边界。
 - [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) 解释舞台运行时与 OPFS。
 - [expression-control.zh-CN.md](expression-control.zh-CN.md) 解释表情名称、标签和本地开关。
