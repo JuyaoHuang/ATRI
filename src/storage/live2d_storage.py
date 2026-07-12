@@ -180,6 +180,7 @@ class Live2DStorage:
                     )
                 if not model_dir.is_dir():
                     continue
+                self._validate_model_id(model_dir.name)
                 if model_dir.resolve().parent != root:
                     raise Live2DModelValidationError(
                         "resolved model directory is not a direct child of the models root"
