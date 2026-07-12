@@ -19,7 +19,7 @@ related_code:
 
 ## 表情名来自哪里
 
-后端每次扫描管理员安装的模型目录时，会从 `.model3.json` / `.model.json` 的：
+后端每次扫描管理员安装的模型目录时，会从 `.model3.json` 的：
 
 - `FileReferences.Expressions`
 - 或 `expressions`

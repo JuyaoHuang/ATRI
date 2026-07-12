@@ -98,10 +98,10 @@ data/live2d/models/mao_pro/
 
 ### 设置文件选择
 
-后端在每个直接子目录内递归寻找：
-
-- `.model3.json`；
-- `.model.json`。
+后端在每个直接子目录内递归寻找 `.model3.json`。当前前端只加载
+`pixi-live2d-display/cubism4`，并只随页面提供 Cubism 3/4 Core，因此 Cubism 2
+的 `.model.json` 不会被目录列为可选模型，避免出现“后端判定有效但浏览器必然
+无法渲染”的条目。
 
 若存在多个候选项，按以下顺序确定性选择，并记录 `WARNING`：
 
