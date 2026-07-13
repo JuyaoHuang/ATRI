@@ -118,7 +118,13 @@ def create_app(config: dict) -> FastAPI:
     app.state.vision_service = VisionService(VisionConfigStore(config.get("vision", {})))
     app.state.auth_service = AuthService(config.get("auth", {}))
     app.state.character_storage = CharacterStorage()
-    app.state.live2d_storage = Live2DStorage()
+    live2d_config = config.get("live2d", {})
+    default_live2d_model = (
+        live2d_config.get("default_model") if isinstance(live2d_config, dict) else None
+    )
+    app.state.live2d_storage = Live2DStorage(
+        default_model_id=(default_live2d_model if isinstance(default_live2d_model, str) else None)
+    )
 
     avatar_dir = get_default_character_avatar_dir()
     avatar_dir.mkdir(parents=True, exist_ok=True)

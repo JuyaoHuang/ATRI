@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-09
+updated: 2026-07-13
 related_code:
   - src/routes/live2d.py
   - src/storage/live2d_storage.py
@@ -18,16 +18,16 @@ related_code:
 
 | 文档 | 内容 |
 | --- | --- |
-| [design.zh-CN.md](design.zh-CN.md) | Live2D 模块总设计，串起资源管理、前端舞台运行时、表情控制和近期演化边界。 |
-| [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) | 后端模型存储、ZIP 校验、静态资源挂载和 `/api/live2d/models` REST 边界。 |
-| [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) | 前端 `live2d` store、Pixi/`pixi-live2d-display` 运行时、OPFS 缓存和本地持久化边界。 |
+| [design.zh-CN.md](design.zh-CN.md) | Live2D 模块总设计，串起管理员目录投放、只读模型目录、前端舞台运行时和表情控制边界。 |
+| [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) | 后端模型目录实时扫描、结构校验、默认模型配置、静态资源挂载和只读 REST 边界。 |
+| [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) | 前端 `live2d` store、统一 Canvas、原始运行时对象、后端 URL 直连和本地偏好边界。 |
 | [expression-control.zh-CN.md](expression-control.zh-CN.md) | 当前表情名称来源、前端切换逻辑、消息标签解析和未接通的 LLM 工具边界。 |
 
 ## 阅读顺序
 
 1. 先读 [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md)，确认后端到底维护什么。
 2. 再读 [design.zh-CN.md](design.zh-CN.md)，确认整体职责划分和当前真实能力边界。
-3. 再读 [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md)，确认“当前模型、位置、动作、缓存”都在哪里。
+3. 再读 [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md)，确认当前模型、舞台参数、自动动作交互和浏览器加载链路在哪里维护。
 4. 最后读 [expression-control.zh-CN.md](expression-control.zh-CN.md)，确认表情系统目前是标签驱动和本地 UI 驱动，而不是后端工具系统。
 
 ## 文档关系

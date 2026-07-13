@@ -1,32 +1,18 @@
-"""Live2D management REST API routes.
+"""Read-only Live2D catalog REST API routes.
 
-Live2D 管理 REST API 路由。
+只读 Live2D 模型目录 REST API 路由。
 """
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ..models.live2d import (
-    Live2DExpressionList,
-    Live2DModelSummary,
-    Live2DModelUpdateRequest,
-)
+from ..models.live2d import Live2DExpressionList, Live2DModelSummary
 from ..storage.live2d_storage import (
-    Live2DArchiveValidationError,
     Live2DModelNotFoundError,
+    Live2DModelRecord,
     Live2DStorage,
     Live2DStorageError,
 )
@@ -42,16 +28,33 @@ def get_live2d_storage(request: Request) -> Live2DStorage:
 
     storage = getattr(request.app.state, "live2d_storage", None)
     if storage is None:
-        storage = Live2DStorage()
+        config = getattr(request.app.state, "config", {})
+        live2d_config = config.get("live2d", {}) if isinstance(config, dict) else {}
+        default_model_id = (
+            live2d_config.get("default_model") if isinstance(live2d_config, dict) else None
+        )
+        storage = Live2DStorage(
+            default_model_id=default_model_id if isinstance(default_model_id, str) else None
+        )
         request.app.state.live2d_storage = storage
     return storage
 
 
 Live2DStorageDep = Annotated[Live2DStorage, Depends(get_live2d_storage)]
-ModelArchive = Annotated[UploadFile, File(...)]
 
 
-def _serialize_model(record, request: Request, storage: Live2DStorage) -> Live2DModelSummary:
+def _serialize_model(
+    record: Live2DModelRecord,
+    request: Request,
+    storage: Live2DStorage,
+) -> Live2DModelSummary:
+    thumbnail_url = None
+    if record.thumbnail_path:
+        thumbnail_url = storage.build_asset_url(
+            f"{record.id}/{record.thumbnail_path}", str(request.base_url)
+        )
+        thumbnail_url = f"{thumbnail_url}?preview=1"
+
     return Live2DModelSummary(
         id=record.id,
         name=record.name,
@@ -59,13 +62,8 @@ def _serialize_model(record, request: Request, storage: Live2DStorage) -> Live2D
         model_url=storage.build_asset_url(
             f"{record.id}/{record.model_path}", str(request.base_url)
         ),
-        thumbnail_url=(
-            storage.build_asset_url(f"{record.id}/{record.thumbnail_path}", str(request.base_url))
-            if record.thumbnail_path
-            else None
-        ),
+        thumbnail_url=thumbnail_url,
         expressions=record.expressions,
-        created_at=record.created_at,
         is_default=record.is_default,
     )
 
@@ -73,8 +71,6 @@ def _serialize_model(record, request: Request, storage: Live2DStorage) -> Live2D
 def _handle_live2d_error(error: Exception) -> HTTPException:
     if isinstance(error, Live2DModelNotFoundError):
         return HTTPException(status_code=404, detail=str(error))
-    if isinstance(error, Live2DArchiveValidationError):
-        return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, Live2DStorageError):
         return HTTPException(status_code=400, detail=str(error))
     return HTTPException(status_code=500, detail="Live2D storage operation failed")
@@ -90,27 +86,8 @@ async def list_live2d_models(
     列出所有存储的 Live2D 模型。
     """
 
-    return [_serialize_model(record, request, storage) for record in storage.list_models()]
-
-
-@router.post("", response_model=Live2DModelSummary, status_code=status.HTTP_201_CREATED)
-async def upload_live2d_model(
-    request: Request,
-    model: ModelArchive,
-    storage: Live2DStorageDep,
-    name: str | None = Form(default=None),
-) -> Live2DModelSummary:
-    """Upload and extract a Live2D ZIP archive.
-
-    上传并解压 Live2D ZIP 压缩包。
-    """
-
-    try:
-        record = await storage.save_model(model, name=name)
-    except Exception as error:
-        raise _handle_live2d_error(error) from error
-
-    return _serialize_model(record, request, storage)
+    records = await storage.list_models()
+    return [_serialize_model(record, request, storage) for record in records]
 
 
 @router.get("/{model_id}/expressions", response_model=Live2DExpressionList)
@@ -124,46 +101,8 @@ async def get_live2d_expressions(
     """
 
     try:
-        expressions = storage.list_expressions(model_id)
+        expressions = await storage.list_expressions(model_id)
     except Exception as error:
         raise _handle_live2d_error(error) from error
 
     return Live2DExpressionList(model_id=model_id, expressions=expressions)
-
-
-@router.put("/{model_id}", response_model=Live2DModelSummary)
-async def update_live2d_model(
-    model_id: str,
-    payload: Live2DModelUpdateRequest,
-    request: Request,
-    storage: Live2DStorageDep,
-) -> Live2DModelSummary:
-    """Update mutable Live2D model metadata.
-
-    更新 Live2D 模型的可变元数据。
-    """
-
-    try:
-        record = storage.update_model(model_id, name=payload.name)
-    except Exception as error:
-        raise _handle_live2d_error(error) from error
-
-    return _serialize_model(record, request, storage)
-
-
-@router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_live2d_model(
-    model_id: str,
-    storage: Live2DStorageDep,
-) -> Response:
-    """Delete one Live2D model directory.
-
-    删除单个 Live2D 模型目录。
-    """
-
-    try:
-        storage.delete_model(model_id)
-    except Exception as error:
-        raise _handle_live2d_error(error) from error
-
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

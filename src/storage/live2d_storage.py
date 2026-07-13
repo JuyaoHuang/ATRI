@@ -1,65 +1,56 @@
-"""Live2D model storage backed by extracted ZIP archives.
+"""Read-only Live2D model catalog backed by administrator-managed folders.
 
-基于解压 ZIP 归档的 Live2D 模型存储。
+基于管理员维护目录的只读 Live2D 模型目录。
 """
 
 from __future__ import annotations
 
-import io
+import asyncio
 import json
-import shutil
-import zipfile
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
 from urllib.parse import quote
-from uuid import uuid4
 
-from fastapi import UploadFile
 from loguru import logger
 
-DEFAULT_HIYORI_NAME = "Hiyori (Free)"
-ALLOWED_ZIP_CONTENT_TYPES = {
-    "application/zip",
-    "application/x-zip-compressed",
-    "application/octet-stream",
-}
-
 _ATRI_ROOT = Path(__file__).resolve().parents[2]
-_WORKSPACE_ROOT = _ATRI_ROOT.parent
 _DEFAULT_LIVE2D_ROOT_DIR = _ATRI_ROOT / "data" / "live2d"
 _DEFAULT_LIVE2D_MODELS_DIR = _DEFAULT_LIVE2D_ROOT_DIR / "models"
-_DEFAULT_AIRI_HIYORI_ARCHIVE = (
-    _WORKSPACE_ROOT / "airi" / ".cache" / "live2d" / "models" / "hiyori_free_zh.zip"
-)
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+_OPTIONAL_FILE_REFERENCE_KEYS = ("Physics", "Pose", "DisplayInfo", "UserData")
 
 
 class Live2DStorageError(Exception):
-    """Base exception for Live2D storage operations.
+    """Base exception for Live2D catalog operations.
 
-    Live2D 存储操作的基异常。
+    Live2D 模型目录操作的基异常。
     """
 
 
 class Live2DModelNotFoundError(Live2DStorageError):
-    """Raised when a model directory or metadata file is missing.
+    """Raised when a requested model is missing or invalid.
 
-    当模型目录或元数据文件缺失时抛出。
+    请求的模型缺失或无效时抛出。
     """
 
 
-class Live2DArchiveValidationError(Live2DStorageError):
-    """Raised when an uploaded archive is invalid.
+class Live2DModelValidationError(Live2DStorageError):
+    """Raised when an installed model cannot be loaded safely.
 
-    当上传的归档无效时抛出。
+    已安装模型无法安全加载时抛出。
     """
+
+
+class _OptionalReferenceMissing(Live2DModelValidationError):
+    """Internal signal for a missing non-essential model resource."""
 
 
 @dataclass(frozen=True)
 class Live2DModelRecord:
-    """Stored Live2D model metadata.
+    """Live2D model metadata derived from one direct child directory.
 
-    存储的 Live2D 模型元数据。
+    从一个直接子目录动态派生的 Live2D 模型元数据。
     """
 
     id: str
@@ -67,7 +58,6 @@ class Live2DModelRecord:
     model_path: str
     thumbnail_path: str | None
     expressions: list[str]
-    created_at: str
     is_default: bool
 
 
@@ -89,331 +79,519 @@ def get_default_live2d_models_dir() -> Path:
     return _DEFAULT_LIVE2D_MODELS_DIR
 
 
-def _now_iso_z() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+def _is_settings_path(path: Path) -> bool:
+    name = path.name.casefold()
+    return name.endswith(".model3.json") or name.endswith(".model.json")
 
 
-def _is_settings_path(path: str) -> bool:
-    return (path.endswith(".model3.json") or path.endswith(".model.json")) and not path.endswith(
-        "items_pinned_to_model.json"
+def _is_cubism3_settings_path(path: Path) -> bool:
+    return path.name.casefold().endswith(".model3.json")
+
+
+def _relative_sort_key(path: Path, root: Path) -> tuple[int, int, str, str]:
+    relative_path = path.relative_to(root).as_posix()
+    return (
+        len(PurePosixPath(relative_path).parts),
+        len(relative_path),
+        relative_path.casefold(),
+        relative_path,
     )
 
 
-def _normalize_archive_path(raw_name: str) -> Path:
-    normalized = raw_name.replace("\\", "/").strip("/")
-    if not normalized:
-        raise Live2DArchiveValidationError("Archive contains an empty file path")
-    return Path(*PurePosixPath(normalized).parts)
+def _settings_sort_key(path: Path, root: Path) -> tuple[int, int, int, str, str]:
+    """Prefer Cubism 3/4 settings, then apply deterministic path ordering."""
+
+    runtime_priority = 0 if _is_cubism3_settings_path(path) else 1
+    return (runtime_priority, *_relative_sort_key(path, root))
 
 
-def _derive_model_name(filename: str) -> str:
-    stem = Path(filename).stem.strip()
-    if not stem:
-        return "Live2D Model"
-    return stem.replace("_", " ").replace("-", " ").strip()
+def _has_control_characters(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
 
 
 class Live2DStorage:
-    """Read and write Live2D models from extracted ZIP archives.
+    """Discover and validate administrator-installed Live2D model folders.
 
-    从解压的 ZIP 归档中读写 Live2D 模型。
+    发现并校验由管理员安装的 Live2D 模型目录。
     """
 
-    def __init__(self, models_dir: Path | None = None, *, seed_default: bool | None = None) -> None:
-        """Initialize the Live2D storage with an optional models directory.
+    def __init__(
+        self,
+        models_dir: Path | None = None,
+        *,
+        default_model_id: str | None = None,
+    ) -> None:
+        """Initialize a read-only catalog rooted at ``models_dir``.
 
-        使用可选的模型目录初始化 Live2D 存储。
+        使用 ``models_dir`` 初始化只读模型目录。
         """
+
         self.models_dir = models_dir or get_default_live2d_models_dir()
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.seed_default = (
-            self.models_dir == get_default_live2d_models_dir()
-            if seed_default is None
-            else seed_default
-        )
-        self._default_seed_attempted = False
-
-    def list_models(self) -> list[Live2DModelRecord]:
-        """List all available Live2D models.
-
-        列出所有可用的 Live2D 模型。
-        """
-
-        self.ensure_default_model()
-        records = [
-            self.get_model(path.name) for path in sorted(self.models_dir.iterdir()) if path.is_dir()
-        ]
-        return sorted(
-            records, key=lambda record: (not record.is_default, record.name.casefold(), record.id)
+        self.default_model_id = (
+            default_model_id.strip()
+            if isinstance(default_model_id, str) and default_model_id.strip()
+            else None
         )
 
-    def get_model(self, model_id: str) -> Live2DModelRecord:
-        """Load one Live2D model metadata record.
+    async def list_models(self) -> list[Live2DModelRecord]:
+        """Rescan and return all currently valid Live2D models.
 
-        加载单个 Live2D 模型的元数据记录。
+        重新扫描并返回当前所有有效的 Live2D 模型。
         """
 
-        model_dir = self._model_dir(model_id)
-        metadata_path = model_dir / "metadata.json"
-        if not metadata_path.is_file():
-            raise Live2DModelNotFoundError(f"Live2D model '{model_id}' not found")
+        return await asyncio.to_thread(self._list_models)
 
-        data = json.loads(metadata_path.read_text(encoding="utf-8"))
-        return Live2DModelRecord(
-            id=data["id"],
-            name=data["name"],
-            model_path=data["model_path"],
-            thumbnail_path=data.get("thumbnail_path"),
-            expressions=list(data.get("expressions", [])),
-            created_at=data["created_at"],
-            is_default=bool(data.get("is_default", False)),
-        )
+    async def get_model(self, model_id: str) -> Live2DModelRecord:
+        """Rescan and return one valid Live2D model.
 
-    async def save_model(
-        self, archive: UploadFile, *, name: str | None = None
-    ) -> Live2DModelRecord:
-        """Persist an uploaded Live2D ZIP archive.
-
-        持久化上传的 Live2D ZIP 归档。
+        重新扫描并返回一个有效的 Live2D 模型。
         """
 
-        archive_name = archive.filename or "live2d-model.zip"
-        if Path(archive_name).suffix.lower() != ".zip":
-            raise Live2DArchiveValidationError("Only ZIP archives are supported for Live2D models")
+        return await asyncio.to_thread(self._get_model, model_id)
 
-        if archive.content_type and archive.content_type not in ALLOWED_ZIP_CONTENT_TYPES:
-            raise Live2DArchiveValidationError("Unsupported Live2D archive content type")
+    async def list_expressions(self, model_id: str) -> list[str]:
+        """Return expression names dynamically derived from one model.
 
-        payload = await archive.read()
-        if not payload:
-            raise Live2DArchiveValidationError("Uploaded Live2D archive is empty")
-
-        return self._save_archive_bytes(payload, archive_name, name=name)
-
-    def delete_model(self, model_id: str) -> None:
-        """Delete a stored Live2D model.
-
-        删除已存储的 Live2D 模型。
+        返回从指定模型动态派生的表情名称。
         """
 
-        record = self.get_model(model_id)
-        model_dir = self._model_dir(record.id)
-        shutil.rmtree(model_dir)
-
-        if record.is_default:
-            remaining = self.list_models()
-            if remaining:
-                replacement = remaining[0]
-                self._write_metadata(
-                    Live2DModelRecord(
-                        id=replacement.id,
-                        name=replacement.name,
-                        model_path=replacement.model_path,
-                        thumbnail_path=replacement.thumbnail_path,
-                        expressions=replacement.expressions,
-                        created_at=replacement.created_at,
-                        is_default=True,
-                    )
-                )
-
-    def update_model(self, model_id: str, *, name: str) -> Live2DModelRecord:
-        """Update mutable model metadata.
-
-        更新可变的模型元数据。
-        """
-
-        record = self.get_model(model_id)
-        next_name = name.strip()
-        if not next_name:
-            raise Live2DStorageError("Live2D model name cannot be empty")
-
-        next_record = Live2DModelRecord(
-            id=record.id,
-            name=next_name,
-            model_path=record.model_path,
-            thumbnail_path=record.thumbnail_path,
-            expressions=record.expressions,
-            created_at=record.created_at,
-            is_default=record.is_default,
-        )
-        self._write_metadata(next_record)
-        return next_record
-
-    def list_expressions(self, model_id: str) -> list[str]:
-        """Return the model's available expression names.
-
-        返回模型可用的表情名称列表。
-        """
-
-        return self.get_model(model_id).expressions
+        return (await self.get_model(model_id)).expressions
 
     def build_asset_url(self, relative_path: str, base_url: str) -> str:
-        """Build an absolute asset URL for a stored Live2D file.
+        """Build an absolute asset URL for an installed Live2D file.
 
-        为存储的 Live2D 文件构建绝对资源 URL。
+        为已安装的 Live2D 文件构建绝对资源 URL。
         """
 
         clean_base = base_url.rstrip("/")
-        return f"{clean_base}/api/assets/live2d/{quote(relative_path)}"
+        return f"{clean_base}/api/assets/live2d/{quote(relative_path, safe='/')}"
 
-    def ensure_default_model(self) -> None:
-        """Best-effort seed of AIRI's cached Hiyori model for local development.
+    def _list_models(self) -> list[Live2DModelRecord]:
+        records: list[Live2DModelRecord] = []
+        root = self.models_dir.resolve()
 
-        尽力从 AIRI 缓存中导入 Hiyori 模型，用于本地开发。
-        """
-
-        if not self.seed_default or self._default_seed_attempted:
-            return
-        self._default_seed_attempted = True
-        if any(path.is_dir() for path in self.models_dir.iterdir()):
-            return
-        if not _DEFAULT_AIRI_HIYORI_ARCHIVE.is_file():
-            return
-
-        logger.info(
-            "Seeding default Live2D model from AIRI cache | archive={}",
-            _DEFAULT_AIRI_HIYORI_ARCHIVE,
-        )
         try:
-            self._save_archive_bytes(
-                _DEFAULT_AIRI_HIYORI_ARCHIVE.read_bytes(),
-                _DEFAULT_AIRI_HIYORI_ARCHIVE.name,
-                name=DEFAULT_HIYORI_NAME,
-                force_default=True,
+            children = sorted(
+                self.models_dir.iterdir(),
+                key=lambda path: (path.name.casefold(), path.name),
             )
-        except Exception as error:  # noqa: BLE001
-            logger.warning("Failed to seed default Live2D model | error={!r}", error)
-
-    def _save_archive_bytes(
-        self,
-        payload: bytes,
-        archive_name: str,
-        *,
-        name: str | None = None,
-        force_default: bool = False,
-    ) -> Live2DModelRecord:
-        model_id = f"live2d-{uuid4().hex[:8]}"
-        model_dir = self._model_dir(model_id)
-        model_dir.mkdir(parents=True, exist_ok=False)
-
-        try:
-            settings_path, preview_path, expressions = self._extract_archive(payload, model_dir)
-            record = Live2DModelRecord(
-                id=model_id,
-                name=(name or _derive_model_name(archive_name)).strip() or "Live2D Model",
-                model_path=settings_path,
-                thumbnail_path=preview_path,
-                expressions=expressions,
-                created_at=_now_iso_z(),
-                is_default=force_default
-                or not any(
-                    path.is_dir() for path in self.models_dir.iterdir() if path.name != model_id
-                ),
-            )
-            if record.is_default:
-                self._clear_default_flags()
-            self._write_metadata(record)
-            logger.info("Live2D model saved | id={} | name={}", record.id, record.name)
-            return record
-        except Exception:
-            shutil.rmtree(model_dir, ignore_errors=True)
-            raise
-
-    def _extract_archive(
-        self,
-        payload: bytes,
-        model_dir: Path,
-    ) -> tuple[str, str | None, list[str]]:
-        try:
-            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                file_names = [name for name in archive.namelist() if not name.endswith("/")]
-                settings_candidates = [name for name in file_names if _is_settings_path(name)]
-                if not settings_candidates:
-                    raise Live2DArchiveValidationError(
-                        "Live2D archive must contain a .model3.json or .model.json file"
-                    )
-
-                for info in archive.infolist():
-                    if info.is_dir():
-                        continue
-                    relative_path = _normalize_archive_path(info.filename)
-                    target_path = (model_dir / relative_path).resolve()
-                    if not str(target_path).startswith(str(model_dir.resolve())):
-                        raise Live2DArchiveValidationError("Archive contains an unsafe file path")
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(info) as source, target_path.open("wb") as target:
-                        shutil.copyfileobj(source, target)
-        except Live2DArchiveValidationError:
-            raise
-        except zipfile.BadZipFile as error:
-            raise Live2DArchiveValidationError(
-                "Uploaded file is not a valid ZIP archive"
+        except OSError as error:
+            raise Live2DStorageError(
+                f"Unable to scan Live2D models directory '{self.models_dir}': {error}"
             ) from error
 
-        settings_candidates.sort(key=lambda item: (item.count("/"), len(item)))
-        settings_relative_path = _normalize_archive_path(settings_candidates[0]).as_posix()
-        settings_file = model_dir / settings_relative_path
-        if not settings_file.is_file():
-            raise Live2DArchiveValidationError("Live2D settings file could not be extracted")
-
-        expressions = self._parse_expressions(settings_file)
-        preview_relative_path = self._find_preview_path(model_dir)
-        return settings_relative_path, preview_relative_path, expressions
-
-    def _parse_expressions(self, settings_file: Path) -> list[str]:
-        data = json.loads(settings_file.read_text(encoding="utf-8"))
-        file_references = data.get("FileReferences", {})
-        expressions = file_references.get("Expressions") or data.get("expressions") or []
-        names = [
-            name
-            for item in expressions
-            if isinstance(item, dict)
-            for name in [item.get("Name")]
-            if isinstance(name, str) and name
-        ]
-        return sorted(dict.fromkeys(names))
-
-    def _find_preview_path(self, model_dir: Path) -> str | None:
-        preview_candidates = sorted(model_dir.rglob("preview.png"))
-        if preview_candidates:
-            return preview_candidates[0].relative_to(model_dir).as_posix()
-
-        image_candidates = sorted(
-            path
-            for path in model_dir.rglob("*")
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-        )
-        if image_candidates:
-            return image_candidates[0].relative_to(model_dir).as_posix()
-        return None
-
-    def _clear_default_flags(self) -> None:
-        for path in self.models_dir.iterdir():
-            metadata_path = path / "metadata.json"
-            if not metadata_path.is_file():
-                continue
-            data = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if data.get("is_default"):
-                data["is_default"] = False
-                metadata_path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        for model_dir in children:
+            try:
+                if model_dir.is_symlink():
+                    raise Live2DModelValidationError(
+                        "symbolic-link model directories are not allowed"
+                    )
+                if not model_dir.is_dir():
+                    continue
+                self._validate_model_id(model_dir.name)
+                if model_dir.resolve().parent != root:
+                    raise Live2DModelValidationError(
+                        "resolved model directory is not a direct child of the models root"
+                    )
+                records.append(self._scan_model(model_dir))
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Skipping invalid Live2D model directory | directory={} | reason={}",
+                    model_dir,
+                    str(error) or repr(error),
                 )
 
-    def _write_metadata(self, record: Live2DModelRecord) -> None:
-        metadata_path = self._model_dir(record.id) / "metadata.json"
-        metadata_path.write_text(
-            json.dumps(asdict(record), ensure_ascii=False, indent=2), encoding="utf-8"
+        if self.default_model_id and not any(
+            record.id == self.default_model_id for record in records
+        ):
+            logger.warning(
+                "Configured default Live2D model is unavailable | directory={} | reason={}",
+                self.models_dir / self.default_model_id,
+                "configured directory is missing or invalid",
+            )
+
+        return sorted(
+            records,
+            key=lambda record: (
+                not record.is_default,
+                record.name.casefold(),
+                record.name,
+                record.id,
+            ),
         )
 
+    def _get_model(self, model_id: str) -> Live2DModelRecord:
+        model_dir = self._model_dir(model_id)
+        try:
+            return self._scan_model(model_dir)
+        except Live2DModelValidationError as error:
+            logger.warning(
+                "Requested Live2D model is invalid | directory={} | reason={}",
+                model_dir,
+                str(error),
+            )
+            raise Live2DModelNotFoundError(f"Live2D model '{model_id}' is unavailable") from error
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning(
+                "Requested Live2D model could not be scanned | directory={} | reason={}",
+                model_dir,
+                str(error),
+            )
+            raise Live2DModelNotFoundError(f"Live2D model '{model_id}' is unavailable") from error
+
+    def _scan_model(self, model_dir: Path) -> Live2DModelRecord:
+        settings_candidates = self._find_settings_candidates(model_dir)
+        if not settings_candidates:
+            raise Live2DModelValidationError(
+                "no .model3.json or .model.json settings file was found"
+            )
+
+        settings_file = settings_candidates[0]
+        if len(settings_candidates) > 1:
+            logger.warning(
+                "Multiple Live2D settings files found; using deterministic first candidate "
+                "| directory={} | selected={} | count={}",
+                model_dir,
+                settings_file.relative_to(model_dir).as_posix(),
+                len(settings_candidates),
+            )
+
+        data = self._read_settings(settings_file)
+        is_cubism3 = _is_cubism3_settings_path(settings_file)
+        if is_cubism3:
+            file_references = data.get("FileReferences")
+            if not isinstance(file_references, dict):
+                raise Live2DModelValidationError("FileReferences must be a JSON object")
+            moc_reference = file_references.get("Moc")
+            texture_references = file_references.get("Textures")
+            moc_label = "FileReferences.Moc"
+            textures_label = "FileReferences.Textures"
+        else:
+            file_references = {}
+            moc_reference = data.get("model")
+            texture_references = data.get("textures")
+            moc_label = "model"
+            textures_label = "textures"
+
+        self._resolve_reference(
+            model_dir,
+            settings_file.parent,
+            moc_reference,
+            label=moc_label,
+            required=True,
+        )
+
+        if not isinstance(texture_references, list) or not texture_references:
+            raise Live2DModelValidationError(
+                f"{textures_label} must contain at least one texture path"
+            )
+        for index, texture_reference in enumerate(texture_references):
+            self._resolve_reference(
+                model_dir,
+                settings_file.parent,
+                texture_reference,
+                label=f"{textures_label}[{index}]",
+                required=True,
+            )
+
+        expressions = self._parse_expressions(
+            data,
+            file_references,
+            model_dir,
+            settings_file.parent,
+            is_cubism3=is_cubism3,
+        )
+        self._validate_optional_references(
+            data,
+            file_references,
+            model_dir,
+            settings_file.parent,
+            is_cubism3=is_cubism3,
+        )
+
+        model_path = settings_file.relative_to(model_dir).as_posix()
+        thumbnail_path = self._find_preview_path(model_dir)
+        return Live2DModelRecord(
+            id=model_dir.name,
+            name=model_dir.name,
+            model_path=model_path,
+            thumbnail_path=thumbnail_path,
+            expressions=expressions,
+            is_default=model_dir.name == self.default_model_id,
+        )
+
+    def _find_settings_candidates(self, model_dir: Path) -> list[Path]:
+        root = model_dir.resolve()
+        candidates: list[Path] = []
+        for path in model_dir.rglob("*"):
+            try:
+                if path.is_symlink() or not path.is_file() or not _is_settings_path(path):
+                    continue
+                path.resolve().relative_to(root)
+            except (OSError, ValueError):
+                continue
+            candidates.append(path)
+        return sorted(candidates, key=lambda path: _settings_sort_key(path, model_dir))
+
+    def _read_settings(self, settings_file: Path) -> dict[str, Any]:
+        try:
+            data = json.loads(settings_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise Live2DModelValidationError(
+                f"settings file '{settings_file.name}' is not valid UTF-8 JSON: {error}"
+            ) from error
+        if not isinstance(data, dict):
+            raise Live2DModelValidationError("model settings JSON must be an object")
+        return data
+
+    def _parse_expressions(
+        self,
+        data: dict[str, Any],
+        file_references: dict[str, Any],
+        model_dir: Path,
+        settings_dir: Path,
+        *,
+        is_cubism3: bool,
+    ) -> list[str]:
+        expressions = (
+            file_references.get("Expressions", []) if is_cubism3 else data.get("expressions", [])
+        )
+        if not isinstance(expressions, list):
+            logger.warning(
+                "Ignoring invalid Live2D expression list | directory={} | reason={}",
+                model_dir,
+                "Expressions is not an array",
+            )
+            return []
+
+        names: list[str] = []
+        for index, item in enumerate(expressions):
+            if not isinstance(item, dict):
+                logger.warning(
+                    "Ignoring invalid Live2D expression entry | directory={} | reason={}",
+                    model_dir,
+                    f"Expressions[{index}] is not an object",
+                )
+                continue
+
+            name = item.get("Name") or item.get("name")
+            file_reference = item.get("File") or item.get("file")
+            if not isinstance(name, str) or not name.strip():
+                logger.warning(
+                    "Ignoring unnamed Live2D expression | directory={} | reason={}",
+                    model_dir,
+                    f"Expressions[{index}] has no name",
+                )
+                continue
+
+            try:
+                self._resolve_reference(
+                    model_dir,
+                    settings_dir,
+                    file_reference,
+                    label=f"Expressions[{index}].File",
+                    required=False,
+                )
+            except _OptionalReferenceMissing as error:
+                logger.warning(
+                    "Ignoring unavailable Live2D expression | directory={} | reason={}",
+                    model_dir,
+                    str(error),
+                )
+                continue
+            names.append(name.strip())
+
+        return sorted(set(names), key=lambda name: (name.casefold(), name))
+
+    def _validate_optional_references(
+        self,
+        data: dict[str, Any],
+        file_references: dict[str, Any],
+        model_dir: Path,
+        settings_dir: Path,
+        *,
+        is_cubism3: bool,
+    ) -> None:
+        for key in _OPTIONAL_FILE_REFERENCE_KEYS:
+            value = file_references.get(key) if is_cubism3 else data.get(key.casefold())
+            if value is None:
+                continue
+            label = f"FileReferences.{key}" if is_cubism3 else key.casefold()
+            self._warn_if_optional_reference_missing(
+                model_dir,
+                settings_dir,
+                value,
+                label=label,
+            )
+
+        motions = file_references.get("Motions") if is_cubism3 else data.get("motions")
+        if motions is None:
+            return
+        if not isinstance(motions, dict):
+            logger.warning(
+                "Ignoring invalid Live2D motions map | directory={} | reason={}",
+                model_dir,
+                "Motions is not an object",
+            )
+            return
+
+        motions_label = "FileReferences.Motions" if is_cubism3 else "motions"
+        for group, entries in motions.items():
+            if not isinstance(entries, list):
+                logger.warning(
+                    "Ignoring invalid Live2D motion group | directory={} | reason={}",
+                    model_dir,
+                    f"{motions_label}.{group} is not an array",
+                )
+                continue
+            for index, item in enumerate(entries):
+                value = item.get("File") or item.get("file") if isinstance(item, dict) else item
+                self._warn_if_optional_reference_missing(
+                    model_dir,
+                    settings_dir,
+                    value,
+                    label=f"{motions_label}.{group}[{index}].File",
+                )
+
+    def _warn_if_optional_reference_missing(
+        self,
+        model_dir: Path,
+        settings_dir: Path,
+        value: Any,
+        *,
+        label: str,
+    ) -> None:
+        try:
+            self._resolve_reference(
+                model_dir,
+                settings_dir,
+                value,
+                label=label,
+                required=False,
+            )
+        except _OptionalReferenceMissing as error:
+            logger.warning(
+                "Optional Live2D resource is unavailable | directory={} | reason={}",
+                model_dir,
+                str(error),
+            )
+
+    def _resolve_reference(
+        self,
+        model_dir: Path,
+        settings_dir: Path,
+        raw_reference: Any,
+        *,
+        label: str,
+        required: bool,
+    ) -> Path:
+        if not isinstance(raw_reference, str) or not raw_reference.strip():
+            error_message = f"{label} must be a non-empty relative path"
+            if required:
+                raise Live2DModelValidationError(error_message)
+            raise _OptionalReferenceMissing(error_message)
+
+        reference = raw_reference.strip()
+        normalized = reference.replace("\\", "/")
+        posix_path = PurePosixPath(normalized)
+        windows_path = PureWindowsPath(reference)
+        if (
+            _has_control_characters(reference)
+            or posix_path.is_absolute()
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
+            or ".." in posix_path.parts
+        ):
+            raise Live2DModelValidationError(f"{label} contains an unsafe path: {raw_reference!r}")
+
+        parts = tuple(part for part in posix_path.parts if part not in {"", "."})
+        if not parts:
+            error_message = f"{label} must reference a file"
+            if required:
+                raise Live2DModelValidationError(error_message)
+            raise _OptionalReferenceMissing(error_message)
+
+        model_root = model_dir.resolve()
+        target = settings_dir.joinpath(*parts)
+        resolved_target = target.resolve(strict=False)
+        try:
+            resolved_target.relative_to(model_root)
+        except ValueError as error:
+            raise Live2DModelValidationError(
+                f"{label} resolves outside the model directory: {raw_reference!r}"
+            ) from error
+
+        if not resolved_target.is_file():
+            error_message = f"{label} file does not exist: {raw_reference!r}"
+            if required:
+                raise Live2DModelValidationError(error_message)
+            raise _OptionalReferenceMissing(error_message)
+        return resolved_target
+
+    def _find_preview_path(self, model_dir: Path) -> str | None:
+        root = model_dir.resolve()
+        image_candidates: list[Path] = []
+        for path in model_dir.rglob("*"):
+            try:
+                if (
+                    path.is_symlink()
+                    or not path.is_file()
+                    or path.suffix.casefold() not in _IMAGE_SUFFIXES
+                ):
+                    continue
+                path.resolve().relative_to(root)
+            except (OSError, ValueError):
+                continue
+            image_candidates.append(path)
+
+        ordered = sorted(
+            image_candidates,
+            key=lambda path: _relative_sort_key(path, model_dir),
+        )
+        preview_candidates = [path for path in ordered if path.name.casefold() == "preview.png"]
+        selected = (preview_candidates or ordered)[0] if ordered else None
+        return selected.relative_to(model_dir).as_posix() if selected else None
+
     def _model_dir(self, model_id: str) -> Path:
-        return self.models_dir / model_id
+        self._validate_model_id(model_id)
+        model_dir = self.models_dir / model_id
+        try:
+            if model_dir.is_symlink() or not model_dir.is_dir():
+                raise Live2DModelNotFoundError(f"Live2D model '{model_id}' not found")
+            if model_dir.resolve().parent != self.models_dir.resolve():
+                raise Live2DModelNotFoundError(f"Live2D model '{model_id}' not found")
+        except OSError as error:
+            raise Live2DModelNotFoundError(f"Live2D model '{model_id}' not found") from error
+        return model_dir
+
+    @staticmethod
+    def _validate_model_id(model_id: str) -> None:
+        if (
+            not isinstance(model_id, str)
+            or not model_id
+            or model_id in {".", ".."}
+            or "/" in model_id
+            or "\\" in model_id
+            or _has_control_characters(model_id)
+        ):
+            raise Live2DModelNotFoundError("Invalid Live2D model id")
+
+        posix_path = PurePosixPath(model_id)
+        windows_path = PureWindowsPath(model_id)
+        if (
+            posix_path.is_absolute()
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
+            or len(posix_path.parts) != 1
+        ):
+            raise Live2DModelNotFoundError("Invalid Live2D model id")
 
 
 __all__ = [
-    "DEFAULT_HIYORI_NAME",
-    "Live2DArchiveValidationError",
     "Live2DModelNotFoundError",
     "Live2DModelRecord",
+    "Live2DModelValidationError",
     "Live2DStorage",
     "Live2DStorageError",
     "get_default_live2d_models_dir",

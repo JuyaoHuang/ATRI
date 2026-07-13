@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-12
+updated: 2026-07-13
 source:
   - ../../module-design/CN/前端设计文档.md
   - ../../features/2026-07-frontend-websocket-session-refactor/README.zh-CN.md
@@ -39,7 +39,7 @@ related_code:
 | 类别 | 典型 store / 对象 | 真相来源 |
 | --- | --- | --- |
 | 业务投影 | `chat` `chats` `characters` `user` `asr` `tts` `vision.config` | 后端 REST / WebSocket |
-| 浏览器偏好 | `live2d` `settings` `user.settings` 局部字段 | `localStorage` / OPFS |
+| 浏览器偏好 | `live2d` `settings` `user.settings` 局部字段 | `localStorage` |
 | 运行时会话 | `websocketSessionController`、`visionSessionController`、`chat.activeStream` | 页面生命周期内的内存状态 |
 
 长期原则：
@@ -132,10 +132,9 @@ related_code:
 - 是否启用舞台；
 - 当前模型 ID；
 - 位置、缩放、FPS、render scale；
-- 动作、表情、LLM 暴露模式；
-- OPFS 缓存版本。
+- 表情开关、默认表情和 LLM 暴露模式。
 
-这里保存的是“如何展示模型”，不是“模型资源真相”。模型列表和表达列表仍来自后端 API。
+这里保存的是“如何展示模型”，不是“模型资源真相”。模型列表和表情列表仍来自后端 API。动作定义、当前动作和第三方运行时实例不进入 store；模型原生 Idle 与点击动作由画布运行时内部处理。模型文件直接使用后端 URL，并复用浏览器标准 HTTP 缓存。
 
 ### `settings` store
 
