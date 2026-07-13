@@ -48,6 +48,13 @@ def _serialize_model(
     request: Request,
     storage: Live2DStorage,
 ) -> Live2DModelSummary:
+    thumbnail_url = None
+    if record.thumbnail_path:
+        thumbnail_url = storage.build_asset_url(
+            f"{record.id}/{record.thumbnail_path}", str(request.base_url)
+        )
+        thumbnail_url = f"{thumbnail_url}?preview=1"
+
     return Live2DModelSummary(
         id=record.id,
         name=record.name,
@@ -55,11 +62,7 @@ def _serialize_model(
         model_url=storage.build_asset_url(
             f"{record.id}/{record.model_path}", str(request.base_url)
         ),
-        thumbnail_url=(
-            storage.build_asset_url(f"{record.id}/{record.thumbnail_path}", str(request.base_url))
-            if record.thumbnail_path
-            else None
-        ),
+        thumbnail_url=thumbnail_url,
         expressions=record.expressions,
         is_default=record.is_default,
     )
