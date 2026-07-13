@@ -30,7 +30,9 @@ data/chats/**/index.json
 data/avatars/
 
 # Local model files
-models/
+models/asr-models/
+data/live2d/models/FuNingNA
+data/live2d/models/mao_pro
 
 # Env files
 .env
@@ -42,6 +44,5 @@ models/
 prompts/persona
 *.chat_scope_migrated
 *.legacy_migrated
-models/
 
 .playwright-cli/

@@ -1,0 +1,106 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "atri_8.moc3",
+		"Textures": [
+			"atri_8.4096/texture_00.png",
+			"atri_8.4096/texture_01.png"
+		],
+		"Physics": "atri_8.physics3.json",
+		"DisplayInfo": "atri_8.cdi3.json"
+	},
+	"Expressions":[
+		{
+			"Name":"exp_01",
+			"File":"expression/expression1.exp3.json"
+		},
+		{
+			"Name":"exp_02",
+			"File":"expression/expression2.exp3.json"
+		},
+		{
+			"Name":"exp_03",
+			"File":"expression/expression3.exp3.json"
+		},
+		{
+			"Name":"exp_04",
+			"File":"expression/expression4.exp3.json"
+		},
+		{
+			"Name":"exp_05",
+			"File":"expression/expression5.exp3.json"
+		},
+		{
+			"Name":"exp_06",
+			"File":"expression/expression6.exp3.json"
+		},
+		{
+			"Name":"exp_07",
+			"File":"expression/expression7.exp3.json"
+		},
+		{
+			"Name":"exp_08",
+			"File":"expression/expression8.exp3.json"
+		},
+		{
+			"Name":"exp_09",
+			"File":"expression/expression9.exp3.json"
+		},
+		{
+			"Name":"exp_10",
+			"File":"expression/expression10.exp3.json"
+		},
+		{
+			"Name":"exp_11",
+			"File":"expression/expression11.exp3.json"
+		},
+		{
+			"Name":"exp_12",
+			"File":"expression/expression12.exp3.json"
+		},
+		{
+			"Name":"exp_13",
+			"File":"expression/expression13.exp3.json"
+		},
+		{
+			"Name":"exp_14",
+			"File":"expression/expression14.exp3.json"
+		},
+		{
+			"Name":"exp_15",
+			"File":"expression/expression15.exp3.json"
+		},
+		{
+			"Name":"exp_16",
+			"File":"expression/expression16.exp3.json"
+		}
+	],
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthForm",
+				"ParamMouthOpenY"
+			]
+		}
+	],
+	"HitAreas": [
+		{
+			"Id": "HitAreaHead",
+			"Name": ""
+		},
+		{
+			"Id": "HitAreaBody",
+			"Name": ""
+		}
+	]
+}
