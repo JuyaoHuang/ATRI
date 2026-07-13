@@ -81,7 +81,11 @@ def get_default_live2d_models_dir() -> Path:
 
 def _is_settings_path(path: Path) -> bool:
     name = path.name.casefold()
-    return name.endswith(".model3.json")
+    return name.endswith(".model3.json") or name.endswith(".model.json")
+
+
+def _is_cubism3_settings_path(path: Path) -> bool:
+    return path.name.casefold().endswith(".model3.json")
 
 
 def _relative_sort_key(path: Path, root: Path) -> tuple[int, int, str, str]:
@@ -92,6 +96,13 @@ def _relative_sort_key(path: Path, root: Path) -> tuple[int, int, str, str]:
         relative_path.casefold(),
         relative_path,
     )
+
+
+def _settings_sort_key(path: Path, root: Path) -> tuple[int, int, int, str, str]:
+    """Prefer Cubism 3/4 settings, then apply deterministic path ordering."""
+
+    runtime_priority = 0 if _is_cubism3_settings_path(path) else 1
+    return (runtime_priority, *_relative_sort_key(path, root))
 
 
 def _has_control_characters(value: str) -> bool:
@@ -232,7 +243,9 @@ class Live2DStorage:
     def _scan_model(self, model_dir: Path) -> Live2DModelRecord:
         settings_candidates = self._find_settings_candidates(model_dir)
         if not settings_candidates:
-            raise Live2DModelValidationError("no .model3.json settings file was found")
+            raise Live2DModelValidationError(
+                "no .model3.json or .model.json settings file was found"
+            )
 
         settings_file = settings_candidates[0]
         if len(settings_candidates) > 1:
@@ -245,34 +258,40 @@ class Live2DStorage:
             )
 
         data = self._read_settings(settings_file)
-        file_references = data.get("FileReferences", {})
-        if file_references is None:
+        is_cubism3 = _is_cubism3_settings_path(settings_file)
+        if is_cubism3:
+            file_references = data.get("FileReferences")
+            if not isinstance(file_references, dict):
+                raise Live2DModelValidationError("FileReferences must be a JSON object")
+            moc_reference = file_references.get("Moc")
+            texture_references = file_references.get("Textures")
+            moc_label = "FileReferences.Moc"
+            textures_label = "FileReferences.Textures"
+        else:
             file_references = {}
-        if not isinstance(file_references, dict):
-            raise Live2DModelValidationError("FileReferences must be a JSON object")
+            moc_reference = data.get("model")
+            texture_references = data.get("textures")
+            moc_label = "model"
+            textures_label = "textures"
 
-        moc_reference = file_references.get("Moc") or data.get("model")
         self._resolve_reference(
             model_dir,
             settings_file.parent,
             moc_reference,
-            label="FileReferences.Moc",
+            label=moc_label,
             required=True,
         )
 
-        texture_references = file_references.get("Textures")
-        if texture_references is None:
-            texture_references = data.get("textures")
         if not isinstance(texture_references, list) or not texture_references:
             raise Live2DModelValidationError(
-                "FileReferences.Textures must contain at least one texture path"
+                f"{textures_label} must contain at least one texture path"
             )
         for index, texture_reference in enumerate(texture_references):
             self._resolve_reference(
                 model_dir,
                 settings_file.parent,
                 texture_reference,
-                label=f"FileReferences.Textures[{index}]",
+                label=f"{textures_label}[{index}]",
                 required=True,
             )
 
@@ -281,12 +300,14 @@ class Live2DStorage:
             file_references,
             model_dir,
             settings_file.parent,
+            is_cubism3=is_cubism3,
         )
         self._validate_optional_references(
             data,
             file_references,
             model_dir,
             settings_file.parent,
+            is_cubism3=is_cubism3,
         )
 
         model_path = settings_file.relative_to(model_dir).as_posix()
@@ -311,7 +332,7 @@ class Live2DStorage:
             except (OSError, ValueError):
                 continue
             candidates.append(path)
-        return sorted(candidates, key=lambda path: _relative_sort_key(path, model_dir))
+        return sorted(candidates, key=lambda path: _settings_sort_key(path, model_dir))
 
     def _read_settings(self, settings_file: Path) -> dict[str, Any]:
         try:
@@ -330,10 +351,12 @@ class Live2DStorage:
         file_references: dict[str, Any],
         model_dir: Path,
         settings_dir: Path,
+        *,
+        is_cubism3: bool,
     ) -> list[str]:
-        expressions = file_references.get("Expressions")
-        if expressions is None:
-            expressions = data.get("expressions", [])
+        expressions = (
+            file_references.get("Expressions", []) if is_cubism3 else data.get("expressions", [])
+        )
         if not isinstance(expressions, list):
             logger.warning(
                 "Ignoring invalid Live2D expression list | directory={} | reason={}",
@@ -387,23 +410,22 @@ class Live2DStorage:
         file_references: dict[str, Any],
         model_dir: Path,
         settings_dir: Path,
+        *,
+        is_cubism3: bool,
     ) -> None:
         for key in _OPTIONAL_FILE_REFERENCE_KEYS:
-            value = file_references.get(key)
-            if value is None:
-                value = data.get(key.casefold())
+            value = file_references.get(key) if is_cubism3 else data.get(key.casefold())
             if value is None:
                 continue
+            label = f"FileReferences.{key}" if is_cubism3 else key.casefold()
             self._warn_if_optional_reference_missing(
                 model_dir,
                 settings_dir,
                 value,
-                label=f"FileReferences.{key}",
+                label=label,
             )
 
-        motions = file_references.get("Motions")
-        if motions is None:
-            motions = data.get("motions")
+        motions = file_references.get("Motions") if is_cubism3 else data.get("motions")
         if motions is None:
             return
         if not isinstance(motions, dict):
@@ -414,12 +436,13 @@ class Live2DStorage:
             )
             return
 
+        motions_label = "FileReferences.Motions" if is_cubism3 else "motions"
         for group, entries in motions.items():
             if not isinstance(entries, list):
                 logger.warning(
                     "Ignoring invalid Live2D motion group | directory={} | reason={}",
                     model_dir,
-                    f"Motions.{group} is not an array",
+                    f"{motions_label}.{group} is not an array",
                 )
                 continue
             for index, item in enumerate(entries):
@@ -428,7 +451,7 @@ class Live2DStorage:
                     model_dir,
                     settings_dir,
                     value,
-                    label=f"Motions.{group}[{index}].File",
+                    label=f"{motions_label}.{group}[{index}].File",
                 )
 
     def _warn_if_optional_reference_missing(
