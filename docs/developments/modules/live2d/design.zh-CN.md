@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-12
+updated: 2026-07-13
 source:
   - ../../module-design/CN/Live-2d设计文档.md
   - src/routes/live2d.py
@@ -15,7 +15,6 @@ related_code:
   - frontend/src/stores/live2d.ts
   - frontend/src/components/live2d/Live2DCanvas.vue
   - frontend/src/components/live2d/ModelSettingsPreviewStage.vue
-  - frontend/src/utils/live2dOpfs.ts
 ---
 
 # Live2D 模块总设计
@@ -32,14 +31,14 @@ related_code:
 
 - 服务器管理员通过文件系统安装和移除模型；
 - 后端只读发现、校验模型目录，并暴露模型摘要和静态资源；
-- 前端负责模型选择、渲染、动作、表情和本地缓存。
+- 前端负责模型选择、渲染、模型原生动作、点击交互、表情和浏览器本地偏好。
 
 这意味着 Live2D 在系统中的位置更接近：
 
 ```text
 管理员：data/live2d/models/ 目录维护
 后端：实时模型目录 + 只读 API + 静态文件服务
-前端：模型选择/关闭 + 舞台运行时 + 用户偏好 + 消息驱动表情
+前端：模型选择/关闭 + 舞台运行时 + 自动动作交互 + 用户偏好 + 消息驱动表情
 ```
 
 ## 设计目标
@@ -48,8 +47,8 @@ related_code:
 
 1. 把服务器模型安装和普通前端用户的舞台运行时明确拆开。
 2. 让前端可以在不依赖服务端会话状态的情况下独立管理当前模型与舞台参数。
-3. 让标准 Live2D 模型目录无需 ZIP、UUID 包装层或 ATRI `metadata.json` 即可被发现。
-4. 对表情和动作保持“名称级控制”，不把未落地的参数级工具系统写成事实。
+3. 让 Cubism 2 `.model.json` 与 Cubism 3/4 `.model3.json` 标准目录无需 ZIP、UUID 包装层或 ATRI `metadata.json` 即可被发现和渲染。
+4. 表情保持名称级控制；动作由模型运行时和画布内部交互控制，不向普通用户提供动作选择。
 
 ## 模块组成
 
@@ -58,7 +57,7 @@ related_code:
 | 子系统 | 代码 | 职责 |
 | --- | --- | --- |
 | 后端目录与 API | `src/storage/live2d_storage.py` `src/routes/live2d.py` | 直接子目录实时扫描、最低加载校验、默认模型标记、资源 URL 输出 |
-| 前端舞台运行时 | `frontend/src/stores/live2d.ts` `frontend/src/components/live2d/Live2DCanvas.vue` | 当前模型、位置、缩放、动作、表情、OPFS 缓存 |
+| 前端舞台运行时 | `frontend/src/stores/live2d.ts` `frontend/src/components/live2d/Live2DCanvas.vue` | 当前模型、位置、缩放、默认表情、自动动作交互和 Cubism 2/3/4 统一渲染 |
 | 消息驱动表情 | `frontend/src/utils/live2dExpression.ts` + `useWebSocket()` | 从聊天文本中解析 `[expression:...]` 并发出表情请求 |
 
 ## 前后端职责划分
@@ -83,9 +82,7 @@ related_code:
 - 是否开启舞台模式
 - 当前使用哪个模型
 - 模型位置、缩放、渲染精度、FPS
-- 当前动作
-- 当前表情请求
-- OPFS 缓存状态
+- 保存的默认表情与当前临时表情请求
 - 哪些表情向 LLM 暴露
 
 ### 当前刻意不做的事
@@ -106,14 +103,26 @@ related_code:
 ```text
 administrator copies data/live2d/models/<model_name>/
   -> GET /api/live2d/models rescans direct child directories
-  -> Live2DStorage validates settings JSON + Moc + textures
+  -> Live2DStorage validates .model.json/.model3.json + Moc + textures
   -> invalid/incomplete directories are warned and skipped
   -> valid model summaries + static asset URLs
   -> frontend live2d store maps model summaries
-  -> Live2DCanvas loads model_url
-  -> optional OPFS cache
+  -> Live2DCanvas passes model_url to Live2DModel.from(...)
+  -> pixi-live2d-display selects the Cubism 2 or Cubism 3/4 runtime
   -> Pixi runtime renders model
 ```
+
+## 统一运行时与对象所有权
+
+Cubism 2 与 Cubism 3/4 共用一个 `Live2DCanvas`、一个 store 和一套交互状态。格式差异只收敛在以下薄适配边界：
+
+- 设置文件分别使用 `.model.json` 与 `.model3.json`；
+- 参数适配器把统一的 `Param...` 名称映射到 Cubism 2 的 `PARAM_...` 名称，并选择对应的 Core setter；
+- 点击动作控制器同时读取 Cubism 3/4 的 `File` 与 Cubism 2 的 `file`，但只在画布内部选择动作。
+
+Pixi、Live2D 与 Cubism SDK 的 class 实例由画布组件直接拥有，不进入 Vue 深度响应式系统。`Application` 和 `Live2DModel` 使用 `shallowRef` 保存，因此 `stage`、`internalModel`、`coreModel` 和 `motionManager` 都保持原始实例。Pinia 只保存可序列化的用户偏好、默认表情和临时表情请求，不保存动作定义或当前动作。
+
+`modelParameters` 延续已有语义：模型载入后应用一次，用户修改配置时再次应用。画布不会在每一帧把完整配置写回 Core，也不建立参数锁定层，以免覆盖动作、眨眼、视线、呼吸和物理更新。
 
 表情控制的数据流是：
 
@@ -169,8 +178,11 @@ assistant text
 当前表情系统的稳定事实是：
 
 1. 后端只提供“表情名称列表”。
-2. 前端手动单选表情。
+2. 前端通过“默认表情”下拉框保存一个默认表情，也可选择不叠加命名 expression 的“模型默认表情”。
 3. 聊天消息可通过 `[expression:Name]` 标签触发表情。
+4. “表情系统”开关可以暂停所有命名 expression；关闭时模型回到基础状态，但原生动作、眨眼和其他运行时能力继续工作。
+
+下拉选择会立即保存并预览。聊天标签触发的是临时表情，不会覆盖保存的默认值。设置页不提供与单选下拉框重复的“恢复默认表情”按钮。“向 LLM 暴露”的 `None / All / Custom` 及其自定义列表只是既有本地偏好，当前未接入后端 LLM 工具。
 
 它不是：
 
@@ -180,7 +192,11 @@ assistant text
 
 ### 动作
 
-动作由前端从 `motionManager.definitions` 动态抽取并管理。后端并不知道“当前用户选择了哪个动作”。
+普通用户不选择动作，前端也不持久化动作清单、动作文件路径或当前动作。模型原生 Idle 由 `pixi-live2d-display` 的 `motionManager` 自动调度；画布不建立自己的 `motionFinish` 重播循环。
+
+画布只在内部读取 `motionManager.definitions`，消费 `pixi-live2d-display` 的 `hit` 事件，并把命中区域映射到动作：先查找 `Tap@Body`、`TapBody`、`tap_body` 等语义组，再尝试空组，最后尝试非待机动作。内部选择兼容 Cubism 3/4 的 `File` 和 Cubism 2 的 `file`，同一文件只作为一个回退候选；运行时原始定义不被改写，空字符串仍是合法动作组。没有可用动作时安全忽略。
+
+因此 Hiyori 的 Body 命中可以播放 `Tap@Body`，Katou 的 head/body 命中可以使用空组回退。动作定义和选择结果不会发布到 Pinia 或设置 UI，后端也不参与点击动作选择。
 
 ### 口型同步
 
@@ -190,18 +206,9 @@ assistant text
 
 ## 缓存设计
 
-当前缓存分两层：
+浏览器 `localStorage` 只保存舞台偏好和模型选择。模型设置文件、Moc、纹理、动作和表情资源直接通过后端 `model_url` 及其相对 URL 请求，复用浏览器标准 HTTP 缓存。
 
-1. 浏览器 `localStorage`
-   - 保存舞台偏好和模型选择。
-2. OPFS
-   - 缓存模型文件和相关静态资源。
-
-长期约束：
-
-- 这两层缓存都属于浏览器本地；
-- 不回写服务端；
-- 清缓存只影响前端加载路径，不影响后端模型目录真相。
+前端不维护自定义模型文件数据库、缓存清单、版本号或产品内清缓存入口。无论浏览器是否命中 HTTP 缓存，后端实时模型目录和 `GET /api/live2d/models` 始终是模型可用性的唯一权威来源。
 
 ## 与旧设计文档的取舍
 
@@ -230,5 +237,5 @@ assistant text
 ## 文档关系
 
 - [storage-and-api.zh-CN.md](storage-and-api.zh-CN.md) 解释管理员目录、后端实时发现和只读 API 边界。
-- [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) 解释舞台运行时与 OPFS。
+- [frontend-runtime.zh-CN.md](frontend-runtime.zh-CN.md) 解释统一舞台运行时、直接 URL 加载和浏览器本地状态。
 - [expression-control.zh-CN.md](expression-control.zh-CN.md) 解释表情名称、标签和本地开关。

@@ -2,7 +2,7 @@
 status: active
 owner: frontend
 created: 2026-07-09
-updated: 2026-07-12
+updated: 2026-07-13
 source_documents:
   - ../../module-design/CN/前端设计文档.md
 related_code:
@@ -56,7 +56,7 @@ related_code:
 舞台模式在同一首页内渲染：
 
 - `StageHeader`：显示模型名称、主题切换和设置入口。
-- `Live2DCanvas`：渲染当前模型，消费位置、缩放、动作和表情请求。
+- `Live2DCanvas`：渲染当前模型，消费位置、缩放和表情请求，并在内部处理模型原生 Idle 与点击动作。
 - `StageChatShell`：在舞台上方提供聊天历史、角色切换和输入框。
 
 ### 舞台模式的额外职责
@@ -88,10 +88,10 @@ related_code:
 - 开启或关闭 Live2D；普通前端用户不能上传、重命名或删除服务器模型。
 - 首页舞台总开关。
 - 缩放与位置。
-- 待机动作、渲染精度和最大帧率。
+- 渲染精度和最大帧率。
 - 鼠标跟随、自动眨眼、阴影。
-- 运行时表情组与 LLM 暴露策略。
-- 预览帧取色与 OPFS 缓存清理。
+- 单选“默认表情”与既有 LLM 暴露策略。
+- 预览帧取色。
 
 模型目录、模型表达列表、默认模型标记和静态资源 URL 仍以后端只读 `live2dApi` 为准；前端只持久化“我选择并怎么展示它”。本地模型 ID 失效时优先回退到后端有效默认模型；不存在有效默认模型时不隐式选择列表第一项。
 
@@ -141,7 +141,7 @@ related_code:
 | 存储键 | 位置 | 内容 |
 | --- | --- | --- |
 | `atri-background-settings` | `localStorage` | 背景图 base64、透明度、模糊度 |
-| `atri-live2d-settings` | `localStorage` | 舞台开关、模型 ID、位置、缩放、表情与动作偏好 |
+| `atri-live2d-settings` | `localStorage` | 舞台开关、模型 ID、位置、缩放、表情与渲染偏好 |
 | `settings/hearing/enabled` | `localStorage` | ASR 模块前端总开关 |
 | `settings/hearing/audio-input` | `localStorage` | 当前选择的麦克风设备 ID |
 | `ui/chat/settings/send-mode` | `localStorage` | 发送快捷键模式 |

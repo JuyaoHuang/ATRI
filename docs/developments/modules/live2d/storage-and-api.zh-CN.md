@@ -2,7 +2,7 @@
 status: active
 owner: live2d
 created: 2026-07-09
-updated: 2026-07-12
+updated: 2026-07-13
 source:
   - docs/developments/module-design/CN/Live-2d设计文档.md
 related_code:
@@ -26,7 +26,7 @@ related_code:
 - 接收、解压或保存前端上传的模型；
 - 通过 HTTP 重命名或删除模型目录；
 - 记录哪个模型是当前前端正在使用的 active model；
-- 保存前端的模型位置、缩放、动作、表情选择和缓存状态；
+- 保存前端的模型位置、缩放、默认表情偏好或运行时点击动作；
 - 提供表情切换、动作播放或口型同步 API。
 
 ## 存储布局
@@ -44,9 +44,13 @@ data/live2d/models/
 ├── hiyori_free_zh/
 │   └── runtime/
 │       └── hiyori_free_t08.model3.json
-└── mao_pro/
-    └── runtime/
-        └── mao_pro.model3.json
+├── mao_pro/
+│   └── runtime/
+│       └── mao_pro.model3.json
+└── katou_01/
+    ├── katou_01.model.json
+    └── moc/
+        └── katou.moc
 ```
 
 直接子目录名同时作为：
@@ -83,6 +87,19 @@ data/live2d/models/mao_pro/
 
 不需要修改目录名，也不需要补写 `metadata.json`。使用 `docker-compose.prod.yml` 时，宿主机 `./data` 已挂载到容器 `/app/data`，因此管理员同样直接维护宿主机的 `./data/live2d/models/`。
 
+Cubism 2 模型同样直接复制原始目录。例如：
+
+```text
+data/live2d/models/katou_01/
+├── katou_01.model.json
+├── moc/
+│   └── katou.moc
+├── exp/
+└── mtn/
+```
+
+`.model.json`、`.moc`、纹理、表情和动作资源会保留原始相对路径，不需要转换成 Cubism 3/4 格式。
+
 ## 实时发现与校验
 
 ### 扫描时机
@@ -94,20 +111,25 @@ data/live2d/models/mao_pro/
 - 文件系统 watcher；
 - 数据库或中央 `index.json`。
 
-目标规模为 5 到 10 个模型。扫描只读取目录项和设置 JSON，不读取 `.moc3`、纹理图片等大型二进制内容。
+目标规模为 5 到 10 个模型。扫描只读取目录项和设置 JSON，不读取 `.moc`、`.moc3`、纹理图片等大型二进制内容。
 
 ### 设置文件选择
 
-后端在每个直接子目录内递归寻找 `.model3.json`。当前前端只加载
-`pixi-live2d-display/cubism4`，并只随页面提供 Cubism 3/4 Core，因此 Cubism 2
-的 `.model.json` 不会被目录列为可选模型，避免出现“后端判定有效但浏览器必然
-无法渲染”的条目。
+后端在每个直接子目录内递归寻找：
+
+- Cubism 3/4 的 `.model3.json`；
+- Cubism 2 的 `.model.json`。
+
+前端使用 `pixi-live2d-display` 双运行时入口，并同时提供 Cubism 2
+`live2d.min.js` 与 Cubism 3/4 `live2dcubismcore.min.js`。两类模型共用一个 Canvas
+和一套产品流程，因此目录只会发布浏览器能够实际加载的这两类设置文件。
 
 若存在多个候选项，按以下顺序确定性选择，并记录 `WARNING`：
 
-1. 相对路径层级更浅；
-2. 相对路径字符串更短；
-3. 规范化后的相对路径按字典序更靠前。
+1. `.model3.json` 优先于 `.model.json`；
+2. 相对路径层级更浅；
+3. 相对路径字符串更短；
+4. 规范化后的相对路径按字典序更靠前。
 
 ### 最低有效性边界
 
@@ -115,8 +137,8 @@ data/live2d/models/mao_pro/
 
 1. 模型目录是模型根目录下的普通直接子目录，而不是符号链接；
 2. 设置文件可以解析为 JSON；
-3. `FileReferences.Moc` 是非空相对路径，目标文件存在且仍位于该模型目录内；
-4. `FileReferences.Textures` 是非空列表，每个纹理文件存在且仍位于该模型目录内；
+3. Cubism 3/4 的 `FileReferences.Moc` 或 Cubism 2 的顶层 `model` 是非空相对路径，目标文件存在且仍位于该模型目录内；
+4. Cubism 3/4 的 `FileReferences.Textures` 或 Cubism 2 的顶层 `textures` 是非空列表，每个纹理文件存在且仍位于该模型目录内；
 5. 所有用于 API URL 输出的路径都不能越出该模型目录。
 
 任一模型校验失败时，后端会记录包含目录和原因的 Loguru `WARNING`，跳过该模型，并继续返回其他有效模型。扫描期间文件被删除也按同一规则处理，不把整个列表请求变成 500。
@@ -127,7 +149,7 @@ data/live2d/models/mao_pro/
 
 - 优先选择名为 `preview.png` 的文件作为缩略图；
 - 没有 `preview.png` 时，选择确定排序后的第一个 `.png`、`.jpg`、`.jpeg` 或 `.webp`；
-- 从设置 JSON 的 `FileReferences.Expressions`（兼容旧版 `expressions`）提取表情名称；
+- 从设置 JSON 的 `FileReferences.Expressions` 或 Cubism 2 顶层 `expressions` 提取表情名称；
 - 只返回表情名称，不解析 `exp3.json` 参数细节。
 
 可选表情文件缺失时会记录诊断日志，但不会否定已经满足 Moc 和纹理最低加载条件的模型。
@@ -149,7 +171,9 @@ data/live2d/models/mao_pro/
 - `model_url`
 - `thumbnail_url`
 
-前端后续通过这些 URL 加载 `.model3.json` 和相关纹理、动作、表情文件。
+前端把 `model_url` 直接交给 `Live2DModel.from(...)`，再由运行库通过设置文件中的相对路径加载对应的 Moc、纹理、动作和表情资源。前端不复制或重组模型文件，资源请求复用浏览器标准 HTTP 缓存。
+
+浏览器缓存只是传输层优化，不是新的模型目录来源。模型是否存在、是否有效以及当前 URL 是什么，仍由每次 `GET /api/live2d/models` 的实时扫描结果决定。
 
 ## REST API
 
@@ -221,9 +245,9 @@ default_model: hiyori_free_zh
 - 表情切换、动作播放、口型同步或工具调用 API
 - 模型上传、在线重命名和远程删除 API
 
-因此任何涉及 active model、动作或表情运行时切换的行为，都应在前端文档中说明，而不是归到本页。
+因此任何涉及 active model、自动点击动作或表情运行时切换的行为，都应在前端文档中说明，而不是归到本页。
 
 ## 文档关系
 
 - 旧 Live2D 设计文档把后端和前端职责写得更满；当前实现已收敛为“管理员文件系统维护 + 后端只读目录 + 静态资源”。
-- 本页不讨论前端 Pixi 运行时、OPFS 缓存和表情标签逻辑，那些内容见本目录另外两篇文档。
+- 本页不讨论前端 Pixi 对象所有权、浏览器加载细节和表情标签逻辑，那些内容见本目录另外两篇文档。
