@@ -178,6 +178,11 @@ action；侧边栏和设置页现在走同一入口，删除请求失败时仍�
 - `d5354cb` `fix(chat-markdown/step 6): clear cache after chat deletion`
 - `6d60f7c` `test(chat-markdown/step 6): strengthen acceptance invariants`
 
+项目说明中点名的 `$omc-code-review` 在当前技能目录不可用，因此使用现有
+`$requesting-code-review` 流程启动独立只读 reviewer。最终复核范围为前端
+`557060b..6d60f7c` 和本 feature 文档；Critical、Important、Minor 均为 None，
+结论为 `Ready to merge: Yes`。
+
 最终独立复审结论为 `Ready to merge: Yes`；Critical、Important 和 Minor
 均无剩余问题。
 

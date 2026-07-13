@@ -123,3 +123,14 @@ npm ls --depth=3 markdown-it @mdit/plugin-katex @mdit/plugin-tasklist \
 2. 如真实历史 payload 成为瓶颈，另开后端 cursor pagination feature。
 3. 在依赖升级 feature 中处理仓库既有 audit 链问题，不在本分支使用
    `npm audit fix --force`。
+
+## 9. 独立代码审查
+
+项目要求的 `$omc-code-review` 在当前环境未提供，使用可用的
+`$requesting-code-review` 进行独立只读审查。最终范围：
+
+- frontend base：`557060b`
+- frontend head：`6d60f7c`
+- 本 feature 的长期设计、开发日志与验收文档
+
+最终结论：Critical、Important、Minor 均无未解决问题；`Ready to merge: Yes`。
