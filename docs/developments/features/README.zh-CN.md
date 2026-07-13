@@ -24,5 +24,6 @@ features/YYYY-MM-feature-slug/
 | VAD 实时打断 | accepted | [2026-06-vad-realtime-interrupt/README.zh-CN.md](2026-06-vad-realtime-interrupt/README.zh-CN.md) |
 | TTS 分段流式化 | accepted | [2026-07-tts-segment-streaming/README.zh-CN.md](2026-07-tts-segment-streaming/README.zh-CN.md) |
 | Frontend WebSocket Session Refactor | active | [2026-07-frontend-websocket-session-refactor/README.zh-CN.md](2026-07-frontend-websocket-session-refactor/README.zh-CN.md) |
+| 聊天 Markdown 与 KaTeX 渲染 | active | [2026-07-chat-markdown-rendering/README.zh-CN.md](2026-07-chat-markdown-rendering/README.zh-CN.md) |
 
 feature 完成后，应把长期有效结论提炼到 `../modules/<module>/`，把适合阅读的文章整理到 `../wiki/`。
