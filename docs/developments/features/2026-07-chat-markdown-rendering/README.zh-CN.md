@@ -1,5 +1,5 @@
 ---
-status: active
+status: accepted
 owner: frontend
 created: 2026-07-13
 updated: 2026-07-13
@@ -20,11 +20,13 @@ related_code:
 
 ## 当前状态
 
-- 状态：`active`
+- 状态：`accepted`
 - 根仓库分支：`feat/chat-markdown-rendering`
 - 前端仓库分支：`feat/chat-markdown-rendering`
 - 产品规格：`.omc/specs/deep-interview-chat-markdown-rendering-v2.md`
 - 目标仓库：`frontend/`
+- 自动化验收：24 个测试文件、102 个测试全部通过
+- 浏览器验收：默认与 Stage 的 1000 消息动态虚拟时间线通过
 
 ## 本次目标
 
@@ -52,10 +54,13 @@ related_code:
 |---|---|
 | [design.zh-CN.md](design.zh-CN.md) | 渲染、安全、缓存、虚拟化和数据边界 |
 | [implementation-plan.zh-CN.md](implementation-plan.zh-CN.md) | 实现步骤、文件落点、检查与提交拆分 |
+| [dev-log.zh-CN.md](dev-log.zh-CN.md) | 分阶段实现事实、提交和浏览器验收数据 |
+| [acceptance.zh-CN.md](acceptance.zh-CN.md) | 规格逐条验收矩阵和完整命令结果 |
 
 ## 相关长期设计
 
 - [Frontend 模块入口](../../modules/frontend/README.zh-CN.md)
+- [聊天 Markdown 长期设计](../../modules/frontend/chat-markdown-rendering.zh-CN.md)
 - [Frontend 状态管理](../../modules/frontend/state-management.zh-CN.md)
 - [聊天、语音与视觉运行时](../../modules/frontend/chat-voice-runtime.zh-CN.md)
 - [舞台与设置](../../modules/frontend/stage-and-settings.zh-CN.md)

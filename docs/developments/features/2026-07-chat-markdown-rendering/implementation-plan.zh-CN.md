@@ -1,5 +1,5 @@
 ---
-status: active
+status: accepted
 owner: frontend
 created: 2026-07-13
 updated: 2026-07-13
@@ -7,6 +7,9 @@ branch: feat/chat-markdown-rendering
 ---
 
 # 实现计划
+
+本计划已于 2026-07-13 完成。精确提交、检查结果和浏览器指标见
+[开发日志](dev-log.zh-CN.md)与[验收记录](acceptance.zh-CN.md)。
 
 ## Step 1：设计与依赖边界
 
